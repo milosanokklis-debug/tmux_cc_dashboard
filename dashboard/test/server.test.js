@@ -56,7 +56,7 @@ test('pages and assets contain no inline script/style and no external hosts', as
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
     assert.ok(!/<script(?![^>]*\bsrc=)/i.test(src), `${f}: inline script`);
     assert.ok(!/<style|\sstyle=|\son\w+=/i.test(src), `${f}: inline style/handler`);
-    assert.ok(!/https?:\/\//.test(src), `${f}: external URL`);
+    assert.ok(!/\b(?:src|href|action|poster|data)=["']?(?:https?:)?\/\//i.test(src), `${f}: external URL`); // placeholder text may mention URLs
   }
 });
 
@@ -73,7 +73,7 @@ test('default deny: unauth pages redirect to /login, /api/* gives 401 JSON', asy
   assert.strictEqual((await req(s.base, '/api/x', { method: 'POST', headers: POST_HEADERS })).status, 401);
   assert.strictEqual((await req(s.base, '/login')).status, 200);
   assert.strictEqual((await req(s.base, '/assets/login.js')).status, 200);
-  assert.strictEqual((await req(s.base, '/assets/server.js')).status, 404);
+  assert.strictEqual((await req(s.base, '/assets/server.js')).status, 302); // not a public asset: default deny
   assert.strictEqual((await req(s.base, '/assets/../server.js')).status, 302); // normalised to /server.js: default deny
   const lo = await req(s.base, '/logout', { method: 'POST', headers: POST_HEADERS });
   assert.strictEqual(lo.status, 302); // unauthenticated logout is not allowed (redirected to login)
@@ -91,7 +91,7 @@ test('login success: cookie attributes, signed-in page, then logout', async (t) 
   const cookie = sc.split(';')[0];
   const page = await req(s.base, '/', { cookie });
   assert.strictEqual(page.status, 200);
-  assert.match(await page.text(), /ccdash — signed in/);
+  assert.match(await page.text(), /<!doctype html>/i);
   assert.strictEqual((await req(s.base, '/login', { cookie })).status, 302);
   const out = await req(s.base, '/logout', { method: 'POST', headers: POST_HEADERS, cookie });
   assert.strictEqual(out.status, 200);
@@ -370,4 +370,13 @@ test('socket errors on upgraded or registered sockets do not throw', () => {
   const sock = new EventEmitter();
   reg.add('k', sock);
   assert.doesNotThrow(() => sock.emit('error', new Error('ECONNRESET')));
+});
+
+test('GET /favicon.ico: 204, no-store, no auth, no redirect', async (t) => {
+  const s = await h.start();
+  t.after(s.stop);
+  const r = await fetch(`${s.base}/favicon.ico`, { redirect: 'manual' });
+  assert.strictEqual(r.status, 204);
+  assert.strictEqual(r.headers.get('cache-control'), 'no-store');
+  assert.strictEqual(await r.text(), '');
 });

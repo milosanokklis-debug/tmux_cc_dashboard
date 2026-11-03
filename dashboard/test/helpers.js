@@ -14,7 +14,7 @@ function fakeClock(start = 1_700_000_000_000) {
   return { t: start, now() { return this.t; }, advance(ms) { this.t += ms; } };
 }
 
-async function start({ withAuth = true, clock = fakeClock(), delays = [], authJson } = {}) {
+async function start({ withAuth = true, clock = fakeClock(), delays = [], authJson, services } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-test-'));
   if (authJson !== undefined) fs.writeFileSync(path.join(dir, 'auth.json'), authJson);
   else if (withAuth) await authstore.setCredentials({ dir, username: USER, password: PASS, hashOptions: FAST });
@@ -24,6 +24,7 @@ async function start({ withAuth = true, clock = fakeClock(), delays = [], authJs
     clock,
     delay: async (ms) => { delays.push(ms); },
     log: () => {},
+    services,
   });
   const server = app.createServer();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -51,4 +52,36 @@ async function loginCookie(base) {
   return res.headers.get('set-cookie').split(';')[0];
 }
 
-module.exports = { FAST, ORIGIN, USER, PASS, fakeClock, start, req, login, loginCookie, POST_HEADERS };
+// Fake services for the API tests: no tmux, no /proc, no processes are touched.
+function fakeServices(over = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-svc-'));
+  const workspace = path.join(dir, 'workspace');
+  const agentsDir = path.join(dir, 'agents');
+  fs.mkdirSync(workspace); fs.mkdirSync(agentsDir);
+  const calls = { runFile: [], runOp: [] };
+  const svc = {
+    workspace, agentsDir, transcriptRoot: dir, calls, dir,
+    tmux: { sock: '/tmp/fake.sock', listPanes: async () => [], run: async () => '', ensureOps: async () => {} },
+    procTable: () => new Map(),
+    runFile: async (file, args) => {
+      calls.runFile.push([file, ...args]);
+      return { stdout: `claude-${args[1].replace(/[^A-Za-z0-9_-]/g, '_')}\n`, stderr: '' };
+    },
+    runOp: async (o) => { calls.runOp.push(o.argv); return { rc: 0, log: '' }; },
+    fetchImpl: async () => { throw new Error('unexpected fetch'); },
+    saveToken: () => { throw new Error('unexpected saveToken'); },
+    now: () => Date.parse('2026-01-10T12:00:00Z'),
+    ...over,
+  };
+  return svc;
+}
+
+async function authed(services) {
+  const s = await start({ services });
+  const cookie = await loginCookie(s.base);
+  return { ...s, cookie };
+}
+
+module.exports = {
+  FAST, ORIGIN, USER, PASS, fakeClock, start, req, login, loginCookie, POST_HEADERS, fakeServices, authed,
+};

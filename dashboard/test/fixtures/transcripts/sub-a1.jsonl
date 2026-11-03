@@ -1,0 +1,3 @@
+{"type":"summary","summary":"ignored"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Find every usage of\n  the legacy\u001b[0m auth helper and report file paths with line numbers, grouped by directory, please"}]}}
+{"type":"assistant","message":{"role":"assistant","content":"later"}}

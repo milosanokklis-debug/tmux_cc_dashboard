@@ -13,10 +13,13 @@ const SESSION = path.join(ROOT, 'rootfs/usr/local/bin/ccd-session');
 const PROJECT = path.join(ROOT, 'rootfs/usr/local/bin/ccd-project');
 const CCD = path.join(ROOT, 'bin/ccd');
 
+// Inside the image only dashboard/ is present (as /opt/ccdash/dashboard), so these cases skip there.
+const SKIP = fs.existsSync(path.join(ROOT, 'rootfs')) && fs.existsSync(CCD) ? false : 'rootfs/ and bin/ not found (running inside the image)';
+
 const run = (file, args, input, env = {}) =>
   spawnSync(file, args, { input, encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
 
-test('git-credential-ccdash: https + github.com + valid owner with token file returns the token', () => {
+test('git-credential-ccdash: https + github.com + valid owner with token file returns the token', { skip: SKIP }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-git-'));
   fs.writeFileSync(path.join(dir, 'octo-cat'), 'tok123\n');
   const input = (o) => Object.entries(o).map(([k, v]) => `${k}=${v}`).join('\n') + '\n\n';
@@ -44,7 +47,7 @@ test('git-credential-ccdash: https + github.com + valid owner with token file re
   for (const verb of ['store', 'erase']) assert.strictEqual(run(CRED, [verb], input(good), env).stdout, '');
 });
 
-test('ccd-session validates arguments before touching tmux', () => {
+test('ccd-session validates arguments before touching tmux', { skip: SKIP }, () => {
   assert.strictEqual(run(SESSION, []).status, 2);
   assert.strictEqual(run(SESSION, ['bogus']).status, 2);
   assert.strictEqual(run(SESSION, ['start']).status, 2);
@@ -59,7 +62,7 @@ test('ccd-session validates arguments before touching tmux', () => {
   assert.match(missing.stderr, /no such project/);
 });
 
-test('ccd-project validates the repo argument', () => {
+test('ccd-project validates the repo argument', { skip: SKIP }, () => {
   assert.strictEqual(run(PROJECT, []).status, 2);
   assert.strictEqual(run(PROJECT, ['clone']).status, 2);
   assert.strictEqual(run(PROJECT, ['push', 'a/b']).status, 2);
@@ -70,8 +73,38 @@ test('ccd-project validates the repo argument', () => {
   }
 });
 
-test('ccd (host wrapper) rejects unknown commands and missing arguments', () => {
+test('ccd (host wrapper) rejects unknown commands and missing arguments', { skip: SKIP }, () => {
   for (const args of [[], ['nope'], ['attach'], ['clone'], ['attach', 'a', 'b']]) {
     assert.strictEqual(run(CCD, args, undefined, { CCDASH_DOCKER: 'false' }).status, 2, args.join(' '));
   }
 });
+
+// The prompt is the last argument of tmux new-session; tmux treats a trailing ';' as a command
+// separator unless it is written `\;`. A stub `claude` records its argv; compare byte for byte.
+const HAS_TMUX = spawnSync('tmux', ['-V']).status === 0;
+test('ccd-session hands the prompt to claude unchanged (trailing ;, newlines, quotes, leading -)',
+  { skip: SKIP || (HAS_TMUX ? false : 'tmux not installed') }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-sess-'));
+    fs.mkdirSync(path.join(dir, 'ws', 'p'), { recursive: true }); fs.mkdirSync(path.join(dir, 'bin')); fs.mkdirSync(path.join(dir, 'home'));
+    fs.writeFileSync(path.join(dir, 'bin', 'claude'), '#!/bin/bash\nprintf \'%s\\0\' "$@" > "$OUTF"\n', { mode: 0o755 });
+    // a login shell resets PATH from /etc/profile: put the stub back from ~/.bash_profile
+    fs.writeFileSync(path.join(dir, 'home', '.bash_profile'), `export PATH=${dir}/bin:$PATH\n`);
+    const sock = path.join(dir, 'sock');
+    const out = path.join(dir, 'out');
+    const env = { HOME: path.join(dir, 'home'), OUTF: out, CCDASH_WS: path.join(dir, 'ws'), CCDASH_TMUX: sock };
+    try {
+      for (const prompt of ['a;', 'a\;', 'a\\\;', ';', '-x;;', 'two\nlines;', '$(id) "q" \'s\';', '\\', 'plain', '-x', '']) {
+        fs.rmSync(out, { force: true });
+        fs.rmSync(sock, { force: true });
+        const r = run(SESSION, ['start', 'p', prompt], undefined, env);
+        assert.strictEqual(r.status, 0, r.stderr);
+        for (let i = 0; i < 100 && !fs.existsSync(out); i++) await new Promise((x) => setTimeout(x, 50));
+        // an empty prompt is skipped, as on the web path: claude gets only the `--`
+        assert.strictEqual(fs.readFileSync(out, 'utf8'), prompt === '' ? '--\0' : `--\0${prompt}\0`, JSON.stringify(prompt));
+        spawnSync('tmux', ['-S', sock, 'kill-server']);
+      }
+    } finally {
+      spawnSync('tmux', ['-S', sock, 'kill-server']);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });

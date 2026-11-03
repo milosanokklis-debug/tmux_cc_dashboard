@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
-WS=/workspace
+WS=${CCDASH_WS:-/workspace} # overridden only by the tests
 t() { tmux -S "${CCDASH_TMUX:-/run/ccdash/tmux.sock}" "$@"; }
 name_for() { local b=${1##*/}; printf 'claude-%s' "${b//[^[:alnum:]_-]/_}"; }
 # `--` ends option parsing so a prompt beginning with "-" is never read as a claude flag
 # (checked against claude 2.1.317: `claude -p -- "-x"` treats "-x" as the prompt).
 cmd=(bash -lc 'claude -- "$@"; exec bash -l' _)
+# tmux reads an argument ending in ';' as the end of the command and drops it; `\;` at the end
+# means a literal ';' (so `x;` becomes `x\;` and `x\;` becomes `x\\;`). Checked against tmux 3.5a.
+# An empty prompt is dropped (same as the web path) instead of being passed on as "".
+tmux_args() { local a; targs=(); for a in "$@"; do [ -n "$a" ] || continue; [[ $a == *';' ]] && a="${a%;}\\;"; targs+=("$a"); done; }
 usage() { echo "usage: ccd-session start <project> [prompt] | attach <project> | ls" >&2; exit 2; }
 
 sub=${1:-}
@@ -31,7 +35,8 @@ case "$sub" in
         exit 1
       fi
     else
-      t new-session -d -s "$name" -c "$dir" "${cmd[@]}" "$@"
+      tmux_args "$@"
+      t new-session -d -s "$name" -c "$dir" "${cmd[@]}" ${targs[@]+"${targs[@]}"}
       t set -t "=$name:" @project_dir "$dir"
     fi
     echo "$name"

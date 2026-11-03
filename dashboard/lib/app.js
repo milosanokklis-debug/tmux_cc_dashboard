@@ -1,49 +1,33 @@
 'use strict';
-// The dashboard HTTP application. Authentication only: no project/terminal features.
+// The dashboard HTTP application: authentication, the JSON API and the terminal WebSocket.
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { setTimeout: sleep } = require('node:timers/promises');
+const { WebSocketServer } = require('ws');
 const authstore = require('./authstore');
 const { SessionStore } = require('./sessions');
 const { SocketRegistry } = require('./registry');
 const { LoginLimiter } = require('./ratelimit');
 const sec = require('./security');
+const { HttpError, send, readJson } = require('./http');
+const { createApi, defaultServices } = require('./api');
+const { createTerm } = require('./term');
 
-const MAX_BODY = 8 * 1024;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const TYPES = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
+// The only assets the login/setup pages need; everything else under /assets/ needs a session.
+const PUBLIC_ASSETS = new Set(['style.css', 'login.js']);
+// Vendored browser builds, served from node_modules under fixed names (authenticated only).
+const NODE_MODULES = path.join(__dirname, '..', 'node_modules');
+const VENDOR_ASSETS = {
+  'xterm.js': '@xterm/xterm/lib/xterm.js',
+  'xterm.css': '@xterm/xterm/css/xterm.css',
+  'addon-fit.js': '@xterm/addon-fit/lib/addon-fit.js',
+  'addon-web-links.js': '@xterm/addon-web-links/lib/addon-web-links.js',
+};
 
-class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
-}
-
-function send(res, status, body, type = 'application/json; charset=utf-8', extra = {}) {
-  const data = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
-  res.writeHead(status, { 'Content-Type': type, 'Content-Length': Buffer.byteLength(data), ...extra });
-  res.end(data);
-}
 const html = (name) => fs.readFileSync(path.join(PUBLIC_DIR, name));
-
-function readJson(req) {
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    const chunks = [];
-    req.on('data', (c) => {
-      size += c.length;
-      if (size > MAX_BODY) { reject(new HttpError(413, 'request body too large')); return; }
-      chunks.push(c);
-    });
-    req.on('end', () => {
-      try {
-        const v = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error('not an object');
-        resolve(v);
-      } catch { reject(new HttpError(400, 'invalid JSON')); }
-    });
-    req.on('error', () => reject(new HttpError(400, 'bad request')));
-  });
-}
 
 function createApp({
   webDir = authstore.webDir(),
@@ -51,13 +35,21 @@ function createApp({
   clock = Date,
   delay = (ms) => sleep(ms),
   log = console.error,
+  services = {},
 } = {}) {
+  const svc = { ...defaultServices(), ...services };
+  const handleApi = createApi(svc);
   let auth = null; // null = no usable credentials: everything except /healthz is refused
   let authStamp = null;
   let authBroken = false; // logged once per run of failures
   const generationOf = () => (auth ? auth.generation : '');
   let sessions = null; // created after the first auth read so it starts with the right generation
   const registry = new SocketRegistry();
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
+  const term = createTerm({
+    wss, registry, tmuxSock: svc.tmux.sock, runFile: svc.runFile, spawnPty: svc.spawnPty,
+    pingMs: svc.pingMs, cleanupMs: svc.cleanupMs,
+  });
   const limiter = new LoginLimiter({ clock });
   const authFile = path.join(webDir, 'auth.json');
 
@@ -106,8 +98,13 @@ function createApp({
 
     if (pathname === '/healthz' && isRead) return send(res, 200, 'ok\n', 'text/plain; charset=utf-8');
 
+    if (pathname === '/favicon.ico' && isRead) { // no icon: 204 keeps the browser console clean
+      res.writeHead(204, { 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+
     if (!auth) { // no credentials yet: nothing works until `ccd passwd` has run
-      if (pathname.startsWith('/assets/') && isRead) return serveAsset(res, pathname);
+      if (pathname.startsWith('/assets/') && isRead) return serveAsset(res, pathname, false);
       if (isApi || !isRead) return send(res, 503, { error: 'not configured: run ccd passwd' });
       return send(res, 503, html('setup.html'), 'text/html; charset=utf-8');
     }
@@ -115,7 +112,9 @@ function createApp({
     const bad = sec.checkStateChanging(req, origins);
     if (bad) return send(res, bad.status, { error: bad.error });
 
-    if (pathname.startsWith('/assets/') && isRead) return serveAsset(res, pathname);
+    if (pathname.startsWith('/assets/') && isRead && PUBLIC_ASSETS.has(pathname.slice('/assets/'.length))) {
+      return serveAsset(res, pathname, false);
+    }
 
     if (pathname === '/login' && isRead) {
       if (currentSession(req)) return redirect(res, '/');
@@ -136,7 +135,8 @@ function createApp({
       return send(res, 200, { ok: true }, undefined, { 'Set-Cookie': sec.clearCookie() });
     }
     if (pathname === '/' && isRead) return send(res, 200, html('index.html'), 'text/html; charset=utf-8');
-    if (isApi) return send(res, 404, { error: 'not found' });
+    if (pathname.startsWith('/assets/') && isRead) return serveAsset(res, pathname, true);
+    if (isApi) return handleApi(req, res, pathname, new URL(`http://localhost${req.url}`).searchParams);
     return send(res, 404, 'not found\n', 'text/plain; charset=utf-8');
   }
 
@@ -145,11 +145,14 @@ function createApp({
     res.end();
   }
 
-  function serveAsset(res, pathname) {
+  function serveAsset(res, pathname, authed) {
     const name = pathname.slice('/assets/'.length);
     const type = TYPES[path.extname(name)];
     if (!type || !/^[a-z0-9.-]+$/.test(name)) return send(res, 404, 'not found\n', 'text/plain; charset=utf-8');
-    try { return send(res, 200, fs.readFileSync(path.join(PUBLIC_DIR, name)), type); } catch {
+    if (!authed && !PUBLIC_ASSETS.has(name)) return send(res, 404, 'not found\n', 'text/plain; charset=utf-8');
+    const file = Object.hasOwn(VENDOR_ASSETS, name)
+      ? path.join(NODE_MODULES, VENDOR_ASSETS[name]) : path.join(PUBLIC_DIR, name);
+    try { return send(res, 200, fs.readFileSync(file), type); } catch {
       return send(res, 404, 'not found\n', 'text/plain; charset=utf-8');
     }
   }
@@ -190,21 +193,34 @@ function createApp({
       if (e instanceof HttpError) {
         // After an oversize body, stop reading: answer, then drop the connection.
         if (e.status === 413) res.once('finish', () => req.destroy());
-        return send(res, e.status, { error: e.message }, undefined, e.status === 413 ? { Connection: 'close' } : {});
+        return send(res, e.status, { ...e.extra, error: e.message }, undefined, e.status === 413 ? { Connection: 'close' } : {});
       }
       console.error('internal error:', e.message);
       send(res, 500, { error: 'internal error' });
     });
   }
 
-  // Future WebSocket endpoints go here: after guardUpgrade passes, complete the
-  // handshake and call registry.add(key, socket). None exist yet.
-  function onUpgrade(req, socket) {
+  // The only WebSocket endpoint is /term/:proj; guardUpgrade checks session and Origin first.
+  function onUpgrade(req, socket, head) {
     socket.on('error', () => {});
     refreshAuth();
     if (!auth) return sec.rejectUpgrade(socket, 503, 'Service Unavailable');
     const g = sec.guardUpgrade(req, socket, { sessions, origins });
-    if (g) sec.rejectUpgrade(socket, 404, 'Not Found');
+    if (!g) return;
+    let pathname;
+    let query;
+    try { const u = new URL(`http://localhost${req.url}`); pathname = u.pathname; query = u.searchParams; } catch {
+      return sec.rejectUpgrade(socket, 400, 'Bad Request');
+    }
+    const m = /^\/term\/([^/]+)$/.exec(pathname);
+    if (!m || req.method !== 'GET') return sec.rejectUpgrade(socket, 404, 'Not Found');
+    let proj;
+    try { proj = decodeURIComponent(m[1]); } catch { return sec.rejectUpgrade(socket, 400, 'Bad Request'); }
+    term.handleUpgrade(req, socket, head, { key: g.key, proj, query }).catch((e) => {
+      console.error('terminal upgrade failed:', e.message);
+      sec.rejectUpgrade(socket, 500, 'Internal Server Error');
+    });
+    return undefined;
   }
 
   function createServer() {
@@ -218,7 +234,7 @@ function createApp({
     return server;
   }
 
-  return { createServer, onUpgrade, sessions, registry, limiter, tick, refreshAuth };
+  return { createServer, onUpgrade, sessions, registry, limiter, tick, refreshAuth, term, services: svc };
 }
 
 module.exports = { createApp };

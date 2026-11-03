@@ -1,2 +1,3 @@
 #!/command/execlineb -P
-install -d -o ccd -g ccd -m 0750 /run/ccdash /run/ccdash/ops
+foreground { install -d -o ccd -g ccd -m 0750 /run/ccdash }
+install -d -o ccd -g ccd -m 0770 /run/ccdash/ops
