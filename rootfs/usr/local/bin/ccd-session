@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+WS=/workspace
+t() { tmux -S "${CCDASH_TMUX:-/run/ccdash/tmux.sock}" "$@"; }
+name_for() { local b=${1##*/}; printf 'claude-%s' "${b//[^[:alnum:]_-]/_}"; }
+# `--` ends option parsing so a prompt beginning with "-" is never read as a claude flag
+# (checked against claude 2.1.317: `claude -p -- "-x"` treats "-x" as the prompt).
+cmd=(bash -lc 'claude -- "$@"; exec bash -l' _)
+usage() { echo "usage: ccd-session start <project> [prompt] | attach <project> | ls" >&2; exit 2; }
+
+sub=${1:-}
+[ $# -gt 0 ] && shift
+case "$sub" in
+  start)
+    [ $# -ge 1 ] || usage
+    proj=$1; shift
+    [[ $proj =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] && [[ $proj != *..* ]] || { echo "invalid project name" >&2; exit 2; }
+    dir=$WS/$proj
+    [ -d "$dir" ] || { echo "no such project: $proj" >&2; exit 1; }
+    name=$(name_for "$proj")
+    if t has-session -t "=$name" 2>/dev/null; then
+      # name_for is lossy (a.b and a_b collide): never attach one project to another's session
+      existing=$(t show-options -qv -t "=$name:" @project_dir 2>/dev/null || true)
+      if [ -z "$existing" ]; then
+        # another start may sit between new-session and set; retry once
+        sleep 0.3
+        existing=$(t show-options -qv -t "=$name:" @project_dir 2>/dev/null || true)
+      fi
+      if [ "$existing" != "$dir" ]; then
+        echo "session name $name is already used by ${existing:-another project}; rename the project" >&2
+        exit 1
+      fi
+    else
+      t new-session -d -s "$name" -c "$dir" "${cmd[@]}" "$@"
+      t set -t "=$name:" @project_dir "$dir"
+    fi
+    echo "$name"
+    ;;
+  attach)
+    [ $# -eq 1 ] || usage
+    name=$("$0" start "$1")
+    if [ -n "${TMUX:-}" ]; then
+      t switch-client -t "=$name"
+    else
+      t attach -t "=$name"
+    fi
+    ;;
+  ls)
+    out=$(t list-sessions -F '#{session_name}' 2>/dev/null | grep '^claude-' || true)
+    if [ -n "$out" ]; then printf '%s\n' "$out"; else echo "no sessions"; fi
+    ;;
+  *) usage ;;
+esac

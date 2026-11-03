@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -uo pipefail
+if [ $# -lt 2 ] || ! [[ $1 =~ ^[0-9a-f]{16}$ ]]; then
+  echo "usage: ccd-ops <16-hex id> <cmd> [args...]" >&2
+  exit 2
+fi
+id=$1; shift
+d=/run/ccdash/ops
+umask 027
+"$@" > "$d/$id.log" 2>&1
+rc=$?
+echo "$rc" > "$d/$id.rc.tmp"
+mv "$d/$id.rc.tmp" "$d/$id.rc"

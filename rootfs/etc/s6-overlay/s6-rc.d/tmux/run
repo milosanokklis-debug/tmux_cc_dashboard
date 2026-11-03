@@ -1,0 +1,25 @@
+#!/bin/sh
+# tmux always creates its socket 0600 (umask is ignored) and tmux.conf only loads when the
+# first client connects, so chmod it 0660 (group ccd, for web) from a background watcher.
+# The watcher then connects one ccd-owned client so the config (server-access -a web) is
+# loaded before web ever connects; otherwise web's first client is refused.
+export HOME=/home/ccd
+export CCDASH_TMUX=/run/ccdash/tmux.sock
+(
+  i=0
+  while [ "$i" -lt 300 ]; do
+    if [ -S /run/ccdash/tmux.sock ]; then
+      chmod 0660 /run/ccdash/tmux.sock
+      j=0
+      while [ "$j" -lt 10 ]; do
+        s6-setuidgid ccd tmux -S /run/ccdash/tmux.sock start-server \; display-message -p ok && exit 0
+        sleep 0.2
+        j=$((j + 1))
+      done
+      exit 0
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+) </dev/null >/dev/null 2>&1 &
+exec s6-setuidgid ccd tmux -S /run/ccdash/tmux.sock -f /etc/tmux.conf -D
