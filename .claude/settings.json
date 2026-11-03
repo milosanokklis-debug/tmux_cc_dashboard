@@ -1,0 +1,68 @@
+{
+  "enabledPlugins": {
+    "agent-skills@addy-agent-skills": true,
+    "kit-core@agent-kit": true,
+    "hallmark@hallmark": true,
+    "design-and-refine@design-plugins": true,
+    "taste-skill@agent-kit": true,
+    "kit-design@agent-kit": true,
+    "kit-code@agent-kit": true,
+    "basic-memory@basicmachines-co": true
+  },
+  "extraKnownMarketplaces": {
+    "addy-agent-skills": {
+      "source": {
+        "source": "github",
+        "repo": "addyosmani/agent-skills"
+      }
+    },
+    "superpowers-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "obra/superpowers-marketplace"
+      }
+    },
+    "mattpocock": {
+      "source": {
+        "source": "github",
+        "repo": "mattpocock/skills"
+      }
+    },
+    "hallmark": {
+      "source": {
+        "source": "github",
+        "repo": "Nutlope/hallmark"
+      }
+    },
+    "design-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "0xdesign/design-plugin"
+      }
+    },
+    "agent-kit": {
+      "source": {
+        "source": "github",
+        "repo": "milosanokklis-debug/new_ai_setup"
+      }
+    },
+    "basicmachines-co": {
+      "source": {
+        "source": "github",
+        "repo": "basicmachines-co/basic-memory",
+        "sparsePaths": [
+          ".claude-plugin",
+          "plugins/claude-code"
+        ]
+      }
+    }
+  },
+  "basicMemory": {
+    "primaryProject": "tmux-cc-dashboard",
+    "captureFolder": "sessions",
+    "rememberFolder": "bm-remember"
+  },
+  "outputStyle": "basic-memory",
+  "agent": "orchestrator",
+  "model": "opusplan"
+}
