@@ -24,9 +24,10 @@ Tested by the container runner: tmux 3.5a-3.5a on trixie; docker 29.9.2 (rootful
 - OPEN ISSUE for Step 3: `#{pane_current_command}` reads `bash` when launched via `bash -lc 'claude ...'` (claude is a child of bash), so the live indicator cannot rely on it. Options: check the child process of `#{pane_pid}` (e.g. via `ps`), or exec claude directly in the pane.
 - NOTE for Step 3: tmux prints `access not allowed` but exits 0 for a denied client, so the dashboard must not trust the exit code alone; check the output, or use a command with a meaningful status such as `has-session`.
 - First launch of claude shows the theme picker / welcome screen. Tested.
-- TODO (need the user): /login persistence across restarts, transcript file mode, folder trust dialog, rootless Docker, cloudflared.
+- DONE: rootless Docker under a dedicated `ccdash` host user (see "Host rootless Docker for ccdash").
+- TODO (need the user): /login persistence across restarts, transcript file mode, folder trust dialog, cloudflared (see "Cloudflare Access + cloudflared (owner action)").
 - git credential helper returns token for github.com/<owner>: TODO (needs a token file in /var/lib/ccdash-git/<owner>).
-- Final end-to-end verification passed on a rootful Docker 29.9.2 dev host: build from scratch, 128/128 tests on Node 20.19.2, Step 2 acceptance, core features (ws terminal, tree, FIFO hardening, restart persistence). Still host/user tasks: rootless Docker under a `ccdash` user with linger; Cloudflare Access + cloudflared; Claude /login persistence; real hook payload fixtures in tests/fixtures/2.1.317/; transcript file mode; folder-trust dialog; Safari cookie check.
+- Final end-to-end verification passed on a rootful Docker 29.9.2 dev host: build from scratch, 128/128 tests on Node 20.19.2, Step 2 acceptance, core features (ws terminal, tree, FIFO hardening, restart persistence). Rootless Docker under a `ccdash` user is DONE (see "Host rootless Docker for ccdash"). Still host/user tasks: Cloudflare Access + cloudflared; Claude /login persistence; real hook payload fixtures in tests/fixtures/2.1.317/; transcript file mode; folder-trust dialog; Safari cookie check. The full list is in "Remaining owner tasks".
 
 ## Dashboard auth (Step 2)
 Env var: `CCDASH_ORIGIN` (Cloudflare origin, e.g. https://ccdash.example.com; set in .env, passed by compose, empty by default). http://localhost:7690 is always an allowed Origin.
@@ -71,3 +72,73 @@ Modules in dashboard/lib: tmux.js (tmux via execFile, /proc process table, ccd-o
 - Terminals closed by a password change/logout see close code 1006 (registry destroys the socket) — cosmetic.
 
 - Review fixes (server side): the tree parse cache keeps only the fields fold uses (cleaned, capped; at most 5000 events per file), a file over 512 KB is read as head plus tail without parsing the overlap twice, and the tail's first line is dropped only when it starts mid-line. `firstUserMessage` is cached by (path, mtime, size). A symlinked agents dir or transcript root is refused. tmux "access not allowed" is only recognised on stderr (or as the whole stdout), because stdout carries ccd-controlled text. A tmux `error connecting to <sock> (No such file or directory)` is deliberately not "no panes": it surfaces as 503 `tmux unavailable`. Stale `/run/ccdash/ops/<16 hex>.{rc,log,rc.tmp}` files older than 1 h are swept at startup and every 10 min. `ccd-session` drops an empty prompt. If attaching a terminal throws after the WebSocket upgrade, the socket is closed (no HTTP reject), the pty killed and the slot freed once. `dashboard/test` is removed from the runtime image (`rm -rf test` in the build stage); not run in the image.
+
+## Host rootless Docker for ccdash (DONE, 2026-11-03)
+The ccdash stack runs under its own host user, so its Docker daemon is rootless and its container processes map to an unprivileged uid range. Rootful Docker is untouched.
+
+Setup (tested facts):
+- Host user `ccdash`: uid 1003, locked password, no extra groups, subuid range starts at 296608 (65536 uids).
+- Linger enabled. `user@1003` already delegates cpu, memory and pids (cgroup v2), so no `user@.service.d` drop-in was added.
+- Rootless `docker.service` for ccdash: Docker 29.9.2, rootlesskit 3.3.0, slirp4netns networking, overlayfs storage, cgroup v2 systemd driver. Socket `/run/user/1003/docker.sock`.
+- Packages added: uidmap, slirp4netns, passt, fuse-overlayfs. docker-ce-rootless-extras and dbus-user-session were already installed.
+- Wrapper `/usr/local/bin/ccdash-docker` (root, 0755) runs docker as ccdash.
+- `/etc/sudoers.d/ccdash` contains exactly: `agent ALL=(ccdash) NOPASSWD: /usr/local/bin/ccdash-docker`
+- Checkout `/home/ccdash/ccdash` on feature/ccdash-steps-3-5 with a private `.env` (`CCDASH_ORIGIN` empty).
+
+Verified:
+- Container processes run as host uids in the subuid range: tmux (container uid 1000, ccd) is host 297607, node (uid 999, web) is host 297606. Container root is host uid 1003 (ccdash).
+- Read-only root filesystem, not privileged, trimmed capabilities, only named volumes.
+- Limits applied in the cgroup: mem 8g, cpu 4, pids 1024.
+- Port published as 127.0.0.1:7690 only.
+- The tmux socket works for web under rootless.
+- `bin/ccd` works with `CCDASH_DOCKER="sudo -n -u ccdash /usr/local/bin/ccdash-docker"`.
+- Volumes survive `down` / `up`.
+
+Running commands as ccdash: its home is private, so run from a neutral cwd, for example:
+```
+sudo -u ccdash bash -c 'cd /home/ccdash/ccdash && /usr/local/bin/ccdash-docker compose up -d'
+CCDASH_DOCKER="sudo -n -u ccdash /usr/local/bin/ccdash-docker" ./bin/ccd <command>
+```
+
+Undo (in this order; steps 1, 6 and 7 are destructive):
+1. Stop the stack and delete its named volumes (the dashboard password, git tokens and Claude login are lost):
+   `sudo -u ccdash bash -c 'cd /home/ccdash/ccdash && /usr/local/bin/ccdash-docker compose down -v'`
+2. Remove the rootless Docker install:
+   `sudo -u ccdash bash -c 'cd /tmp && XDG_RUNTIME_DIR=/run/user/1003 dockerd-rootless-setuptool.sh uninstall'`
+3. `sudo loginctl disable-linger ccdash`
+4. `sudo systemctl stop user@1003.service`
+5. `sudo rm /etc/sudoers.d/ccdash /usr/local/bin/ccdash-docker`
+6. `sudo userdel -r ccdash` (removes the home directory, checkout and rootless Docker data). Check `/etc/subuid` and `/etc/subgid` for a leftover `ccdash` line and remove it if present.
+7. Optional, only if nothing else needs them: `sudo apt-get remove uidmap slirp4netns fuse-overlayfs passt`
+
+Pre-existing, not changed by this work: `/etc/sudoers.d/agent` does not have mode 0440 (visudo warns). Suggested fix, not applied: `sudo chmod 0440 /etc/sudoers.d/agent`
+
+## Cloudflare Access + cloudflared (owner action)
+Do this only after the acceptance tests, which now pass. Create the Access application (step a) before the public hostname (step b), so the login page is never reachable without Access.
+
+This host already runs a remotely managed cloudflared tunnel. Its token is in `/etc/cloudflared/token`; we do not read or modify it. cloudflared runs on the host network and the compose port is bound to 127.0.0.1:7690, so no compose change is needed.
+
+In the Cloudflare Zero Trust dashboard:
+a. Access > Applications > Add an application > Self-hosted. Application domain: `ccdash.<yourdomain>`. Add a policy with action Allow and an Include rule Emails = your email. Identity provider: One-time PIN. Session duration: short (for example 1 hour).
+b. Networks > Tunnels > the existing tunnel > Public hostname > Add a public hostname: subdomain `ccdash`, domain `<yourdomain>`, Service type HTTP, URL `http://127.0.0.1:7690`.
+c. On the host, set `CCDASH_ORIGIN=https://ccdash.<yourdomain>` in `/home/ccdash/ccdash/.env` (for example `sudo -u ccdash nano /home/ccdash/ccdash/.env`), then recreate the container:
+   `sudo -u ccdash bash -c 'cd /home/ccdash/ccdash && /usr/local/bin/ccdash-docker compose up -d'`
+d. Set the dashboard password:
+   `CCDASH_DOCKER="sudo -n -u ccdash /usr/local/bin/ccdash-docker" ./bin/ccd passwd`
+e. Verify:
+   - In a private browser window, open `https://ccdash.<yourdomain>/`. The Access one-time code prompt must appear before the dashboard login page.
+   - `curl -I https://ccdash.<yourdomain>/` without Access auth must not return the dashboard. Expect Access's redirect or a 403, not a 200.
+f. Before this is set up, use an SSH tunnel: `ssh -L 7690:127.0.0.1:7690 <host>`, then open http://localhost:7690 in Chrome or Firefox (see the Safari caveat under Dashboard auth).
+
+## Remaining owner tasks
+- [ ] Cloudflare Access + cloudflared steps a to e in "Cloudflare Access + cloudflared (owner action)".
+- [ ] `ccd login`, then `/login` once. Verify it survives `compose down` and `compose up`.
+- [ ] Capture real hook payloads for SessionStart, SubagentStart, SubagentStop and SessionEnd into tests/fixtures/2.1.317/. Check the fields agent_id, agent_type, description and agent_transcript_path, and the transcript file mode.
+- [ ] Folder-trust dialog: record its behavior.
+- [ ] Safari check of the `__Host-` Secure cookie on http://localhost (SSH tunnel).
+- [ ] Manual browser/SSH acceptance:
+  - Typing in the browser appears in SSH, and typing in SSH appears in the browser.
+  - Two clients in different windows do not switch each other.
+  - Disconnect, reconnect 10 minutes later: the session still works.
+  - Subagents appear within 2 s.
+  - `/exit` flips the card to Shell only.
