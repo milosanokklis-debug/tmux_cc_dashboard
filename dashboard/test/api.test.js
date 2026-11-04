@@ -103,6 +103,7 @@ const ROUTES = [
   ['GET', '/assets/xterm.css'],
   ['GET', '/assets/addon-fit.js'],
   ['GET', '/assets/addon-web-links.js'],
+  ['GET', '/assets/addon-clipboard.js'],
 ];
 
 test('every new route: no session -> 401 (API) or login redirect (assets); nothing is called', async (t) => {
@@ -135,7 +136,7 @@ test('vendor assets need a session, are served with the same CSP and no-store; s
   const s = await h.authed(h.fakeServices());
   t.after(s.stop);
   for (const [name, type] of [['xterm.js', 'text/javascript'], ['addon-fit.js', 'text/javascript'],
-    ['addon-web-links.js', 'text/javascript'], ['xterm.css', 'text/css']]) {
+    ['addon-web-links.js', 'text/javascript'], ['addon-clipboard.js', 'text/javascript'], ['xterm.css', 'text/css']]) {
     const r = await get(s, `/assets/${name}`);
     assert.strictEqual(r.status, 200, name);
     assert.ok(r.headers.get('content-type').startsWith(type));

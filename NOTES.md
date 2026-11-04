@@ -73,6 +73,14 @@ Modules in dashboard/lib: tmux.js (tmux via execFile, /proc process table, ccd-o
 
 - Review fixes (server side): the tree parse cache keeps only the fields fold uses (cleaned, capped; at most 5000 events per file), a file over 512 KB is read as head plus tail without parsing the overlap twice, and the tail's first line is dropped only when it starts mid-line. `firstUserMessage` is cached by (path, mtime, size). A symlinked agents dir or transcript root is refused. tmux "access not allowed" is only recognised on stderr (or as the whole stdout), because stdout carries ccd-controlled text. A tmux `error connecting to <sock> (No such file or directory)` is deliberately not "no panes": it surfaces as 503 `tmux unavailable`. Stale `/run/ccdash/ops/<16 hex>.{rc,log,rc.tmp}` files older than 1 h are swept at startup and every 10 min. `ccd-session` drops an empty prompt. If attaching a terminal throws after the WebSocket upgrade, the socket is closed (no HTTP reject), the pty killed and the slot freed once. `dashboard/test` is removed from the runtime image (`rm -rf test` in the build stage); not run in the image.
 
+### Copy and paste in the browser terminal
+- tmux runs with `mouse on`, so a plain drag selects inside tmux (copy-mode). On release tmux copies to its buffer and sends an OSC 52 sequence to the client; `@xterm/addon-clipboard` 0.2.0 (served as `/assets/addon-clipboard.js`, global `ClipboardAddon.ClipboardAddon`) writes it to the browser clipboard. Applications in a pane that emit OSC 52 (with `set-clipboard on` / `allow-passthrough on`) reach the clipboard the same way.
+- Shift+drag bypasses tmux mouse mode and uses the browser's native selection (copy with Ctrl+C / Ctrl+Shift+C or the context menu).
+- Paste with Ctrl+Shift+V (browser paste into xterm) or the paste button on the terminal view.
+- The clipboard API needs a secure context (HTTPS via Cloudflare or localhost) and a user gesture; the browser may ask for clipboard permission, especially for reads (paste button, OSC 52 queries). A refused write is silent.
+- Verified on tmux 3.5a with `rootfs/etc/tmux.conf` and TERM=xterm-256color (the server's pty TERM): a copy-mode yank sends `ESC ] 52 ; ; <base64> BEL`. tmux leaves the selection parameter (Pc) empty, and the addon's default provider only writes when Pc is `c`, so the page must construct the addon with a provider that treats an empty Pc as `c`. An application's own `ESC ] 52 ; c ; ...` is forwarded unchanged. No tmux.conf change was needed.
+- This deliberately supersedes the handoff's "no extra controls on the terminal view" rule, at the user's request.
+
 ## Host rootless Docker for ccdash (DONE, 2026-11-03)
 The ccdash stack runs under its own host user, so its Docker daemon is rootless and its container processes map to an unprivileged uid range. Rootful Docker is untouched.
 

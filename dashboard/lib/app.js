@@ -25,6 +25,7 @@ const VENDOR_ASSETS = {
   'xterm.css': '@xterm/xterm/css/xterm.css',
   'addon-fit.js': '@xterm/addon-fit/lib/addon-fit.js',
   'addon-web-links.js': '@xterm/addon-web-links/lib/addon-web-links.js',
+  'addon-clipboard.js': '@xterm/addon-clipboard/lib/addon-clipboard.js',
 };
 
 const html = (name) => fs.readFileSync(path.join(PUBLIC_DIR, name));
