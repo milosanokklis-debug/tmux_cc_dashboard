@@ -2,16 +2,129 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light dark">
 <title>ccdash</title>
+<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111317" media="(prefers-color-scheme: dark)">
+<meta name="description" content="ccdash: manage Claude Code sessions in tmux, with a browser terminal and an agent tree.">
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/assets/xterm.css">
 <link rel="stylesheet" href="/assets/style.css">
 </head>
-<body>
-<main>
-  <h1>ccdash — signed in</h1>
-  <button type="button" id="logout">Sign out</button>
-  <p id="error" role="alert"></p>
+<body class="app">
+<header class="topbar">
+  <h1 class="brand">ccdash</h1>
+  <button type="button" id="logout" class="btn btn-ghost">Sign out</button>
+</header>
+
+<div id="notices" class="notices"></div>
+
+<main id="view-projects" class="page" aria-labelledby="projects-title">
+  <noscript><p class="noscript">ccdash needs JavaScript. Turn it on for this site and reload.</p></noscript>
+  <div class="page-head">
+    <h2 id="projects-title">Projects</h2>
+    <button type="button" id="add-open" class="btn btn-primary">Add project</button>
+  </div>
+  <p id="projects-error" class="inline-error" role="alert" hidden></p>
+  <ul id="project-list" class="cards" aria-label="Projects"></ul>
+  <div id="projects-empty" class="empty" hidden>
+    <h3>No projects yet</h3>
+    <p>Add a GitHub repository and ccdash will clone it and start Claude Code in a tmux session for it.</p>
+    <p>Choose <strong>Add project</strong>, enter <code>owner/repo</code> or a GitHub URL, and for a private repository add a fine-grained token.</p>
+  </div>
+  <p id="projects-loading" class="muted" hidden>Loading projects…</p>
 </main>
+
+<div id="view-terminal" class="term-view" hidden>
+  <div class="term-bar">
+    <a href="#/" id="back" class="btn btn-ghost"><span aria-hidden="true">&larr;</span> Back to projects</a>
+    <span id="term-title" class="term-title"></span>
+    <span class="term-actions">
+      <button type="button" id="copy" class="btn" disabled aria-keyshortcuts="Control+Shift+C" title="Copy the selected terminal text (Ctrl+Shift+C)">Copy selection</button>
+      <button type="button" id="paste" class="btn" aria-keyshortcuts="Control+Shift+V" title="Paste from the clipboard (Ctrl+Shift+V)">Paste</button>
+    </span>
+    <span class="conn" id="conn"><span id="conn-icon" class="conn-icon" aria-hidden="true"></span><span id="conn-text" role="status">Connecting…</span></span>
+    <button type="button" id="reconnect" class="btn" hidden>Reconnect</button>
+    <button type="button" id="tree-toggle" class="btn btn-ghost tree-toggle" aria-expanded="true" aria-controls="tree-body">Agents</button>
+  </div>
+  <div class="term-split">
+    <section class="term-pane" aria-label="Terminal">
+      <button type="button" id="skip-agents" class="btn skip-link">Skip to agents</button>
+      <div id="term" class="term"></div>
+      <p id="term-hint" class="term-hint"><kbd>Tab</kbd> stays in the terminal. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&uarr;</kbd> leaves it for the agent panel, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&darr;</kbd> returns. Drag to select and copy (tmux). Hold <kbd>Shift</kbd> while dragging to select with the browser instead.</p>
+    </section>
+    <aside class="tree-pane" aria-labelledby="tree-title">
+      <button type="button" id="skip-term" class="btn skip-link">Back to terminal</button>
+      <h2 id="tree-title" class="tree-title">Agents</h2>
+      <div id="tree-body" class="tree-body">
+        <div class="tree-options">
+          <label class="check"><input type="checkbox" id="tree-all-projects"> All projects</label>
+          <label class="check"><input type="checkbox" id="tree-all-time"> Show ended / older than 24h</label>
+        </div>
+        <p id="tree-error" class="inline-error" role="alert" hidden>Could not load agent tree.</p>
+        <ul id="tree" class="tree" aria-label="Agent tree"></ul>
+        <p id="tree-empty" class="muted" hidden></p>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<dialog id="paste-dialog" class="dialog" aria-labelledby="paste-title" aria-describedby="paste-desc">
+  <form id="paste-form" method="dialog">
+    <h2 id="paste-title">Paste text</h2>
+    <p id="paste-desc" class="hint">Your browser did not allow reading the clipboard. Paste into the box with Ctrl+V, then choose Send.</p>
+    <div class="field">
+      <label for="paste-text">Paste text here</label>
+      <textarea id="paste-text" rows="6" autocomplete="off" autocapitalize="none" spellcheck="false"></textarea>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" id="paste-cancel" class="btn">Cancel</button>
+      <button type="submit" id="paste-send" class="btn btn-primary">Send</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="add-dialog" class="dialog" aria-labelledby="add-title">
+  <form id="add-form" method="dialog" novalidate>
+    <h2 id="add-title">Add project</h2>
+    <fieldset id="add-fields" class="fields">
+      <div class="field">
+        <label for="add-repo">Repository</label>
+        <input id="add-repo" name="repo" type="text" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="owner/repo or https://github.com/owner/repo" aria-describedby="add-repo-hint">
+        <p id="add-repo-hint" class="hint">GitHub <code>owner/repo</code> or repository URL.</p>
+      </div>
+      <div class="field">
+        <label for="add-token">Fine-grained token <span class="optional">(optional)</span></label>
+        <input id="add-token" name="token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="add-token-hint">
+        <p id="add-token-hint" class="hint">Needed for private repos or to push. It is never shown again after you submit. Scope it to this repository only: Contents read/write and Metadata read.</p>
+      </div>
+      <div class="field">
+        <label for="add-prompt">First prompt <span class="optional">(optional)</span></label>
+        <textarea id="add-prompt" name="prompt" rows="4" maxlength="4000" aria-describedby="add-prompt-count"></textarea>
+        <p id="add-prompt-count" class="hint counter">0 / 4000</p>
+      </div>
+    </fieldset>
+    <div id="add-progress" class="progress" role="status" tabindex="-1" hidden><span class="spinner" aria-hidden="true"></span><span>Cloning… this can take a few minutes.</span></div>
+    <div id="add-error" class="error-box" role="alert" hidden>
+      <p id="add-error-msg"></p>
+      <pre id="add-error-log" tabindex="0" hidden></pre>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" id="add-cancel" class="btn">Cancel</button>
+      <button type="submit" id="add-submit" class="btn btn-primary">Clone and open</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/assets/xterm.js" defer></script>
+<script src="/assets/addon-fit.js" defer></script>
+<script src="/assets/addon-web-links.js" defer></script>
+<script src="/assets/addon-clipboard.js" defer></script>
+<script src="/assets/util.js" defer></script>
+<script src="/assets/projects.js" defer></script>
+<script src="/assets/tree.js" defer></script>
+<script src="/assets/terminal.js" defer></script>
 <script src="/assets/app.js" defer></script>
 </body>
 </html>

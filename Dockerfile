@@ -1,3 +1,18 @@
+# Builder: compiles node-pty (native, no Linux prebuilds). Same base image and apt Node as the
+# final stage so the ABI matches. Compilers never reach the final image.
+FROM debian:trixie-slim AS dashboard-build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends nodejs npm build-essential python3 ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/ccdash/dashboard
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci --omit=dev \
+ && node -e "require('node-pty'); require('argon2'); require('ws')" \
+ && rm -rf node_modules/node-pty/prebuilds node_modules/node-pty/build/Release/obj.target node_modules/node-pty/build/Release/.deps
+COPY dashboard/ ./
+# tests and fixtures are not needed at runtime (they stay in the build context for separate test runs)
+RUN rm -rf test
+
 FROM debian:trixie-slim
 ARG TARGETARCH
 ARG CLAUDE_CODE_VERSION
@@ -42,8 +57,7 @@ RUN chmod 0755 /usr/local/bin/ccd-session /usr/local/bin/ccd-project /usr/local/
  && git config --system credential.helper /usr/local/lib/ccdash/git-credential-ccdash \
  && git config --system credential.useHttpPath true
 
-COPY dashboard/ /opt/ccdash/dashboard/
-RUN cd /opt/ccdash/dashboard && npm ci --omit=dev
+COPY --from=dashboard-build /opt/ccdash/dashboard /opt/ccdash/dashboard
 
 ENV DISABLE_AUTOUPDATER=1 LANG=C.UTF-8 CCDASH_TMUX=/run/ccdash/tmux.sock S6_READ_ONLY_ROOT=1
 ENTRYPOINT ["/init"]

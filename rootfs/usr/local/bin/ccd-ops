@@ -7,7 +7,9 @@ fi
 id=$1; shift
 d=/run/ccdash/ops
 umask 027
-"$@" > "$d/$id.log" 2>&1
+# the window has a tty: never let git (or anything else) wait for a prompt nobody can answer
+export GIT_TERMINAL_PROMPT=0
+"$@" < /dev/null > "$d/$id.log" 2>&1
 rc=$?
 echo "$rc" > "$d/$id.rc.tmp"
 mv "$d/$id.rc.tmp" "$d/$id.rc"
