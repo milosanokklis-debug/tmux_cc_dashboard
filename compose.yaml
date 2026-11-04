@@ -1,0 +1,36 @@
+services:
+  ccdash:
+    build:
+      context: .
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:?set CLAUDE_CODE_VERSION in .env}
+        S6_OVERLAY_VERSION: ${S6_OVERLAY_VERSION:?set S6_OVERLAY_VERSION in .env}
+    image: ccdash:${CCDASH_VERSION:?set CCDASH_VERSION in .env}
+    container_name: ccdash
+    restart: unless-stopped
+    read_only: true
+    environment:
+      CCDASH_ORIGIN: ${CCDASH_ORIGIN:-}
+    tmpfs:
+      - /run:mode=0755,exec
+      - /tmp:mode=1777
+    volumes:
+      - ccdash-home:/home/ccd
+      - ccdash-workspace:/workspace
+      - ccdash-web:/var/lib/ccdash-web
+      - ccdash-git:/var/lib/ccdash-git
+    ports:
+      - "127.0.0.1:7690:7690"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER, KILL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 1024
+    mem_limit: 8g
+    cpus: 4
+
+volumes:
+  ccdash-home:
+  ccdash-workspace:
+  ccdash-web:
+  ccdash-git:

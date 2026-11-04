@@ -1,0 +1,4 @@
+#!/command/execlineb -P
+with-contenv
+s6-setuidgid web
+node /opt/ccdash/dashboard/server.js

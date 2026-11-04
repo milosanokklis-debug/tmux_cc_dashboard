@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# $D may contain spaces (e.g. "sudo docker"); it is left unquoted on purpose.
+D=${CCDASH_DOCKER:-docker}
+run() { local t=-i; [ -t 0 ] && t=-it; $D exec $t -u ccd ccdash "$@"; }
+usage() { echo "usage: ccd ls | attach <project> | clone <owner/repo> | login | passwd" >&2; exit 2; }
+case "${1:-}" in
+  ls) run ccd-session ls ;;
+  attach) [ $# -eq 2 ] || usage; run ccd-session attach "$2" ;;
+  clone) [ $# -eq 2 ] || usage; run ccd-project clone "$2" ;;
+  login) run claude ;;
+  passwd) $D exec -it -u web ccdash node /opt/ccdash/dashboard/ccdash-passwd.js ;;
+  *) usage ;;
+esac

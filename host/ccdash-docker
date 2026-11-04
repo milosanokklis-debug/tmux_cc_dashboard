@@ -1,0 +1,4 @@
+#!/bin/sh
+DOCKER_HOST=unix:///run/user/$(id -u ccdash)/docker.sock
+export DOCKER_HOST
+exec /usr/bin/docker "$@"

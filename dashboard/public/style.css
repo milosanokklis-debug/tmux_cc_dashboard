@@ -1,0 +1,10 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; display: grid; place-items: center; min-height: 100vh; }
+main { width: min(24rem, 90vw); }
+form { display: grid; gap: .5rem; }
+label { font-weight: 600; }
+input, button { font: inherit; padding: .5rem .6rem; }
+button { cursor: pointer; margin-top: .5rem; }
+:focus-visible { outline: 3px solid #2f6fed; outline-offset: 2px; }
+[role="alert"] { color: #b00020; min-height: 1.4em; margin: .25rem 0 0; }
+@media (prefers-color-scheme: dark) { [role="alert"] { color: #ff8a80; } }

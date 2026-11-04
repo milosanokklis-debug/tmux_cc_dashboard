@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+usage() { echo "usage: ccd-project clone <owner/repo>" >&2; exit 2; }
+[ "${1:-}" = clone ] && [ $# -eq 2 ] || usage
+repo=$2
+if ! [[ $repo =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || [[ $repo == *..* ]] || [[ ${repo#*/} == .* ]]; then
+  echo "invalid repo" >&2; exit 2
+fi
+name=${repo#*/}
+dest=/workspace/$name
+if [ -d "$dest" ]; then
+  origin=$(git -C "$dest" remote get-url origin 2>/dev/null || true)
+  norm=${origin%.git}; norm=${norm%/}
+  if [ "${norm,,}" = "$(printf 'https://github.com/%s' "$repo" | tr '[:upper:]' '[:lower:]')" ]; then
+    echo "already cloned"; exit 0
+  fi
+  echo "$dest exists with a different origin" >&2; exit 3
+fi
+git clone -- "https://github.com/$repo.git" "$dest"
