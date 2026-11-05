@@ -155,3 +155,49 @@ f. Before this is set up, use an SSH tunnel: `ssh -L 7690:127.0.0.1:7690 <host>`
 - Live volumes ccdash_ccdash-{home,workspace,web,git} backed up before Handoff 2 changes.
 - Handoff 1 core checks (ws terminal, tree, restart persistence) passed 19/19 on a test stack.
 - Dashboard `npm test`: 128/128.
+
+## Handoff 2 Phase A: build-time checks (2026-11-05)
+All measured on the host (tmux 3.5a, Docker 29.9.2 rootless, compose v5.6.1). Throwaway names `h2probe-*`, all removed afterwards.
+
+### 1. Longest prompt as one argv element
+Command shape: `tmux -S <sock> new-session -d -s X sh -c 'printf %s "$1" | wc -c > out' _ "$PROMPT"`, and the same with `respawn-pane -k -t base:0.0`. Bisected on the byte count that `wc -c` reports.
+- new-session: 16,197 bytes accepted, 16,198 fails with `command too long`.
+- respawn-pane: 16,184 bytes accepted, 16,185 fails with `command too long`.
+- 32,000 and above always fail. The limit is tmux's own client-to-server message (about 16 KiB for the whole command: all argv words plus overhead), not the kernel. Kernel check without tmux: a 131,071-byte argv word works, 131,072 gives `Argument list too long` (MAX_ARG_STRLEN = 131072).
+- Recommendation: cap the argv prompt at 8,000 BYTES (UTF-8 bytes, not characters), which leaves room for a longer command, cwd, flags and env words around it. Handoff 1's 4,000 can be raised to 8,000. Anything longer must not go through argv: start the pane with the REPL, then `load-buffer` + `paste-buffer -p` (check 2), then Enter.
+
+### 2. paste-buffer -p is one bracketed paste
+Test: a pane runs a script that prints `ESC[?2004h`, sets `stty raw -echo` and passes the bytes through `cat -v`. Buffer is `line one\nline two\n  indented three\n`; `tmux load-buffer f; tmux paste-buffer -p -t p`.
+- App enabled mode 2004: received `^[[200~line one^Mline two^M  indented three^M^[[201~`. One start marker, one end marker around the whole text. Newlines arrive as CR (^M), which is why a bracketed paste does not submit lines; Enter must be sent separately.
+- App did NOT enable mode 2004 (raw read only): received `line one^Mline two^M  indented three^M` with no markers. `-p` is silently ignored, so each CR acts like Enter. Claude Code's REPL enables 2004 itself, but the safe order is wait for the REPL to be up, then paste.
+
+### 3. Egress design under rootless Docker (works)
+Compose file (kept only during the test) had: network `internal` with `internal: true`; network `egress` (normal bridge); `egproxy` (node:22-slim running a 20-line CONNECT proxy with `ALLOW=example.com`) on both networks with `ports: ["127.0.0.1:17691:3128"]`; `client` (node:22-slim) only on `internal`; `onlyinternal` only on `internal` with `ports: ["127.0.0.1:17692:3128"]`.
+- client direct to internet: `example.com` fails `EAI_AGAIN` (no DNS), `1.1.1.1:443` fails `ENETUNREACH`.
+- client via `egproxy:3128` (resolved by service name): CONNECT example.com gives `HTTP/1.1 200 OK`; github.com gives 403 from the proxy (log: `ALLOW example.com`, `DENY github.com`).
+- host: `curl http://127.0.0.1:17691/` returns `proxy-ok` (published from the proxy side); `curl -x http://127.0.0.1:17691 https://example.com` is 200, github.com is refused.
+- container only on an internal network with a published port: the compose up succeeded and `docker ps` shows `3128/tcp` with no host binding; `curl 127.0.0.1:17692` fails (curl exit 7). So publishing from an internal-only container is silently dropped. Conclusion: any service the host must reach (the dashboard) needs a second, non-internal network; only the proxy and the dashboard (for its published port) get one, and the CLI containers stay internal-only.
+- Cleanup: `compose down -v`; the networks were removed.
+
+### 4. cloudflared on Debian 13
+Throwaway `debian:trixie` container with network on.
+- Key: `https://pkg.cloudflare.com/cloudflare-main.gpg` to `/usr/share/keyrings/cloudflare-main.gpg`.
+- Repo line `deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared trixie main` FAILED (no candidate). `... cloudflared any main` WORKS. Use `any`.
+- `cloudflared --version`: `cloudflared version 2026.10.7 (built 2026-10-30-17:05 UTC)`.
+- `cloudflared tunnel login` with BROWSER unset, no tty, stdin /dev/null, `timeout 20`: it did not exit (timeout rc=124) and printed `Please open the following URL and log in with your Cloudflare account:` then `https://dash.cloudflare.com/argotunnel?aud=<REDACTED>&callback=<REDACTED>` then `Leave cloudflared running to download the cert automatically.` So setup.sh must keep it running in the background, show the URL, and wait for `~/.cloudflared/cert.pem`. Login was NOT completed; container was `--rm`; no cert.pem exists on the host (`find / -name cert.pem -path '*cloudflared*'` is empty).
+
+### 5a. Deferred to `ccd doctor --live` (to confirm live)
+Each check reports one of `ok`, `mismatch` (warning, never an install failure), or `unknown`; the answer is stored in /var/log/ccdash-selftest.json and the code reads that file, with the safe behavior as the default.
+- Stop on Esc / idle_prompt: if Esc fires Stop, the card goes idle on Stop; if not, the idle_prompt Notification (and the pane-activity timeout) marks it idle. Code accepts either signal and never waits on only one.
+- Does --resume keep the session id: if yes, key sessions by id and reuse; if no, treat the new id as the same card via the pane/window name and record the chain of ids.
+- PermissionRequest fall-through, allow, deny and timeout: the hook script handles all four outputs; if fall-through does not show the in-REPL dialog, the dashboard answers via send-keys; on timeout the hook exits with no decision so the REPL asks itself.
+- SessionStart source compact: if the payload carries `source: compact`, the card keeps its state and logs the compaction; if not, the code treats it as a normal start and does not reset counters.
+- rate_limits on Pro: if the status-line payload has `rate_limits`, show the bars; if the field is absent, hide the bars and show token counts only.
+- Hosts contacted: the doctor records every host seen during a real conversation; the egress allowlist is that list, and if a needed host is missing the proxy log shows DENY and the dashboard warns instead of silently failing.
+- gVisor: if runsc works, enable it as the runtime; if it fails, stay on runc and show a warning badge.
+- Web Push to the phone: if the push is delivered, enable the notification toggle; if not, fall back to in-page alerts only and show the hint.
+
+### 5b. MCP syntax (to confirm live)
+- Installed CLI on this host is 2.1.318 (not 2.1.317); `claude mcp add --help` shows: `claude mcp add [options] <name> <commandOrUrl> [args...]`, `-s, --scope <local|user|project>` (default local), `-t, --transport <stdio|sse|http>`, `-e KEY=value`, `-H "Header: v"`. Only `--help` was run; no login.
+- User scope, stdio: `claude mcp add --scope user basic-memory -- <command> <args...>` (the `--` separates Claude's flags from the server command). Verify the exact basic-memory command (for example `uvx basic-memory mcp`) live.
+- Tool ids are `mcp__<server>__<tool>`, so with the server named `basic-memory`: `mcp__basic-memory__bm_search`, `bm_read`, `bm_write`, `bm_edit`, `bm_find`, `bm_list`, `bm_context`, `bm_project`, `bm_move`, `bm_delete`, `bm_schema`, `bm_man` (tool names taken from this agent session's Basic Memory server; bm_move, bm_delete, bm_schema and bm_man were not seen in the tool list here and are unconfirmed). Permission rules use the same ids, or `mcp__basic-memory` for the whole server.
