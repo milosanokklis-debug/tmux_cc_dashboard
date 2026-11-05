@@ -115,3 +115,14 @@ field() { jq -r ".$1" "$D/$SID.json"; }
   [ "$(field pane)" = "$pane" ]
   [ "$(field tmux_pid) $(field tmux_start)" = "$want" ]
 }
+
+@test "a 200 KB PostToolUse payload is still recorded (the payload does not travel as an argument)" {
+  { printf '{"session_id":"%s","hook_event_name":"PostToolUse","cwd":"/workspace/cwd","transcript_path":"/t.jsonl","tool_response":{"output":"' "$SID"
+    head -c 200000 /dev/zero | tr '\0' x
+    printf '"}}'; } >"$BATS_TEST_TMPDIR/big.json"
+  [ "$(wc -c <"$BATS_TEST_TMPDIR/big.json")" -gt 200000 ]
+  run "$STATE" working <"$BATS_TEST_TMPDIR/big.json"
+  [ "$status" -eq 0 ]
+  [ "$(field state)" = working ]
+  [ "$(field event)" = PostToolUse ]
+}

@@ -10,6 +10,31 @@ cmd=(bash -lc 'claude -- "$@"; exec bash -l' _)
 # means a literal ';' (so `x;` becomes `x\;` and `x\;` becomes `x\\;`). Checked against tmux 3.5a.
 # An empty prompt is dropped (same as the web path) instead of being passed on as "".
 tmux_args() { local a; targs=(); for a in "$@"; do [ -n "$a" ] || continue; [[ $a == *';' ]] && a="${a%;}\\;"; targs+=("$a"); done; }
+# Prints the project's tmux session name, creating the session if it is missing. $1 project,
+# $2 dir, $3 "window" to add a window when the session exists (wake), then the command to run.
+launch() {
+  local proj=$1 dir=$2 mode=$3 name existing
+  shift 3
+  name=$(name_for "$proj")
+  if t has-session -t "=$name" 2>/dev/null; then
+    # name_for is lossy (a.b and a_b collide): never attach one project to another's session
+    existing=$(t show-options -qv -t "=$name:" @project_dir 2>/dev/null || true)
+    if [ -z "$existing" ]; then
+      # another start may sit between new-session and set; retry once
+      sleep 0.3
+      existing=$(t show-options -qv -t "=$name:" @project_dir 2>/dev/null || true)
+    fi
+    if [ "$existing" != "$dir" ]; then
+      echo "session name $name is already used by ${existing:-another project}; rename the project" >&2
+      exit 1
+    fi
+    [ "$mode" = window ] && t new-window -t "=$name:" -c "$dir" "$@"
+  else
+    t new-session -d -s "$name" -c "$dir" "$@"
+    t set -t "=$name:" @project_dir "$dir"
+  fi
+  echo "$name"
+}
 usage() { echo "usage: ccd-session start <project> [prompt] | wake <session-id> | attach <project> | ls" >&2; exit 2; }
 
 sub=${1:-}
@@ -21,25 +46,8 @@ case "$sub" in
     [[ $proj =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] && [[ $proj != *..* ]] || { echo "invalid project name" >&2; exit 2; }
     dir=$WS/$proj
     [ -d "$dir" ] || { echo "no such project: $proj" >&2; exit 1; }
-    name=$(name_for "$proj")
-    if t has-session -t "=$name" 2>/dev/null; then
-      # name_for is lossy (a.b and a_b collide): never attach one project to another's session
-      existing=$(t show-options -qv -t "=$name:" @project_dir 2>/dev/null || true)
-      if [ -z "$existing" ]; then
-        # another start may sit between new-session and set; retry once
-        sleep 0.3
-        existing=$(t show-options -qv -t "=$name:" @project_dir 2>/dev/null || true)
-      fi
-      if [ "$existing" != "$dir" ]; then
-        echo "session name $name is already used by ${existing:-another project}; rename the project" >&2
-        exit 1
-      fi
-    else
-      tmux_args "$@"
-      t new-session -d -s "$name" -c "$dir" "${cmd[@]}" ${targs[@]+"${targs[@]}"}
-      t set -t "=$name:" @project_dir "$dir"
-    fi
-    echo "$name"
+    tmux_args "$@"
+    launch "$proj" "$dir" keep "${cmd[@]}" ${targs[@]+"${targs[@]}"}
     ;;
   wake)
     # Resumes a stopped conversation (claude --resume) in the project's tmux session. The old state
@@ -57,22 +65,10 @@ case "$sub" in
     rel=${dir#"$WS"/}
     proj=${rel%%/*}
     [[ $proj =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || { echo "invalid project name" >&2; exit 1; }
-    name=$(name_for "$proj")
-    # --resume goes before any `--`; the id was validated above
+    # --resume goes before any `--`; the id was validated above. CCDASH_RESUMED_FROM is set for the
+    # claude process only, so later windows of the same tmux session do not inherit it.
     # shellcheck disable=SC2016 # $1 is expanded by the inner bash, on purpose
-    wcmd=(bash -lc 'claude --resume "$1"; exec bash -l' _ "$sid")
-    if t has-session -t "=$name" 2>/dev/null; then
-      existing=$(t show-options -qv -t "=$name:" @project_dir 2>/dev/null || true)
-      if [ -n "$existing" ] && [ "$existing" != "$WS/$proj" ]; then
-        echo "session name $name is already used by $existing; rename the project" >&2
-        exit 1
-      fi
-      t new-window -t "=$name:" -c "$dir" -e "CCDASH_RESUMED_FROM=$sid" "${wcmd[@]}"
-    else
-      t new-session -d -s "$name" -c "$dir" -e "CCDASH_RESUMED_FROM=$sid" "${wcmd[@]}"
-      t set -t "=$name:" @project_dir "$WS/$proj"
-    fi
-    echo "$name"
+    launch "$proj" "$WS/$proj" window bash -lc 'CCDASH_RESUMED_FROM="$1" claude --resume "$1"; exec bash -l' _ "$sid"
     ;;
   attach)
     [ $# -eq 1 ] || usage

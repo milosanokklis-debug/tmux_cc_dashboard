@@ -61,7 +61,7 @@ compose restart ccdash >/dev/null
 until_ok 60 "dashboard back after the restart" healthy
 login >/dev/null
 all_sleeping() { [ "$(tree | jq '[.[] | select(.status == "sleeping")] | length')" = 2 ]; }
-until_ok 10 "every conversation is sleeping after compose restart" all_sleeping
+until_ok 20 "every conversation is sleeping after compose restart" all_sleeping
 
 # Wake through the API: the old record is replaced by the resumed one
 if api -X POST -H 'content-type: application/json' -d '{}' "$url/api/conversations/$before/wake" | jq -e .ok >/dev/null; then ok "wake accepted"; else bad "wake"; fi

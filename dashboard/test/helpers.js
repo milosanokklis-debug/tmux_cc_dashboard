@@ -63,6 +63,7 @@ function fakeServices(over = {}) {
     workspace, agentsDir, transcriptRoot: dir, calls, dir,
     tmux: { sock: '/tmp/fake.sock', listPanes: async () => [], run: async () => '', ensureOps: async () => {} },
     procTable: () => new Map(),
+    reconciler: { tick: async () => null, snapshot: () => null, get: () => null },
     runFile: async (file, args) => {
       calls.runFile.push([file, ...args]);
       return { stdout: `claude-${args[1].replace(/[^A-Za-z0-9_-]/g, '_')}\n`, stderr: '' };

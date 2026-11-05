@@ -10,7 +10,7 @@ exec 2>>"$base/hook.log"
 # jq missing (or broken): drain stdin and do nothing, so Claude shows no hook error
 if ! command -v jq >/dev/null 2>&1; then cat >/dev/null; exit 0; fi
 in=$(cat)
-sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null) || exit 0
+sid=$(jq -r '.session_id // empty' <<<"$in") || exit 0
 [ -n "$sid" ] || exit 0
 [[ $sid =~ ^[A-Za-z0-9_-]+$ ]] || exit 0
 f=$dir/$sid.json
@@ -27,10 +27,11 @@ if [ -n "${TMUX:-}" ]; then
   [[ ${srv:-} =~ ^[0-9]+$ && ${start:-} =~ ^[0-9]+$ ]] || { srv=""; start=""; }
 fi
 tmp=$(mktemp "$dir/.$sid.XXXXXX" 2>/dev/null) || exit 0
-if jq -n --argjson prev "$prev" --argjson in "$in" --arg state "${1:-}" \
+# the payload goes in on stdin (an argv string is capped at 128 KB, and PostToolUse can be larger)
+if jq --argjson prev "$prev" --arg state "${1:-}" \
       --arg pane "${TMUX_PANE:-}" --arg srv "$srv" --arg start "$start" --arg proj "${CLAUDE_PROJECT_DIR:-}" \
       --arg from "${CCDASH_RESUMED_FROM:-}" --argjson now "$(date +%s)" '
-  $prev + {
+  . as $in | $prev + {
     sid: $in.session_id,
     project: ($prev.project // (if $proj != "" then $proj else $in.cwd end)),
     transcript: $in.transcript_path,
@@ -41,7 +42,7 @@ if jq -n --argjson prev "$prev" --argjson in "$in" --arg state "${1:-}" \
     waiting_since: (if $state == "waiting"
                     then (if $prev.state == "waiting" then $prev.waiting_since else $now end)
                     else null end)
-  } + (if $from != "" then {resumed_from: $from} else {} end)' >"$tmp" 2>/dev/null \
+  } + (if $from != "" then {resumed_from: $from} else {} end)' <<<"$in" >"$tmp" \
    && chmod 0640 "$tmp" && mv -f "$tmp" "$f"; then
   :
 else

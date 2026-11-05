@@ -67,7 +67,7 @@ function createApi(svc) {
       const now = svc.now();
       const projectsTree = buildTree({
         agentsDir: svc.agentsDir, transcriptRoot: svc.transcriptRoot, panes: await panes(), table: svc.procTable(),
-        now, all: searchParams.get('all') === '1', states: svc.reconciler?.snapshot() ?? null,
+        now, all: searchParams.get('all') === '1', states: svc.reconciler.snapshot(),
       });
       return send(res, 200, { now: Math.floor(now / 1000), projects: projectsTree }); // unix seconds
     }
@@ -83,7 +83,8 @@ function createApi(svc) {
   // woken already; a live one would otherwise get a second Claude on the same history.
   async function wakeConversation(sid) {
     if (!/^[0-9a-f-]{36}$/.test(sid)) throw new HttpError(400, 'invalid conversation id');
-    const rec = svc.reconciler ? (await svc.reconciler.tick(), svc.reconciler.get(sid)) : null;
+    await svc.reconciler.tick();
+    const rec = svc.reconciler.get(sid);
     if (!rec) throw new HttpError(404, 'no such conversation');
     if (rec.hidden) throw new HttpError(409, 'this conversation was already woken');
     if (rec.status !== 'sleeping' && rec.status !== 'ended') throw new HttpError(409, `conversation is ${rec.status}, not sleeping`);

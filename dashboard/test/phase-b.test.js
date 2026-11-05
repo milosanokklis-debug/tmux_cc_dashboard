@@ -43,12 +43,14 @@ function stack() {
     ccd: (...a) => execFileSync(SESSION, a, { env, encoding: 'utf8' }).trim(),
     project(name) { fs.mkdirSync(path.join(ws, name)); return name; },
     records() {
+      if (!fs.existsSync(stateDir)) return [];
       return fs.readdirSync(stateDir).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(path.join(stateDir, f), 'utf8')));
     },
     // newest conversation of a project that has not been replaced by a wake
     cur(name) {
       const d = rec.snapshot() ?? new Map();
-      return [...d.values()].filter((c) => c.project === path.join(ws, name) && !c.hidden).sort((a, b) => b.ts - a.ts)[0] ?? null;
+      const mine = s.records().filter((r) => r.project === path.join(ws, name)).sort((a, b) => b.ts - a.ts);
+      return mine.map((r) => d.get(r.sid)).filter((c) => c && !c.hidden)[0] ?? null;
     },
     async until(fn, what, ms = 10000) {
       const end = Date.now() + ms;
@@ -151,7 +153,8 @@ test('Phase B: status, liveness and wake against the fake claude', { skip: !have
     assert.strictEqual(woken.resumedFrom, sid);
     assert.match(fs.readFileSync(path.join(s.env.FAKE_CLAUDE_HOME, 'args.log'), 'utf8'), new RegExp(`^--resume ${sid}$`, 'm'));
     // the old record is replaced: exactly one visible conversation for the project
-    const visible = [...s.rec.snapshot().values()].filter((c) => c.project === path.join(s.ws, name) && !c.hidden);
+    const mine = new Set(s.records().filter((r) => r.project === path.join(s.ws, name)).map((r) => r.sid));
+    const visible = [...s.rec.snapshot().values()].filter((c) => mine.has(c.sid) && !c.hidden);
     assert.deepStrictEqual(visible.map((c) => c.sid), [woken.sid]);
     assert.strictEqual(s.rec.get(sid).hidden, true);
     // full history is back in the new conversation
@@ -165,6 +168,10 @@ test('Phase B: status, liveness and wake against the fake claude', { skip: !have
   await t.test('wake when the project tmux session still exists (new window)', async () => {
     await wakeCheck('p4', () => process.kill(s.claudePid('p4'), 'SIGKILL'));
     assert.strictEqual(s.t('list-windows', '-t', '=claude-p4', '-F', 'x').trim().split('\n').length, 2);
+    // CCDASH_RESUMED_FROM is for the woken claude only: not in the session environment, so a later window never inherits it
+    assert.doesNotMatch(s.t('show-environment', '-t', '=claude-p4'), /CCDASH_RESUMED_FROM/);
+    s.t('new-window', '-t', '=claude-p4:', '-d', 'sleep 1');
+    assert.doesNotMatch(s.t('show-environment', '-t', '=claude-p4'), /CCDASH_RESUMED_FROM/);
   });
 
   await t.test('wake when the project tmux session is gone (new session)', async () => {
