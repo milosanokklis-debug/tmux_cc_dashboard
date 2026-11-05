@@ -7,7 +7,8 @@
     "taste-skill@agent-kit": true,
     "kit-design@agent-kit": true,
     "kit-code@agent-kit": true,
-    "basic-memory@basicmachines-co": true
+    "basic-memory@basicmachines-co": true,
+    "typescript-lsp@agent-kit": true
   },
   "extraKnownMarketplaces": {
     "addy-agent-skills": {
@@ -57,12 +58,11 @@
       }
     }
   },
+  "outputStyle": "basic-memory",
+  "agent": "supervisor",
   "basicMemory": {
     "primaryProject": "tmux-cc-dashboard",
     "captureFolder": "sessions",
     "rememberFolder": "bm-remember"
-  },
-  "outputStyle": "basic-memory",
-  "agent": "orchestrator",
-  "model": "opusplan"
+  }
 }
