@@ -1,0 +1,9 @@
+{
+  "session_id": "0145a79c-4d3f-49ed-a2fc-f420147be356",
+  "transcript_path": "/home/ccd/.claude/projects/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356.jsonl",
+  "cwd": "/workspace/_h2probe",
+  "scratchpad_dir": "/tmp/claude-1000/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356/scratchpad",
+  "prompt_id": "2bd42f71-3ec3-423f-a122-a91636538aeb",
+  "hook_event_name": "SessionEnd",
+  "reason": "prompt_input_exit"
+}

@@ -1,0 +1,16 @@
+{
+  "session_id": "0145a79c-4d3f-49ed-a2fc-f420147be356",
+  "transcript_path": "/home/ccd/.claude/projects/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356.jsonl",
+  "cwd": "/workspace/_h2probe",
+  "scratchpad_dir": "/tmp/claude-1000/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356/scratchpad",
+  "prompt_id": "79486efa-5919-456f-86b9-3e419a3775c8",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "I've started the subagent, but it hasn't replied yet. I'll say \"done\" once it reports back.",
+  "background_tasks": [],
+  "session_crons": []
+}
