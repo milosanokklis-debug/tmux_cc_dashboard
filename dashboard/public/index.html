@@ -15,7 +15,10 @@
 <body class="app">
 <header class="topbar">
   <h1 class="brand">ccdash</h1>
-  <button type="button" id="logout" class="btn btn-ghost">Sign out</button>
+  <div class="topbar-actions">
+    <button type="button" id="notif-open" class="btn btn-ghost" data-testid="notifications" aria-haspopup="dialog"><span aria-hidden="true">&#9881;</span> Notifications</button>
+    <button type="button" id="logout" class="btn btn-ghost">Sign out</button>
+  </div>
 </header>
 
 <div id="notices" class="notices"></div>
@@ -63,12 +66,34 @@
           <label class="check"><input type="checkbox" id="tree-all-time"> Show ended / older than 24h</label>
         </div>
         <p id="tree-error" class="inline-error" role="alert" hidden>Could not load agent tree.</p>
+        <div id="approvals" class="approvals"></div>
         <ul id="tree" class="tree" aria-label="Agent tree"></ul>
         <p id="tree-empty" class="muted" hidden></p>
       </div>
     </aside>
   </div>
 </div>
+
+<dialog id="notif-dialog" class="dialog" aria-labelledby="notif-title" aria-describedby="notif-state">
+  <div class="dialog-body">
+    <h2 id="notif-title">Notifications</h2>
+    <p id="notif-state" class="notif-state" role="status" data-testid="notif-state">Checking…</p>
+    <p id="notif-error" class="inline-error" role="alert" hidden></p>
+    <div class="dialog-actions dialog-actions-start">
+      <button type="button" id="notif-enable" class="btn btn-primary" data-testid="enable-notifications" hidden>Enable notifications on this browser</button>
+    </div>
+    <fieldset id="notif-prefs" class="notif-prefs" hidden>
+      <legend>Notify me when</legend>
+      <label class="check"><input type="checkbox" id="toggle-approval" data-testid="toggle-approval"> Needs approval</label>
+      <label class="check"><input type="checkbox" id="toggle-error" data-testid="toggle-error"> Error</label>
+      <label class="check"><input type="checkbox" id="toggle-finished" data-testid="toggle-finished"> Finished a turn</label>
+    </fieldset>
+    <div class="dialog-actions">
+      <button type="button" id="notif-disable" class="btn" data-testid="disable-notifications" hidden>Turn off on this browser</button>
+      <button type="button" id="notif-close" class="btn">Close</button>
+    </div>
+  </div>
+</dialog>
 
 <dialog id="paste-dialog" class="dialog" aria-labelledby="paste-title" aria-describedby="paste-desc">
   <form id="paste-form" method="dialog">
@@ -123,7 +148,9 @@
 <script src="/assets/addon-clipboard.js" defer></script>
 <script src="/assets/util.js" defer></script>
 <script src="/assets/projects.js" defer></script>
+<script src="/assets/controls.js" defer></script>
 <script src="/assets/tree.js" defer></script>
+<script src="/assets/settings.js" defer></script>
 <script src="/assets/terminal.js" defer></script>
 <script src="/assets/app.js" defer></script>
 </body>
