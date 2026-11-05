@@ -1,0 +1,10 @@
+{
+  "session_id": "0145a79c-4d3f-49ed-a2fc-f420147be356",
+  "transcript_path": "/home/ccd/.claude/projects/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356.jsonl",
+  "cwd": "/workspace/_h2probe",
+  "synthetic": true,
+  "permission_mode": "default",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": {"command": "rm -rf build", "description": "Remove build dir"}
+}
