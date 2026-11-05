@@ -1,0 +1,9 @@
+{
+  "session_id": "0145a79c-4d3f-49ed-a2fc-f420147be356",
+  "transcript_path": "/home/ccd/.claude/projects/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356.jsonl",
+  "cwd": "/workspace/_h2probe",
+  "synthetic": true,
+  "hook_event_name": "Notification",
+  "notification_type": "permission_prompt",
+  "message": "Claude needs your permission to use Bash"
+}

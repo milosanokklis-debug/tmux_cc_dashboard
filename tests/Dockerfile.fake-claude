@@ -1,0 +1,11 @@
+# Test image: the fake claude stands in for the real CLI. Build from the repo root:
+#   docker build -f tests/Dockerfile.fake-claude .
+FROM debian:trixie-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends jq bash \
+ && rm -rf /var/lib/apt/lists/*
+COPY tests/fake-claude/claude /usr/local/bin/claude
+COPY tests/fixtures/2.1.317/ /usr/local/share/fake-claude/fixtures/
+COPY rootfs/etc/claude-code/managed-settings.json /etc/claude-code/managed-settings.json
+COPY rootfs/usr/local/lib/ccdash/ /usr/local/lib/ccdash/
+ENTRYPOINT ["/usr/local/bin/claude"]

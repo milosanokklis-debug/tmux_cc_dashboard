@@ -1,0 +1,10 @@
+{
+  "session_id": "0145a79c-4d3f-49ed-a2fc-f420147be356",
+  "transcript_path": "/home/ccd/.claude/projects/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356.jsonl",
+  "cwd": "/workspace/_h2probe",
+  "scratchpad_dir": "/tmp/claude-1000/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356/scratchpad",
+  "prompt_id": "79486efa-5919-456f-86b9-3e419a3775c8",
+  "permission_mode": "auto",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Use the Agent tool to run one subagent that replies with the word hi, then say done."
+}

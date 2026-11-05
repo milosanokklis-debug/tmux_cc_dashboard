@@ -1,0 +1,12 @@
+{
+  "session_id": "0145a79c-4d3f-49ed-a2fc-f420147be356",
+  "transcript_path": "/home/ccd/.claude/projects/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356.jsonl",
+  "cwd": "/workspace/_h2probe",
+  "synthetic": true,
+  "permission_mode": "auto",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {"command": "ls", "description": "List files"},
+  "tool_response": {"stdout": "a.txt\n", "stderr": "", "interrupted": false},
+  "tool_use_id": "toolu_01SYNTHETIC"
+}

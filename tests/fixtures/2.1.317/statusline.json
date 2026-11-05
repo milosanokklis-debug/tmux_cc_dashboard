@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "session_id": "0145a79c-4d3f-49ed-a2fc-f420147be356",
+  "transcript_path": "/home/ccd/.claude/projects/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356.jsonl",
+  "cwd": "/workspace/_h2probe",
+  "model": {"id": "claude-opus-5-5", "display_name": "Opus 5.5"},
+  "workspace": {"current_dir": "/workspace/_h2probe", "project_dir": "/workspace/_h2probe"},
+  "version": "2.1.317",
+  "cost": {"total_cost_usd": 0.0123, "total_duration_ms": 45000, "total_api_duration_ms": 2300, "total_lines_added": 156, "total_lines_removed": 23},
+  "context_window": {"total_input_tokens": 15234, "total_output_tokens": 4521, "context_window_size": 200000, "used_percentage": 8, "remaining_percentage": 92},
+  "rate_limits": {
+    "five_hour": {"used_percentage": 23.5, "resets_at": 1790000000},
+    "seven_day": {"used_percentage": 41.2, "resets_at": 1790400000}
+  }
+}

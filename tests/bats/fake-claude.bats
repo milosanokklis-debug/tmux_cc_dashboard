@@ -1,0 +1,110 @@
+#!/usr/bin/env bats
+# Cue tests for tests/fake-claude/claude with a settings file whose hooks write marker lines.
+
+setup() {
+  ROOT=$(cd "$BATS_TEST_DIRNAME/../.." && pwd)
+  export FAKE_CLAUDE_FIXTURES=$ROOT/tests/fixtures/2.1.317
+  export FAKE_CLAUDE_TIMEOUT=3
+  export FAKE_CLAUDE_SETTINGS=$BATS_TEST_TMPDIR/settings.json
+  M=$BATS_TEST_TMPDIR/markers
+  : >"$M"
+  # marker hook: appends "<event> <source|tool_name>" to the marker file
+  cat >"$BATS_TEST_TMPDIR/mark.sh" <<'EOS'
+#!/usr/bin/env bash
+jq -r '.hook_event_name + " " + (.source // .tool_name // "")' >>"$1"
+EOS
+  chmod +x "$BATS_TEST_TMPDIR/mark.sh"
+  cat >"$BATS_TEST_TMPDIR/mark.sh-status" <<'EOS'
+#!/usr/bin/env bash
+jq -r '"\(.model.display_name) \(.rate_limits.five_hour.used_percentage)"'
+EOS
+  chmod +x "$BATS_TEST_TMPDIR/mark.sh-status"
+  jq -n --arg c "$BATS_TEST_TMPDIR/mark.sh $M" '
+    def h(e): {(e): [{hooks: [{type: "command", command: $c}]}]};
+    {hooks: (h("SessionStart") + h("UserPromptSubmit") + h("PostToolUse") + h("Stop") + h("StopFailure")
+      + h("SubagentStart") + h("SubagentStop") + h("SessionEnd") + h("Notification")),
+     statusLine: {type: "command", command: ($c|sub(" .*";"") + "-status")}}' \
+    >"$FAKE_CLAUDE_SETTINGS"
+  CLAUDE=$ROOT/tests/fake-claude/claude
+}
+
+perm_settings() { # $1 = stdout of the PermissionRequest hook
+  jq -n --arg out "$1" '{hooks: {PermissionRequest: [{matcher: "Bash", hooks: [{type: "command", command: ("printf %s " + ($out|@sh))}]}]}}' >"$FAKE_CLAUDE_SETTINGS"
+}
+
+@test "plain prompt: start, prompt, stop, exit" {
+  run "$CLAUDE" <<<"hello"
+  [ "$status" -eq 0 ]
+  [ "$(tr '\n' '|' <"$M")" = "SessionStart startup|UserPromptSubmit |Stop |SessionEnd |" ]
+}
+
+@test "resume flag sets source resume" {
+  run "$CLAUDE" --resume <<<"/exit"
+  [ "$status" -eq 0 ]
+  grep -qx 'SessionStart resume' "$M"
+  grep -qx 'SessionEnd ' "$M"
+}
+
+@test "/tool /sub /fail /notify fire their events" {
+  run "$CLAUDE" <<<"go /tool /sub /notify idle /fail"
+  [ "$status" -eq 0 ]
+  grep -qx 'PostToolUse Bash' "$M"
+  grep -qx 'SubagentStart ' "$M"
+  grep -qx 'SubagentStop ' "$M"
+  grep -qx 'Notification ' "$M"
+  grep -qx 'StopFailure ' "$M"
+  ! grep -qx 'Stop ' "$M"
+}
+
+@test "/esc prints interrupted, fires no Stop, and returns to the prompt" {
+  run "$CLAUDE" <<<$'work /esc\nhello'
+  [ "$status" -eq 0 ]
+  [[ $output == *"interrupted"* ]]
+  ! grep -qx 'Stop ' "$M"
+  [ "$(grep -c '^UserPromptSubmit ' "$M")" -eq 2 ]
+  [[ $output == *"done"* ]]
+}
+
+@test "/perm allow" {
+  perm_settings '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+  run "$CLAUDE" <<<"x /perm allow"
+  [[ $output == *"permission: allow"* ]]
+}
+
+@test "/perm deny" {
+  perm_settings '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}'
+  run "$CLAUDE" <<<"x /perm deny"
+  [[ $output == *"permission: deny"* ]]
+}
+
+@test "/perm fall-through asks the user" {
+  perm_settings ''
+  run "$CLAUDE" <<<$'x /perm\ny'
+  [[ $output == *"fall-through: asking user"* ]]
+  [[ $output == *"permission: allow (user)"* ]]
+}
+
+@test "/status runs statusLine.command with the fixture" {
+  run "$CLAUDE" <<<"/status"
+  [ "$status" -eq 0 ]
+  [[ $output == *"Opus 5.5 23.5"* ]]
+}
+
+@test "/status without statusLine prints fixture-derived text" {
+  echo '{}' >"$FAKE_CLAUDE_SETTINGS"
+  run "$CLAUDE" <<<"/status"
+  [[ $output == *"5h 23.5% | 7d 41.2%"* ]]
+}
+
+@test "EOF runs SessionEnd and exits 0" {
+  run "$CLAUDE" </dev/null
+  [ "$status" -eq 0 ]
+  grep -qx 'SessionEnd ' "$M"
+}
+
+@test "a hanging hook is cut off by FAKE_CLAUDE_TIMEOUT" {
+  jq -n '{hooks: {Stop: [{hooks: [{type: "command", command: "sleep 30"}]}]}}' >"$FAKE_CLAUDE_SETTINGS"
+  FAKE_CLAUDE_TIMEOUT=1 run "$CLAUDE" <<<"hi"
+  [ "$status" -eq 0 ]
+  [[ $output == *"exited 124"* ]]
+}

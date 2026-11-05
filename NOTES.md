@@ -14,20 +14,20 @@ Items marked TODO need a running container and are filled in by the build/run st
 ## Step 0 answers
 Tested by the container runner: tmux 3.5a-3.5a on trixie; docker 29.9.2 (rootful, dev host), compose v5.6.1.
 - tmux version on Debian trixie: 3.5a (>= 3.3, so `server-access` is available). Tested.
-- `server-access -a web` plus socket access: the socket was created 0600, so `web` could not connect. tmux ignores umask and always creates the socket 0600. Fixed by a background watcher in tmux/run that polls (0.1s, 30s cap) for the socket and chmods it 0660 (a `run-shell` in /etc/tmux.conf does not work: `tmux -D` loads config only when the first client connects, so a first client from `web` is refused before `server-access -a web` is loaded). After the chmod the same watcher connects one ccd-owned client (`start-server \; display-message -p ok`, up to 10 tries, 0.2s apart) so the config is loaded before web connects. Tested on tmux 3.5a with a scratch socket: with the ping a foreign user is accepted as the first client, without it `access not allowed`; /run/ccdash stays ccd:ccd 0750. /run tmpfs needs `exec` (s6 /init lives there), set in compose.yaml; /tmp stays noexec. Re-test `web` connecting in the container: TODO. `/var/lib/ccdash-git` is setgid (2750 web:ccd) so new files get group ccd; dashboard code should still chgrp token files to ccd with mode 0640. CCDASH_TMUX is exported in tmux/run so panes inherit it.
+- `server-access -a web` plus socket access: the socket was created 0600, so `web` could not connect. tmux ignores umask and always creates the socket 0600. Fixed by a background watcher in tmux/run that polls (0.1s, 30s cap) for the socket and chmods it 0660 (a `run-shell` in /etc/tmux.conf does not work: `tmux -D` loads config only when the first client connects, so a first client from `web` is refused before `server-access -a web` is loaded). After the chmod the same watcher connects one ccd-owned client (`start-server \; display-message -p ok`, up to 10 tries, 0.2s apart) so the config is loaded before web connects. Tested on tmux 3.5a with a scratch socket: with the ping a foreign user is accepted as the first client, without it `access not allowed`; /run/ccdash stays ccd:ccd 0750. /run tmpfs needs `exec` (s6 /init lives there), set in compose.yaml; /tmp stays noexec. Re-tested 2026-11-05 in the live container: `tmux -S /run/ccdash/tmux.sock ls` as web prints `_ops: 1 windows`, no `access not allowed`. `/var/lib/ccdash-git` is setgid (2750 web:ccd) so new files get group ccd; dashboard code should still chgrp token files to ccd with mode 0640. CCDASH_TMUX is exported in tmux/run so panes inherit it.
 - s6-overlay 3.2.0.3 tarballs: checksums verified OK.
 - Claude Code 2.1.317 installs via `npm install -g`; `DISABLE_AUTOUPDATER` works. Tested.
 - Claude Code 2.1.317 declares engines node >=22 (npm prints EBADENGINE during the image build) but the image uses Debian trixie's Node 20.19.2. Claude started and ran correctly in the final end-to-end test; re-test on any Claude Code upgrade, and consider moving the image to Node 22 if a release stops working.
-- /etc/claude-code/managed-settings.json path exists, root-owned, read-only. Tested. Hooks firing (SessionStart/SubagentStart/SubagentStop/SessionEnd) and hook payloads: TODO (needs the user).
-- Hook env has TMUX_PANE and CCDASH_TMUX: CCDASH_TMUX was missing from the tmux environment (image ENV only); now exported in tmux/run. Re-verify in container: TODO.
+- /etc/claude-code/managed-settings.json path exists, root-owned, read-only. Tested. Hooks firing, answered 2026-11-05: SessionStart, SubagentStart, SubagentStop and SessionEnd all fire (agents.sh and a --settings capture hook). Real payloads: tests/fixtures/2.1.317/ (see Hook fields below).
+- Hook env has TMUX_PANE and CCDASH_TMUX: CCDASH_TMUX was missing from the tmux environment (image ENV only); now exported in tmux/run. Re-verified 2026-11-05: hook env has TMUX=/run/ccdash/tmux.sock,<pid>,<n>, TMUX_PANE (%1), CCDASH_TMUX=/run/ccdash/tmux.sock and CLAUDE_PROJECT_DIR.
 - cap_add CHOWN,SETUID,SETGID,DAC_OVERRIDE,FOWNER,KILL with cap_drop ALL, read_only, no-new-privileges: tested. Dropping CHOWN/DAC_OVERRIDE/FOWNER stops s6 reaching ready; dropping SETUID/SETGID breaks the user switch for the dashboard; KILL is needed for s6 service control (not fully verified). The list stays.
 - OPEN ISSUE for Step 3: `#{pane_current_command}` reads `bash` when launched via `bash -lc 'claude ...'` (claude is a child of bash), so the live indicator cannot rely on it. Options: check the child process of `#{pane_pid}` (e.g. via `ps`), or exec claude directly in the pane.
 - NOTE for Step 3: tmux prints `access not allowed` but exits 0 for a denied client, so the dashboard must not trust the exit code alone; check the output, or use a command with a meaningful status such as `has-session`.
 - First launch of claude shows the theme picker / welcome screen. Tested.
 - DONE: rootless Docker under a dedicated `ccdash` host user (see "Host rootless Docker for ccdash").
-- TODO (need the user): /login persistence across restarts, transcript file mode, folder trust dialog, cloudflared (see "Cloudflare Access + cloudflared (owner action)").
+- Answered 2026-11-05 from the live container (see Hook fields and Remaining owner tasks): /login persistence, transcript file mode, folder trust dialog. cloudflared still TODO, needs the user (see "Cloudflare Access + cloudflared (owner action)").
 - git credential helper returns token for github.com/<owner>: TODO (needs a token file in /var/lib/ccdash-git/<owner>).
-- Final end-to-end verification passed on a rootful Docker 29.9.2 dev host: build from scratch, 128/128 tests on Node 20.19.2, Step 2 acceptance, core features (ws terminal, tree, FIFO hardening, restart persistence). Rootless Docker under a `ccdash` user is DONE (see "Host rootless Docker for ccdash"). Still host/user tasks: Cloudflare Access + cloudflared; Claude /login persistence; real hook payload fixtures in tests/fixtures/2.1.317/; transcript file mode; folder-trust dialog; Safari cookie check. The full list is in "Remaining owner tasks".
+- Final end-to-end verification passed on a rootful Docker 29.9.2 dev host: build from scratch, 128/128 tests on Node 20.19.2, Step 2 acceptance, core features (ws terminal, tree, FIFO hardening, restart persistence). Rootless Docker under a `ccdash` user is DONE (see "Host rootless Docker for ccdash"). Still host/user tasks: Cloudflare Access + cloudflared; Safari cookie check. Claude /login persistence, hook payload fixtures, transcript file mode and folder-trust dialog were answered 2026-11-05. The full list is in "Remaining owner tasks".
 
 ## Dashboard auth (Step 2)
 Env var: `CCDASH_ORIGIN` (Cloudflare origin, e.g. https://ccdash.example.com; set in .env, passed by compose, empty by default). http://localhost:7690 is always an allowed Origin.
@@ -54,7 +54,7 @@ Modules in dashboard/lib: tmux.js (tmux via execFile, /proc process table, ccd-o
 - tmux clone job: `tmux new-window -d -t =_ops: -- ccd-ops <16 hex> ccd-project clone owner/repo`. With several arguments tmux execs them directly (no shell); args with spaces and `;` stay intact (tested on 3.5a). The `_ops` session is created at server start and again before every clone.
 - Changed for this: `/run/ccdash/ops` is now 0770 (was 0750) so web can delete the .rc/.log files after reading them; `ccd-ops` sets GIT_TERMINAL_PROMPT=0 and reads /dev/null, because the ops window has a tty and a clone of a missing/private repo otherwise waits for a username for the whole 5 min.
 - Terminal sessions: `tmux new-session -t =claude-<name> -s web-<8hex> \; set-option destroy-unattached on` in a pty; closing the socket (or logout, expiry, password change) kills the pty and tmux removes web-*. claude-<name> keeps running.
-- Hook fields vs reality: the field names in hooks/agents.sh are still unverified. TODO (needs the user, a Claude login): capture real hook payloads into tests/fixtures/2.1.317/ (SessionStart, SubagentStart, SubagentStop, SessionEnd). Until then dashboard/test/fixtures/agents/ holds synthetic files in the agents.sh output format. `task` uses a `description` field if a hook ever writes one, else the first user message of agent_transcript (only files under /home/ccd/.claude, first 64 KB, 80 chars).
+- Hook fields vs reality (answered 2026-11-05 from the live container, Claude Code 2.1.317; payloads in tests/fixtures/2.1.317/ as SessionStart, SubagentStart, SubagentStop, SessionEnd, UserPromptSubmit and Stop .json): SubagentStart has agent_id, agent_type and prompt_id, but no transcript path. SubagentStop has agent_id, agent_type, agent_transcript_path and background_tasks[].description, but no top-level description. SessionEnd has reason. agents.sh mismatches: it reads no top-level `description`, `.agent_type // null` keeps "" for two internal SubagentStop events with agent_type "", and a prompt suggestion accepted with Enter produces extra UserPromptSubmit, Stop and SubagentStop events. dashboard/test/fixtures/agents/ still holds synthetic files in the agents.sh output format. `task` uses a `description` field if a hook ever writes one, else the first user message of agent_transcript (only files under /home/ccd/.claude, first 64 KB, 80 chars).
 - Known limits: a conversation whose claude was killed without a SessionEnd shows `running` if another claude runs in the same pane and session; xterm 6's DOM renderer injects <style> elements, which the unchanged CSP blocks (public/terminal.js works around it with constructable stylesheets, checked in Chrome only against the library, not the full page); GitHub reachability errors while checking a token return 502, not 400.
 
 ### Hardening after review (server side)
@@ -140,9 +140,9 @@ f. Before this is set up, use an SSH tunnel: `ssh -L 7690:127.0.0.1:7690 <host>`
 
 ## Remaining owner tasks
 - [ ] Cloudflare Access + cloudflared steps a to e in "Cloudflare Access + cloudflared (owner action)".
-- [ ] `ccd login`, then `/login` once. Verify it survives `compose down` and `compose up`.
-- [ ] Capture real hook payloads for SessionStart, SubagentStart, SubagentStop and SessionEnd into tests/fixtures/2.1.317/. Check the fields agent_id, agent_type, description and agent_transcript_path, and the transcript file mode.
-- [ ] Folder-trust dialog: record its behavior.
+- [x] `ccd login`, then `/login` once. Verify it survives `compose down` and `compose up`. Checked 2026-11-05: the credentials file is still present and `claude -p "reply with the word ok"` returned ok after `compose up -d --force-recreate` (volumes kept). A plain `compose down` then `up` was not run.
+- [x] Capture real hook payloads for SessionStart, SubagentStart, SubagentStop and SessionEnd into tests/fixtures/2.1.317/ (done 2026-11-05, see Hook fields). Transcript file mode checked 2026-11-05: 600 ccd:ccd.
+- [x] Folder-trust dialog: record its behavior. Done 2026-11-05: the dialog appears for a new folder ("Quick safety check: Is this a project you created or one you trust?"), options 'No, exit' (default) and 'Yes, I trust this folder'; Enter confirms. Accepted with Down then Enter.
 - [ ] Safari check of the `__Host-` Secure cookie on http://localhost (SSH tunnel).
 - [ ] Manual browser/SSH acceptance:
   - Typing in the browser appears in SSH, and typing in SSH appears in the browser.
@@ -150,3 +150,54 @@ f. Before this is set up, use an SSH tunnel: `ssh -L 7690:127.0.0.1:7690 <host>`
   - Disconnect, reconnect 10 minutes later: the session still works.
   - Subagents appear within 2 s.
   - `/exit` flips the card to Shell only.
+
+## Handoff 2 Step 0 (2026-11-05)
+- Live volumes ccdash_ccdash-{home,workspace,web,git} backed up before Handoff 2 changes.
+- Handoff 1 core checks (ws terminal, tree, restart persistence) passed 19/19 on a test stack.
+- Dashboard `npm test`: 128/128.
+
+## Handoff 2 Phase A: build-time checks (2026-11-05)
+All measured on the host (tmux 3.5a, Docker 29.9.2 rootless, compose v5.6.1). Throwaway names `h2probe-*`, all removed afterwards.
+
+### 1. Longest prompt as one argv element
+Command shape: `tmux -S <sock> new-session -d -s X sh -c 'printf %s "$1" | wc -c > out' _ "$PROMPT"`, and the same with `respawn-pane -k -t base:0.0`. Bisected on the byte count that `wc -c` reports.
+- new-session: 16,197 bytes accepted, 16,198 fails with `command too long`.
+- respawn-pane: 16,184 bytes accepted, 16,185 fails with `command too long`.
+- 32,000 and above always fail. The limit is tmux's own client-to-server message (about 16 KiB for the whole command: all argv words plus overhead), not the kernel. Kernel check without tmux: a 131,071-byte argv word works, 131,072 gives `Argument list too long` (MAX_ARG_STRLEN = 131072).
+- Recommendation: cap the argv prompt at 8,000 BYTES (UTF-8 bytes, not characters), which leaves room for a longer command, cwd, flags and env words around it. Handoff 1's 4,000 can be raised to 8,000. Anything longer must not go through argv: start the pane with the REPL, then `load-buffer` + `paste-buffer -p` (check 2), then Enter.
+
+### 2. paste-buffer -p is one bracketed paste
+Test: a pane runs a script that prints `ESC[?2004h`, sets `stty raw -echo` and passes the bytes through `cat -v`. Buffer is `line one\nline two\n  indented three\n`; `tmux load-buffer f; tmux paste-buffer -p -t p`.
+- App enabled mode 2004: received `^[[200~line one^Mline two^M  indented three^M^[[201~`. One start marker, one end marker around the whole text. Newlines arrive as CR (^M), which is why a bracketed paste does not submit lines; Enter must be sent separately.
+- App did NOT enable mode 2004 (raw read only): received `line one^Mline two^M  indented three^M` with no markers. `-p` is silently ignored, so each CR acts like Enter. Claude Code's REPL enables 2004 itself, but the safe order is wait for the REPL to be up, then paste.
+
+### 3. Egress design under rootless Docker (works)
+Compose file (kept only during the test) had: network `internal` with `internal: true`; network `egress` (normal bridge); `egproxy` (node:22-slim running a 20-line CONNECT proxy with `ALLOW=example.com`) on both networks with `ports: ["127.0.0.1:17691:3128"]`; `client` (node:22-slim) only on `internal`; `onlyinternal` only on `internal` with `ports: ["127.0.0.1:17692:3128"]`.
+- client direct to internet: `example.com` fails `EAI_AGAIN` (no DNS), `1.1.1.1:443` fails `ENETUNREACH`.
+- client via `egproxy:3128` (resolved by service name): CONNECT example.com gives `HTTP/1.1 200 OK`; github.com gives 403 from the proxy (log: `ALLOW example.com`, `DENY github.com`).
+- host: `curl http://127.0.0.1:17691/` returns `proxy-ok` (published from the proxy side); `curl -x http://127.0.0.1:17691 https://example.com` is 200, github.com is refused.
+- container only on an internal network with a published port: the compose up succeeded and `docker ps` shows `3128/tcp` with no host binding; `curl 127.0.0.1:17692` fails (curl exit 7). So publishing from an internal-only container is silently dropped. Conclusion: any service the host must reach (the dashboard) needs a second, non-internal network; only the proxy and the dashboard (for its published port) get one, and the CLI containers stay internal-only.
+- Cleanup: `compose down -v`; the networks were removed.
+
+### 4. cloudflared on Debian 13
+Throwaway `debian:trixie` container with network on.
+- Key: `https://pkg.cloudflare.com/cloudflare-main.gpg` to `/usr/share/keyrings/cloudflare-main.gpg`.
+- Repo line `deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared trixie main` FAILED (no candidate). `... cloudflared any main` WORKS. Use `any`.
+- `cloudflared --version`: `cloudflared version 2026.10.7 (built 2026-10-30-17:05 UTC)`.
+- `cloudflared tunnel login` with BROWSER unset, no tty, stdin /dev/null, `timeout 20`: it did not exit (timeout rc=124) and printed `Please open the following URL and log in with your Cloudflare account:` then `https://dash.cloudflare.com/argotunnel?aud=<REDACTED>&callback=<REDACTED>` then `Leave cloudflared running to download the cert automatically.` So setup.sh must keep it running in the background, show the URL, and wait for `~/.cloudflared/cert.pem`. Login was NOT completed; container was `--rm`; no cert.pem exists on the host (`find / -name cert.pem -path '*cloudflared*'` is empty).
+
+### 5a. Deferred to `ccd doctor --live` (to confirm live)
+Each check reports one of `ok`, `mismatch` (warning, never an install failure), or `unknown`; the answer is stored in /var/log/ccdash-selftest.json and the code reads that file, with the safe behavior as the default.
+- Stop on Esc / idle_prompt: if Esc fires Stop, the card goes idle on Stop; if not, the idle_prompt Notification (and the pane-activity timeout) marks it idle. Code accepts either signal and never waits on only one.
+- Does --resume keep the session id: if yes, key sessions by id and reuse; if no, treat the new id as the same card via the pane/window name and record the chain of ids.
+- PermissionRequest fall-through, allow, deny and timeout: the hook script handles all four outputs; if fall-through does not show the in-REPL dialog, the dashboard answers via send-keys; on timeout the hook exits with no decision so the REPL asks itself.
+- SessionStart source compact: if the payload carries `source: compact`, the card keeps its state and logs the compaction; if not, the code treats it as a normal start and does not reset counters.
+- rate_limits on Pro: if the status-line payload has `rate_limits`, show the bars; if the field is absent, hide the bars and show token counts only.
+- Hosts contacted: the doctor records every host seen during a real conversation; the egress allowlist is that list, and if a needed host is missing the proxy log shows DENY and the dashboard warns instead of silently failing.
+- gVisor: if runsc works, enable it as the runtime; if it fails, stay on runc and show a warning badge.
+- Web Push to the phone: if the push is delivered, enable the notification toggle; if not, fall back to in-page alerts only and show the hint.
+
+### 5b. MCP syntax (to confirm live)
+- Installed CLI on this host is 2.1.318 (not 2.1.317); `claude mcp add --help` shows: `claude mcp add [options] <name> <commandOrUrl> [args...]`, `-s, --scope <local|user|project>` (default local), `-t, --transport <stdio|sse|http>`, `-e KEY=value`, `-H "Header: v"`. Only `--help` was run; no login.
+- User scope, stdio: `claude mcp add --scope user basic-memory -- <command> <args...>` (the `--` separates Claude's flags from the server command). Verify the exact basic-memory command (for example `uvx basic-memory mcp`) live.
+- Tool ids are `mcp__<server>__<tool>`, so with the server named `basic-memory`: `mcp__basic-memory__bm_search`, `bm_read`, `bm_write`, `bm_edit`, `bm_find`, `bm_list`, `bm_context`, `bm_project`, `bm_move`, `bm_delete`, `bm_schema`, `bm_man` (tool names taken from this agent session's Basic Memory server; bm_move, bm_delete, bm_schema and bm_man were not seen in the tool list here and are unconfirmed). Permission rules use the same ids, or `mcp__basic-memory` for the whole server.

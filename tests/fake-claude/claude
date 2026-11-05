@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# Fake `claude` REPL for tests: reads prompts from stdin and, on cues, runs the hooks configured
+# in a settings file with fixture payloads. See tests/fake-claude/README.md.
+set -uo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+fixtures=${FAKE_CLAUDE_FIXTURES:-}
+if [ -z "$fixtures" ]; then
+  if [ -d /usr/local/share/fake-claude/fixtures ]; then fixtures=/usr/local/share/fake-claude/fixtures
+  else fixtures=$here/../fixtures/2.1.317; fi
+fi
+settings=${FAKE_CLAUDE_SETTINGS:-/etc/claude-code/managed-settings.json}
+tmo=${FAKE_CLAUDE_TIMEOUT:-5}
+sid=fake-$$
+export CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-$PWD}
+
+source=startup
+for a in "$@"; do
+  case $a in --resume | --continue | -r | -c) source=resume ;; esac
+done
+
+# payload NAME [JQ_FILTER] -> fixture JSON with session_id/cwd made real, then filter applied.
+payload() {
+  local f=$fixtures/$1.json
+  [ -f "$f" ] || { echo "fake-claude: missing fixture $f" >&2; return 1; }
+  jq -c --arg sid "$sid" --arg cwd "$PWD" ".session_id=\$sid | .cwd=\$cwd | ${2:-.}" "$f"
+}
+
+# hooks EVENT MATCH_VALUE -> command strings of matching hooks, one per line.
+hook_cmds() {
+  [ -f "$settings" ] || return 0
+  jq -r --arg e "$1" --arg m "$2" '
+    .hooks[$e][]?
+    | select((.matcher // "") as $x | $x == "" or $x == "*" or ($m | test("^(" + $x + ")$")))
+    | .hooks[]? | select(.type == "command") | .command' "$settings" 2>/dev/null
+}
+
+# run_hooks EVENT MATCH_VALUE JSON -> runs each hook with JSON on stdin; stdout passes through.
+run_hooks() {
+  local cmd rc
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    printf '%s' "$3" | timeout "$tmo" bash -c "$cmd"
+    rc=$?
+    [ "$rc" -eq 0 ] || echo "fake-claude: hook for $1 exited $rc" >&2
+  done < <(hook_cmds "$1" "$2")
+}
+
+# fire EVENT FIXTURE MATCH_JQ_PATH [JQ_FILTER] -> run hooks, discard their stdout.
+fire() {
+  local json m
+  json=$(payload "$2" "${4:-.}") || return 0
+  m=$(jq -r "$3 // \"\"" <<<"$json")
+  run_hooks "$1" "$m" "$json" >/dev/null
+}
+
+permission() {
+  local json out decision ans
+  json=$(payload PermissionRequest) || return 0
+  out=$(run_hooks PermissionRequest "$(jq -r .tool_name <<<"$json")" "$json")
+  decision=$(jq -rs '[.[] | .hookSpecificOutput.decision.behavior? // empty] | last // empty' <<<"$out" 2>/dev/null)
+  case $decision in
+    allow | deny) echo "permission: $decision" ;;
+    *)
+      echo "fall-through: asking user"
+      if read -r ans; then
+        case $ans in y | Y | yes) echo "permission: allow (user)" ;; *) echo "permission: deny (user)" ;; esac
+      fi
+      ;;
+  esac
+}
+
+status() {
+  local cmd json
+  json=$(payload statusline) || return 0
+  cmd=$(jq -r '.statusLine.command // empty' "$settings" 2>/dev/null)
+  if [ -n "$cmd" ]; then
+    printf '%s' "$json" | timeout "$tmo" bash -c "$cmd"
+    echo
+  else
+    jq -r '"\(.model.display_name) | 5h \(.rate_limits.five_hour.used_percentage)% | 7d \(.rate_limits.seven_day.used_percentage)%"' <<<"$json"
+  fi
+}
+
+finish() {
+  fire SessionEnd SessionEnd .reason
+  exit 0
+}
+
+fire SessionStart SessionStart .source ".source=\"$source\""
+
+while printf '> ' && IFS= read -r line; do
+  read -ra words <<<"$line"
+  [ "${words[0]:-}" = /exit ] && finish
+  fire UserPromptSubmit UserPromptSubmit .prompt ".prompt=\"$(jq -rn --arg l "$line" '$l|@json|.[1:-1]')\""
+  stop=Stop esc=0
+  for ((i = 0; i < ${#words[@]}; i++)); do
+    case ${words[i]} in
+      /tool) fire PostToolUse PostToolUse .tool_name ;;
+      /perm) permission ;;
+      /sub) fire SubagentStart SubagentStart .agent_type; fire SubagentStop SubagentStop .agent_type ;;
+      /fail) stop=StopFailure ;;
+      /notify)
+        case ${words[i + 1]:-} in
+          idle) fire Notification Notification-idle_prompt .notification_type ;;
+          *) fire Notification Notification-permission_prompt .notification_type ;;
+        esac
+        ;;
+      /esc) esc=1 ;;
+      /status) status ;;
+    esac
+  done
+  if [ "$stop" = StopFailure ]; then fire StopFailure StopFailure .error
+  elif [ "$esc" -eq 1 ]; then echo "interrupted"
+  else fire Stop Stop .hook_event_name; fi
+  echo "done"
+done
+finish
