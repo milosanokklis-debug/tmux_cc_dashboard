@@ -13,6 +13,7 @@ const sec = require('./security');
 const { HttpError, send, readJson } = require('./http');
 const { createApi, defaultServices } = require('./api');
 const { createTerm } = require('./term');
+const { createBroker } = require('./broker');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const TYPES = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
@@ -37,8 +38,12 @@ function createApp({
   delay = (ms) => sleep(ms),
   log = console.error,
   services = {},
+  broker: brokerOpts = {}, // { sock (null = off), waitSec }
 } = {}) {
   const svc = { ...defaultServices(), ...services };
+  const rec = svc.reconciler;
+  svc.broker ??= createBroker({ readRecord: rec.readOne, log, ...brokerOpts });
+  rec.onTick?.((snapshot, startedAt) => svc.broker.sweep(snapshot, startedAt));
   const handleApi = createApi(svc);
   let auth = null; // null = no usable credentials: everything except /healthz is refused
   let authStamp = null;
@@ -229,13 +234,18 @@ function createApp({
       headersTimeout: 5000, requestTimeout: 10000, maxHeaderSize: 16 * 1024,
     }, onRequest);
     server.on('upgrade', onUpgrade);
+    // the broker lives and dies with the server: closing it destroys held requests, so hooks fall through
+    svc.broker.start();
+    const closeServer = server.close.bind(server);
+    server.close = (cb) => { svc.broker.stop(); return closeServer(cb); };
+    server.on('close', () => svc.broker.stop());
     const timer = setInterval(tick, 30000);
     timer.unref();
     server.on('close', () => clearInterval(timer));
     return server;
   }
 
-  return { createServer, onUpgrade, sessions, registry, limiter, tick, refreshAuth, term, services: svc };
+  return { createServer, onUpgrade, sessions, registry, limiter, tick, refreshAuth, term, services: svc, broker: svc.broker };
 }
 
 module.exports = { createApp };

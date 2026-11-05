@@ -7,6 +7,7 @@ const projects = require('./projects');
 const { buildTree } = require('./tree');
 const { createReconciler } = require('./state');
 const { createControls } = require('./controls');
+const { MAX_MESSAGE } = require('./broker');
 
 const MAX_ADD_BODY = 64 * 1024; // prompt <= 4000 chars, up to 6 bytes each when \u-escaped
 
@@ -71,7 +72,25 @@ function createApi(svc) {
         agentsDir: svc.agentsDir, transcriptRoot: svc.transcriptRoot, panes: await panes(), table: svc.procTable(),
         now, all: searchParams.get('all') === '1', states: svc.reconciler.snapshot(),
       });
+      for (const p of projectsTree) { // an approval card only while the conversation really is in needs_approval
+        for (const c of p.conversations) {
+          const a = c.status === 'needs_approval' ? svc.broker?.forSid(c.sid) : null;
+          if (a) c.approval = { id: a.id, tool: a.tool_name, input: a.tool_input, truncated: a.truncated, since: a.since };
+        }
+      }
       return send(res, 200, { now: Math.floor(now / 1000), projects: projectsTree }); // unix seconds
+    }
+    const decision = /^\/api\/approvals\/([^/]+)\/decision$/.exec(pathname);
+    if (decision) {
+      if (req.method !== 'POST') return methodNotAllowed();
+      if (!/^[0-9a-f]{16}$/.test(decision[1])) throw new HttpError(400, 'invalid approval id');
+      const { behavior, message } = await readJson(req);
+      if (behavior !== 'allow' && behavior !== 'deny') throw new HttpError(400, 'behavior must be allow or deny');
+      if (message !== undefined && (typeof message !== 'string' || message.length > MAX_MESSAGE)) {
+        throw new HttpError(400, `message must be text of at most ${MAX_MESSAGE} characters`);
+      }
+      if (!svc.broker?.decide(decision[1], { behavior, message })) throw new HttpError(404, 'no such pending request');
+      return send(res, 200, { ok: true });
     }
     const wake = /^\/api\/conversations\/([^/]+)\/wake$/.exec(pathname);
     if (wake) {

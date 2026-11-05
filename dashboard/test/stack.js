@@ -14,7 +14,7 @@ const SESSION = path.join(ROOT, 'rootfs/usr/local/bin/ccd-session');
 const haveTmux = spawnSync('tmux', ['-V']).status === 0 && spawnSync('jq', ['--version']).status === 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function stack() {
+function stack(extraEnv = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-b-'));
   const home = path.join(tmp, 'home');
   const ws = path.join(tmp, 'ws');
@@ -31,7 +31,7 @@ function stack() {
   const env = {
     ...process.env, HOME: home, CCDASH_WS: ws, CCDASH_TMUX: sock, CCDASH_STATE: stateDir,
     FAKE_CLAUDE_SETTINGS: settings, FAKE_CLAUDE_FIXTURES: path.join(ROOT, 'tests/fixtures/2.1.317'),
-    FAKE_CLAUDE_HOME: path.join(tmp, 'fake'), FAKE_CLAUDE_TIMEOUT: '5',
+    FAKE_CLAUDE_HOME: path.join(tmp, 'fake'), FAKE_CLAUDE_TIMEOUT: '5', ...extraEnv,
   };
   delete env.TMUX; delete env.TMUX_PANE;
   const tmux = createTmux({ sock });

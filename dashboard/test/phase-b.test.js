@@ -21,13 +21,13 @@ test('Phase B: status, liveness and wake against the fake claude', { skip: !have
     await s.status('p2', 'waiting');
     assert.strictEqual(s.cur('p1').outsideTmux, false);
 
-    s.send('p1', '/perm'); // a prompt Claude is busy with (blocked on the dialog)
-    await s.status('p1', 'working');
+    s.send('p1', '/perm'); // the PermissionRequest hook marks needs_approval, then (no broker) the dialog shows
+    await s.status('p1', 'needs_approval');
     s.send('p1', 'y');
     await s.status('p1', 'waiting');
 
     s.send('p1', 'run /tool /perm'); // tool call, then blocked
-    await s.status('p1', 'working');
+    await s.status('p1', 'needs_approval');
     s.send('p1', 'y');
     await s.status('p1', 'waiting');
 
