@@ -8,6 +8,7 @@ const { buildTree } = require('./tree');
 const { createReconciler } = require('./state');
 const { createControls } = require('./controls');
 const { MAX_MESSAGE } = require('./broker');
+const { PushError } = require('./push');
 
 const MAX_ADD_BODY = 64 * 1024; // prompt <= 4000 chars, up to 6 bytes each when \u-escaped
 
@@ -46,8 +47,9 @@ function createApi(svc) {
   }
   const methodNotAllowed = () => { throw new HttpError(405, 'method not allowed'); };
 
-  return async function handleApi(req, res, pathname, searchParams) {
+  return async function handleApi(req, res, pathname, searchParams, ctx = {}) {
     const get = req.method === 'GET';
+    if (pathname.startsWith('/api/push/')) return pushRoute(req, res, pathname, ctx.sessionKey);
     if (pathname === '/api/projects') {
       if (get) {
         const list = projects.listProjects({ ...svc, panes: await panes() });
@@ -104,6 +106,29 @@ function createApi(svc) {
     }
     throw new HttpError(404, 'not found');
   };
+
+  // Push routes: a subscription belongs to the session (cookie) that created it.
+  async function pushRoute(req, res, pathname, sk) {
+    const push = svc.push;
+    const route = pathname.slice('/api/push/'.length);
+    if (!push || !sk || !['config', 'subscribe', 'prefs', 'unsubscribe'].includes(route)) throw new HttpError(404, 'not found');
+    if (req.method !== (route === 'config' ? 'GET' : 'POST')) return methodNotAllowed();
+    try {
+      if (route === 'config') {
+        const mine = push.get(sk);
+        return send(res, 200, { publicKey: push.publicKey(), subscribed: !!mine, prefs: mine ? mine.prefs : { approval: true, error: true, finished: true } });
+      }
+      if (route === 'unsubscribe') { push.removeSession(sk); return send(res, 200, { ok: true }); }
+      const body = await readJson(req, 8 * 1024);
+      if (route === 'subscribe') return send(res, 200, { ok: true, prefs: push.subscribe(sk, body.subscription, body.prefs) });
+      const prefs = push.setPrefs(sk, body);
+      if (!prefs) throw new HttpError(409, 'not subscribed');
+      return send(res, 200, { ok: true, prefs });
+    } catch (e) {
+      if (e instanceof PushError) throw new HttpError(400, e.message);
+      throw e;
+    }
+  }
 
   // Wake = `ccd-session wake <sid>` as ccd. Only a sleeping or ended conversation that has not been
   // woken already; a live one would otherwise get a second Claude on the same history.

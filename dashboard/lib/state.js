@@ -72,7 +72,7 @@ function derive(records, { panes, table, serverPid = null, serverStart = null, n
       else if (otherServer(r) || !runsClaude(r.pane)) status = 'sleeping';
     }
     out.set(r.sid, {
-      sid: r.sid, pane: r.pane, status, outsideTmux, resumedFrom: r.resumedFrom,
+      sid: r.sid, pane: r.pane, status, outsideTmux, project: r.project ? path.basename(r.project) : '(unknown)', resumedFrom: r.resumedFrom,
       hidden: replaced.has(r.sid),
       idle: status === 'waiting' && r.waitingSince !== null && now - r.waitingSince * 1000 >= idleMs,
       quiet: status === 'working' && now - r.ts * 1000 >= quietMs,

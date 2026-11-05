@@ -14,6 +14,7 @@ const { HttpError, send, readJson } = require('./http');
 const { createApi, defaultServices } = require('./api');
 const { createTerm } = require('./term');
 const { createBroker } = require('./broker');
+const { createPush } = require('./push');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const TYPES = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
@@ -44,6 +45,9 @@ function createApp({
   const rec = svc.reconciler;
   svc.broker ??= createBroker({ readRecord: rec.readOne, log, ...brokerOpts });
   rec.onTick?.((snapshot, startedAt) => svc.broker.sweep(snapshot, startedAt));
+  svc.push ??= createPush({ dir: webDir, log });
+  rec.onTick?.((snapshot, startedAt) => svc.push.onSnapshot(snapshot, startedAt));
+  svc.broker.onRequest?.((view) => svc.push.onApproval(view));
   const handleApi = createApi(svc);
   let auth = null; // null = no usable credentials: everything except /healthz is refused
   let authStamp = null;
@@ -77,15 +81,17 @@ function createApp({
     authBroken = false;
     authStamp = stamp;
     auth = next;
-    if (sessions && sessions.setGeneration(generationOf())) registry.closeAll();
+    if (sessions && sessions.setGeneration(generationOf())) { registry.closeAll(); svc.push.clear(); }
   }
   refreshAuth();
   sessions = new SessionStore({ dir: webDir, clock, generation: generationOf() });
+  svc.push.prune((k) => sessions.map.has(k));
 
   function tick() {
     refreshAuth();
     for (const key of sessions.sweep()) registry.closeSession(key);
     registry.closeWhere((key) => !sessions.map.has(key));
+    svc.push.prune((k) => sessions.map.has(k)); // also covers sessions dropped lazily on a failed validate
   }
 
   const currentSession = (req) => {
@@ -138,11 +144,15 @@ function createApp({
       const key = sessions.keyOf(id);
       sessions.destroy(id);
       registry.closeSession(key);
+      svc.push.removeSession(key);
       return send(res, 200, { ok: true }, undefined, { 'Set-Cookie': sec.clearCookie() });
     }
     if (pathname === '/' && isRead) return send(res, 200, html('index.html'), 'text/html; charset=utf-8');
+    if (pathname === '/sw.js' && isRead) {
+      return send(res, 200, html('sw.js'), 'text/javascript; charset=utf-8', { 'Cache-Control': 'no-cache' });
+    }
     if (pathname.startsWith('/assets/') && isRead) return serveAsset(res, pathname, true);
-    if (isApi) return handleApi(req, res, pathname, new URL(`http://localhost${req.url}`).searchParams);
+    if (isApi) return handleApi(req, res, pathname, new URL(`http://localhost${req.url}`).searchParams, { sessionKey: sessions.keyOf(id) });
     return send(res, 404, 'not found\n', 'text/plain; charset=utf-8');
   }
 
