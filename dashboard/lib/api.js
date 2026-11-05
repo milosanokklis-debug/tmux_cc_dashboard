@@ -6,6 +6,7 @@ const { createTmux, readProcTable, runFile, runOp } = require('./tmux');
 const projects = require('./projects');
 const { buildTree } = require('./tree');
 const { createReconciler } = require('./state');
+const { createControls } = require('./controls');
 
 const MAX_ADD_BODY = 64 * 1024; // prompt <= 4000 chars, up to 6 bytes each when \u-escaped
 
@@ -27,6 +28,7 @@ function defaultServices() {
 
 function createApi(svc) {
   let tmuxDown = false; // logged once per outage
+  const controls = createControls(svc, { closeWaitSec: svc.closeWaitSec });
   const waking = new Set(); // sids with a wake running
 
   // Pane list, or 503: a denied or unreachable tmux must not look like "everything is gone".
@@ -75,6 +77,11 @@ function createApi(svc) {
     if (wake) {
       if (req.method !== 'POST') return methodNotAllowed();
       return send(res, 200, await wakeConversation(wake[1]));
+    }
+    const ctl = /^\/api\/conversations\/([^/]+)\/(prompt|interrupt|close|preview)$/.exec(pathname);
+    if (ctl) {
+      if (req.method !== (ctl[2] === 'preview' ? 'GET' : 'POST')) return methodNotAllowed();
+      return send(res, 200, await controls[ctl[2]](ctl[1], req));
     }
     throw new HttpError(404, 'not found');
   };
