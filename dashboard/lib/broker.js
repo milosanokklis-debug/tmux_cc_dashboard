@@ -10,6 +10,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { HttpError, readJson } = require('./http');
+const { clean } = require('./state');
 
 const MAX_BODY = 256 * 1024;
 const MAX_PENDING = 50;
@@ -17,7 +18,6 @@ const MAX_INPUT_BYTES = 8 * 1024;
 const MAX_MESSAGE = 500;
 const SID_RE = /^[A-Za-z0-9_-]{1,100}$/;
 const PANE_RE = /^%[0-9]+$/;
-const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
 const DEFAULT_SOCK = '/run/ccdash-web/broker.sock';
 
 const waitFromEnv = () => (/^[0-9]+$/.test(process.env.CCDASH_APPROVAL_WAIT ?? '') && Number(process.env.CCDASH_APPROVAL_WAIT) > 0
@@ -43,6 +43,7 @@ function createBroker({
   const events = new EventEmitter();
   let server = null;
   let ready = Promise.resolve();
+  let ident = null; // dev+ino of the socket file this instance created
 
   function end(res, status, body, extra = {}) {
     const data = body === undefined ? '' : JSON.stringify(body);
@@ -62,12 +63,13 @@ function createBroker({
     if (!entry.res.writableEnded) end(entry.res, 204);
   }
 
-  function accept(req, res, body) {
+  function accept(req, res, body, gone) {
     const { session_id: sid, tool_name: tool, tool_input: input, pane } = body;
     if (typeof sid !== 'string' || !SID_RE.test(sid)) throw new HttpError(400, 'bad session_id');
     if (typeof tool !== 'string' || !tool || tool.length > 200) throw new HttpError(400, 'bad tool_name');
     if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'bad tool_input');
     if (typeof pane !== 'string' || !PANE_RE.test(pane)) throw new HttpError(400, 'bad pane');
+    if (gone() || res.destroyed || req.socket.destroyed || !req.socket.writable) return; // the hook left while the body was read: no ghost request
     const rec = readRecord(sid);
     if (!rec) throw new HttpError(404, 'unknown conversation');
     if (rec.state !== 'needs_approval') throw new HttpError(409, 'conversation is not waiting for approval');
@@ -79,7 +81,7 @@ function createBroker({
     const entry = {
       id: crypto.randomBytes(8).toString('hex'), sid, res, createdAt,
       project: rec.project ? path.basename(rec.project) : '(unknown)',
-      tool: tool.replace(CONTROL, ' ').trim(), input: shown.value, truncated: shown.truncated,
+      tool: clean(tool, 200) ?? '', input: shown.value, truncated: shown.truncated,
     };
     entry.timer = setTimeout(() => cancel(entry), waitSec * 1000);
     entry.timer.unref();
@@ -107,7 +109,9 @@ function createBroker({
       return end(res, status, { error: e.message });
     };
     if (Number(req.headers['content-length']) > MAX_BODY) return fail(new HttpError(413, 'request body too large'));
-    return readJson(req, MAX_BODY).then((body) => accept(req, res, body)).catch(fail);
+    let gone = false;
+    res.on('close', () => { gone = true; });
+    return readJson(req, MAX_BODY).then((body) => accept(req, res, body, () => gone)).catch(fail);
   }
 
   function start() {
@@ -127,6 +131,8 @@ function createBroker({
       srv.once('error', () => resolve(false));
       srv.listen(sock, () => {
         try {
+          const made = fs.lstatSync(sock);
+          ident = `${made.dev}:${made.ino}`;
           fs.chmodSync(sock, 0o660);
           fs.chownSync(sock, fs.statSync(sock).uid, fs.statSync(path.dirname(sock)).gid);
           resolve(true);
@@ -143,7 +149,12 @@ function createBroker({
     if (!srv) return;
     srv.close();
     srv.closeAllConnections();
-    try { if (fs.lstatSync(sock).isSocket()) fs.unlinkSync(sock); } catch { /* gone */ }
+    // Only remove the socket this instance created: a newer instance may have replaced it.
+    try {
+      const st = fs.lstatSync(sock);
+      if (st.isSocket() && ident === `${st.dev}:${st.ino}`) fs.unlinkSync(sock);
+    } catch { /* gone */ }
+    ident = null;
   }
 
   // Called after each reconcile pass: a conversation that is no longer needs_approval no longer needs an
@@ -160,7 +171,7 @@ function createBroker({
     if (!e || (behavior !== 'allow' && behavior !== 'deny')) return false;
     const out = { behavior };
     if (behavior === 'deny' && typeof message === 'string' && message.length <= MAX_MESSAGE) {
-      const m = message.replace(CONTROL, ' ').trim();
+      const m = clean(message, MAX_MESSAGE);
       if (m) out.message = m;
     }
     release(e);

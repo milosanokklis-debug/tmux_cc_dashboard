@@ -8,7 +8,7 @@ const { buildTree } = require('./tree');
 const { createReconciler } = require('./state');
 const { createControls } = require('./controls');
 const { MAX_MESSAGE } = require('./broker');
-const { PushError } = require('./push');
+const { PushError, defaultPrefs } = require('./push');
 
 const MAX_ADD_BODY = 64 * 1024; // prompt <= 4000 chars, up to 6 bytes each when \u-escaped
 
@@ -116,7 +116,7 @@ function createApi(svc) {
     try {
       if (route === 'config') {
         const mine = push.get(sk);
-        return send(res, 200, { publicKey: push.publicKey(), subscribed: !!mine, prefs: mine ? mine.prefs : { approval: true, error: true, finished: true } });
+        return send(res, 200, { publicKey: push.publicKey(), subscribed: !!mine, prefs: mine ? mine.prefs : defaultPrefs() });
       }
       if (route === 'unsubscribe') { push.removeSession(sk); return send(res, 200, { ok: true }); }
       const body = await readJson(req, 8 * 1024);

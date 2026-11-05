@@ -90,7 +90,9 @@ permission() {
       ;;
     *)
       echo "fall-through: asking user"
-      if read -r ans; then
+      # A lone ESC (as tmux send-keys Escape) cancels the dialog and denies; otherwise the rest of the line follows.
+      if IFS= read -rsn1 ans; then
+        if [ "$ans" = $'\e' ]; then ans=esc; elif [ -n "$ans" ]; then IFS= read -r rest || true; ans=$ans$rest; fi
         case $ans in y | Y | yes) echo "permission: allow (user)"; event "permission allow (user)" ;; *) echo "permission: deny (user)"; event "permission deny (user)" ;; esac
       fi
       ;;

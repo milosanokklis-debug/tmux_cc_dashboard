@@ -32,7 +32,7 @@ prompt is read with `read -ra`, so cues are plain words, not globs.
 | Cue | Effect |
 |---|---|
 | `/tool` | PostToolUse |
-| `/perm` | PermissionRequest hooks, run with the hook's own `timeout` (seconds) when set, else `FAKE_CLAUDE_TIMEOUT`; stdout `hookSpecificOutput.decision.behavior` allow or deny prints `permission: <x>` (and `permission-message: <m>` when the decision has a `message`; both also go to `events.log`). No usable output prints `fall-through: asking user` and reads the next stdin line as the answer: `y`/`Y`/`yes` allows, anything else denies. The decision comes only from hook stdout. |
+| `/perm` | PermissionRequest hooks, run with the hook's own `timeout` (seconds) when set, else `FAKE_CLAUDE_TIMEOUT`; stdout `hookSpecificOutput.decision.behavior` allow or deny prints `permission: <x>` (and `permission-message: <m>` when the decision has a `message`; both also go to `events.log`). No usable output prints `fall-through: asking user` and reads the next stdin line as the answer: `y`/`Y`/`yes` allows, anything else denies; a lone `ESC` (tmux `send-keys Escape`) cancels the dialog and also denies (`permission: deny (user)`). The decision comes only from hook stdout. |
 | `/sub` | SubagentStart then SubagentStop |
 | `/fail` | StopFailure instead of Stop |
 | `/notify idle\|perm` | Notification (idle_prompt or permission_prompt) |

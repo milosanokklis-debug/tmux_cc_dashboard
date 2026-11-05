@@ -133,7 +133,6 @@ function createReconciler({
 
   return {
     tick,
-    stateDir,
     readOne: (sid) => readRecord(stateDir, sid),
     onTick: (fn) => { listeners.push(fn); },
     snapshot: () => snapshot,
@@ -148,4 +147,4 @@ function createReconciler({
   };
 }
 
-module.exports = { createReconciler, derive, readRecords, readRecord, parseRecord };
+module.exports = { clean, createReconciler, derive, readRecords, readRecord, parseRecord };

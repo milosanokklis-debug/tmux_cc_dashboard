@@ -341,9 +341,14 @@
 
   // ---------------------------------------------------------------- approval card
 
+  // Bidi controls, zero-width characters and line/paragraph separators can make a command read
+  // differently from what it is: show them as visible \uXXXX text.
+  const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF\u2028\u2029]/g;
+  const showInvisible = (t) => String(t).replace(INVISIBLE, (c) => '\\u' + c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0'));
+
   function fmtInput(input) {
-    if (typeof input === 'string') return input;
-    try { return JSON.stringify(input, null, 2); } catch { return String(input); }
+    if (typeof input === 'string') return showInvisible(input);
+    try { return showInvisible(JSON.stringify(input, null, 2)); } catch { return showInvisible(input); }
   }
 
   function approvalCard(c, project) {
@@ -359,6 +364,13 @@
     msg.value = denyDrafts.get(a.id) || '';
     msg.addEventListener('input', () => denyDrafts.set(a.id, msg.value));
     approve.disabled = deny.disabled = msg.disabled = done;
+    const bashCommand = a.tool === 'Bash' && a.input && typeof a.input === 'object' && typeof a.input.command === 'string' ? a.input.command : null;
+    const cmdPre = bashCommand === null ? null : h('pre', { class: 'appr-input appr-command', tabindex: '0', 'aria-label': 'Command', 'data-testid': 'approval-command', text: showInvisible(bashCommand) });
+    const inputPre = h('pre', { class: 'appr-input', tabindex: '0', 'aria-label': 'Input for ' + showInvisible(a.tool), text: fmtInput(a.input) });
+    const scrollHint = h('p', { class: 'appr-trunc', hidden: '', text: 'Scroll for more.' });
+    requestAnimationFrame(() => {
+      if ([inputPre, cmdPre].some((el) => el && el.scrollHeight > el.clientHeight + 1)) scrollHint.hidden = false;
+    });
 
     async function decide(behavior) {
       busyAction.add(a.id);
@@ -390,9 +402,11 @@
       h('dl', { class: 'appr-meta' }, [
         h('dt', { text: 'Project' }), h('dd', { text: project }),
         h('dt', { text: 'Conversation' }), h('dd', { text: c.win || c.sid }),
-        h('dt', { text: 'Tool' }), h('dd', { class: 'appr-tool', 'data-testid': 'approval-tool', text: a.tool }),
+        h('dt', { text: 'Tool' }), h('dd', { class: 'appr-tool', 'data-testid': 'approval-tool', text: showInvisible(a.tool) }),
       ]),
-      h('pre', { class: 'appr-input', tabindex: '0', 'aria-label': 'Input for ' + a.tool, text: fmtInput(a.input) }),
+      cmdPre,
+      inputPre,
+      scrollHint,
       a.truncated ? h('p', { class: 'appr-trunc', text: 'The input was cut short; what you see is only the start.' }) : null,
       h('div', { class: 'ctl-actions' }, [approve]),
       h('div', { class: 'appr-deny' }, [

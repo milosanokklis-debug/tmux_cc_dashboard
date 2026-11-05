@@ -8,6 +8,7 @@ const { HttpError, readJson } = require('./http');
 
 const MAX_BODY = 64 * 1024; // 8000 bytes, up to 6 bytes each when \u-escaped
 const MAX_PROMPT_BYTES = 8000;
+const ESCAPE_WAIT_MS = 2000;
 const PREVIEW_LINES = 20;
 const PREVIEW_BYTES = 8 * 1024;
 const PREVIEW_TTL_MS = 1000;
@@ -57,7 +58,7 @@ function createControls(svc, {
     if (bytes > MAX_PROMPT_BYTES) {
       throw new HttpError(413, `Prompt is too long: ${bytes} bytes, the limit is ${MAX_PROMPT_BYTES}. Shorten or split it.`);
     }
-    if (CONTROL.test(text) || (text.isWellFormed && !text.isWellFormed())) {
+    if (CONTROL.test(text) || !text.isWellFormed()) {
       throw new HttpError(400, 'Prompt contains control or invalid characters.');
     }
     return text;
@@ -92,7 +93,21 @@ function createControls(svc, {
       const rec = await lookup(sid);
       if (!LIVE.has(rec.status)) throw new HttpError(409, `conversation is ${rec.status}, not running`);
       return exclusive(sid, async () => {
-        await pasteAndEnter(sid, rec.pane, '/exit');
+        let paste = true;
+        if (rec.status === 'needs_approval') {
+          // A pasted /exit + Enter could land on the dialog's default (Yes) and approve the tool:
+          // Escape cancels the dialog first, and /exit is only sent once the conversation has left it.
+          try { await svc.tmux.run(['send-keys', '-t', rec.pane, 'Escape']); } catch { throw new HttpError(502, 'could not send to the terminal'); }
+          paste = false;
+          for (let i = 0; i * pollMs < ESCAPE_WAIT_MS; i++) {
+            await sleep(pollMs);
+            await svc.reconciler.tick();
+            const cur = svc.reconciler.get(sid);
+            if (cur?.status === 'ended') return { ok: true, result: 'ended' };
+            if (cur?.status !== 'needs_approval') { paste = true; break; }
+          }
+        }
+        if (paste) await pasteAndEnter(sid, rec.pane, '/exit');
         const polls = Math.ceil((closeWaitSec * 1000) / pollMs);
         for (let i = 0; i <= polls; i++) {
           await svc.reconciler.tick();
@@ -132,4 +147,4 @@ function createControls(svc, {
   };
 }
 
-module.exports = { createControls, MAX_PROMPT_BYTES };
+module.exports = { createControls };

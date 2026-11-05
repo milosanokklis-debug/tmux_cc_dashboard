@@ -33,6 +33,10 @@ function parsePrefs(p, base = defaultPrefs()) {
 
 const b64urlLen = (s) => Buffer.from(s, 'base64url').length;
 
+// The endpoint may be any https host, not only known push services (an allowlist would break
+// self-hosted and future vendors). The server therefore POSTs encrypted payloads to whatever URL a
+// logged-in user registers: a known SSRF-style exposure, accepted because only authenticated users
+// can subscribe, the body is opaque and the response is never returned to the caller.
 function parseSubscription(s) {
   if (s === null || typeof s !== 'object' || Array.isArray(s)) throw new PushError('subscription must be an object');
   const { endpoint, keys } = s;
@@ -85,15 +89,11 @@ function createPush({
     const payload = JSON.stringify({ project: String(project ?? '(unknown)').slice(0, 200), status: STATUS_OF[kind] });
     for (const s of subs.filter((x) => x.prefs[kind])) {
       const opts = { TTL: 60, urgency: kind === 'approval' ? 'high' : 'normal', timeout: SEND_TIMEOUT_MS, vapidDetails: { subject, ...vapid } };
-      let timer;
-      const guard = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), SEND_TIMEOUT_MS); timer.unref(); });
-      Promise.race([Promise.resolve().then(() => send({ endpoint: s.endpoint, keys: s.keys }, payload, opts)), guard])
-        .catch((e) => {
-          const code = e?.statusCode;
-          if (code === 404 || code === 410) drop((x) => x.endpoint === s.endpoint);
-          else log(`push send failed (${code ?? e?.code ?? e?.message ?? 'error'})`);
-        })
-        .finally(() => clearTimeout(timer));
+      Promise.resolve().then(() => send({ endpoint: s.endpoint, keys: s.keys }, payload, opts)).catch((e) => {
+        const code = e?.statusCode;
+        if (code === 404 || code === 410) drop((x) => x.endpoint === s.endpoint);
+        else log(`push send failed (${code ?? e?.code ?? e?.message ?? 'error'})`);
+      });
     }
   }
 
@@ -152,4 +152,4 @@ function createPush({
   };
 }
 
-module.exports = { createPush, PushError, parseSubscription, parsePrefs, MAX_SUBS };
+module.exports = { createPush, PushError, parseSubscription, defaultPrefs };

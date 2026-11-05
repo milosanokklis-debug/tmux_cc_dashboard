@@ -392,3 +392,28 @@ test('permission.sh maps broker answers to hook output and otherwise stays silen
   assert.deepStrictEqual([r.code, r.stdout], [0, '']);
   assert.strictEqual(seen.length, before);
 });
+
+test('Phase C broker: a hook that resets while its body is still arriving leaves no pending request', async (t) => {
+  const net = require('node:net');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-ghost-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const stateDir = path.join(dir, 'state');
+  fs.mkdirSync(stateDir);
+  fs.writeFileSync(path.join(stateDir, 'good.json'), JSON.stringify({ sid: 'good', state: 'needs_approval', ts: 1, project: '/w/p', pane: '%7' }));
+  const sock = path.join(dir, 'broker.sock');
+  const broker = createBroker({ sock, waitSec: 5, readRecord: (sid) => readRecord(stateDir, sid), log: () => {} });
+  assert.strictEqual(await broker.start(), true);
+  t.after(() => broker.stop());
+  const body = JSON.stringify({ session_id: 'good', tool_name: 'Bash', tool_input: { command: 'ls' }, pane: '%7' });
+  const head = `POST /permission HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n`;
+
+  // slow body, then a reset in the middle
+  let c = net.connect(sock);
+  await new Promise((r) => c.once('connect', r));
+  c.write(head + body.slice(0, 10));
+  await sleep(100);
+  c.destroy();
+  await sleep(200);
+  assert.deepStrictEqual(broker.pending(), []);
+  assert.deepStrictEqual(broker.pending(), []);
+});

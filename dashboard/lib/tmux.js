@@ -9,6 +9,7 @@ const { readRegular } = require('./safefile');
 const { setTimeout: sleep } = require('node:timers/promises');
 
 const DENIED = /access not allowed/;
+const denied = (stdout, stderr) => DENIED.test(stderr) || stdout.trim() === 'access not allowed';
 
 function runFile(file, args, { timeout = 15000, exec = execFile } = {}) {
   return new Promise((resolve, reject) => {
@@ -29,7 +30,7 @@ function runFile(file, args, { timeout = 15000, exec = execFile } = {}) {
 function createTmux({ sock = process.env.CCDASH_TMUX || '/run/ccdash/tmux.sock', exec = execFile, spawnFn = spawn } = {}) {
   async function run(args) {
     const { stdout, stderr } = await runFile('tmux', ['-S', sock, ...args], { exec });
-    if (DENIED.test(stderr) || stdout.trim() === 'access not allowed') throw new Error('tmux: access not allowed');
+    if (denied(stdout, stderr)) throw new Error('tmux: access not allowed');
     return stdout;
   }
 
@@ -45,7 +46,7 @@ function createTmux({ sock = process.env.CCDASH_TMUX || '/run/ccdash/tmux.sock',
       child.stdin.on('error', () => { /* tmux exited early: the exit status reports it */ });
       child.on('error', (e) => reject(new Error(e.message)));
       child.on('close', (code) => {
-        if (DENIED.test(stderr) || stdout.trim() === 'access not allowed') return reject(new Error('tmux: access not allowed'));
+        if (denied(stdout, stderr)) return reject(new Error('tmux: access not allowed'));
         if (code !== 0) return reject(new Error(stderr.trim() || `tmux exited ${code}`));
         resolve(stdout);
       });

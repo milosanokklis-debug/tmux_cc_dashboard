@@ -180,6 +180,15 @@ test('Phase C: prompt, interrupt, close and preview against the fake claude', { 
     assert.strictEqual((await call(sid, 'prompt', { text: 'x' })).status, 409);
     assert.strictEqual((await call(sid, 'close')).status, 409);
 
+    // Needs approval: Escape cancels the dialog first, so the pasted /exit can never answer it with Yes.
+    const asking = await begin('c6');
+    s.send('c6', '/perm');
+    await s.status('c6', 'needs_approval');
+    const exited = await call(asking, 'close');
+    assert.ok(['ended', 'killed'].includes(exited.body.result), JSON.stringify(exited.body));
+    assert.ok(!/permission: allow/.test(events()), 'the dialog was never approved');
+    assert.match(events(), /permission deny \(user\)/);
+
     const stuck = await begin('c5');
     const pane = s.cur('c5').pane;
     s.send('c5', '/long');
