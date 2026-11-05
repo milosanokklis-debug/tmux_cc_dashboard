@@ -97,6 +97,7 @@ const ROUTES = [
   ['GET', '/api/projects'],
   ['POST', '/api/projects', { repo: 'o/r' }],
   ['POST', '/api/projects/demo/open'],
+  ['POST', '/api/conversations/00000000-0000-4000-8000-000000000001/wake'],
   ['GET', '/api/tree'],
   ['GET', '/api/tree?all=1'],
   ['GET', '/assets/xterm.js'],

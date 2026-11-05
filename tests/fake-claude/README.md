@@ -7,7 +7,10 @@ to real values; `CLAUDE_PROJECT_DIR` is set). Hooks run with `bash -c`, matched 
 the optional `matcher` regex (tool_name, source, notification_type, reason).
 
 Environment: `FAKE_CLAUDE_FIXTURES` (fixtures dir), `FAKE_CLAUDE_SETTINGS` (default
-`/etc/claude-code/managed-settings.json`), `FAKE_CLAUDE_TIMEOUT` (seconds per hook, default 5). The session_id is `fake-<pid>`.
+`/etc/claude-code/managed-settings.json`), `FAKE_CLAUDE_TIMEOUT` (seconds per hook, default 5). The session_id is a random UUID per run (so `ccd-session wake` accepts it).
+`FAKE_CLAUDE_HOME` (default `~/.fake-claude`) holds `args.log` (one line per start, the argv) and
+`history/<sid>`, one line per prompt. `--resume <uuid>` prints `resumed <uuid>`, replays the old
+history as `history: <prompt>` lines and carries it into the new session; a new session id is used.
 
 Lifecycle: SessionStart on start (`source` is `resume` with `--resume`/`--continue`/`-r`/`-c`,
 otherwise `startup`); every line runs UserPromptSubmit, then its cues, then Stop (unless `/fail`

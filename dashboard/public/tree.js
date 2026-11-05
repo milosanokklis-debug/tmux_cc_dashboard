@@ -1,14 +1,21 @@
 'use strict';
 // Agent tree panel: projects > conversations (tmux windows) > subagents.
 (function () {
-  const { api, h, poller, fmtDuration, chip } = window.ccdash;
+  const { api, h, poller, fmtDuration, chip, notice } = window.ccdash;
   const $ = (id) => document.getElementById(id);
 
   const CONV = {
     running: { label: 'running', icon: '●' },
+    working: { label: 'working', icon: '●' },
+    needs_approval: { label: 'needs approval', icon: '!' },
+    waiting: { label: 'waiting', icon: '◐' },
+    error: { label: 'error', icon: '✕' },
+    sleeping: { label: 'sleeping', icon: '◌' },
     ended: { label: 'ended', icon: '○' },
     gone: { label: 'gone', icon: '✕' },
   };
+  // Extra flags the reconciler sets next to the status.
+  const FLAGS = [['idle', 'idle'], ['quiet', 'quiet'], ['outsideTmux', 'outside tmux']];
   const AGENT = {
     running: { label: 'running', icon: '●' },
     done: { label: 'done', icon: '✓' },
@@ -67,6 +74,26 @@
     return li;
   }
 
+  async function wake(c, btn) {
+    btn.disabled = true;
+    try {
+      const r = await api('/api/conversations/' + encodeURIComponent(c.sid) + '/wake', { method: 'POST', body: {} });
+      if (r.ok) notice('Woke ' + (c.win || c.sid) + '.', 'info');
+      else notice('Could not wake the conversation: ' + ((r.data && r.data.error) || 'HTTP ' + r.status), 'error');
+    } catch (e) {
+      if (e.message !== 'unauthorized') notice('Could not wake the conversation.', 'error');
+    }
+    btn.disabled = false;
+    refresh();
+  }
+
+  function wakeControl(c) {
+    const note = h('p', { class: 'wake-note', id: 'wake-' + domId(c.sid), text: 'Resumes the full history. A step that was interrupted does not continue, and processes Claude started do not come back.' });
+    const btn = h('button', { type: 'button', class: 'btn', 'aria-describedby': note.id, text: 'Wake' });
+    btn.addEventListener('click', () => wake(c, btn));
+    return h('div', { class: 'wake' }, [btn, note]);
+  }
+
   function convItem(c) {
     const running = c.status === 'running';
     const li = h('li', { class: 'node conv' }, [
@@ -76,6 +103,9 @@
         elapsed(c.startedTs, c.endedTs, running),
       ]),
     ]);
+    const flags = FLAGS.filter(([k]) => c[k]);
+    if (flags.length) li.firstChild.insertBefore(h('span', { class: 'flags', text: flags.map((f) => f[1]).join(', ') }), li.firstChild.children[2]);
+    if (c.wakeable) li.append(wakeControl(c));
     if (c.subagents.length) li.append(h('ul', { class: 'branch', 'aria-label': 'Subagents of ' + (c.win || c.sid) }, c.subagents.map((a) => agentItem(a, c.sid))));
     return li;
   }

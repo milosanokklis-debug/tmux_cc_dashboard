@@ -1,0 +1,31 @@
+# Throwaway test stack for tests/stack/phase-b.sh: same hardening as the main compose.yaml, but a
+# prebuilt image with the fake claude, a loopback port (@IMAGE@ and @PORT@ are filled in by the script,
+# because sudo does not pass environment variables on to Docker) and its own volumes
+# (compose prefixes them with the project name, ccdashtest-*). Never the live ccdash volumes.
+services:
+  ccdash:
+    image: @IMAGE@
+    read_only: true
+    environment:
+      FAKE_CLAUDE_TIMEOUT: "5"
+      CCDASH_QUIET_AFTER: "5"
+      CCDASH_IDLE_FLAG: "5"
+    tmpfs:
+      - /run:mode=0755,exec
+      - /tmp:mode=1777
+    volumes:
+      - home:/home/ccd
+      - workspace:/workspace
+      - web:/var/lib/ccdash-web
+      - git:/var/lib/ccdash-git
+    ports:
+      - "127.0.0.1:@PORT@:7690"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER, KILL]
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  home:
+  workspace:
+  web:
+  git:

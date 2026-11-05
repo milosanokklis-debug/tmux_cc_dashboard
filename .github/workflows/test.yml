@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y bats shellcheck jq
+        run: sudo apt-get update && sudo apt-get install -y bats shellcheck jq tmux
       - name: shellcheck
         run: |
           files=$(git ls-files '*.sh')
@@ -36,5 +36,7 @@ jobs:
             --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION" \
             --build-arg "S6_OVERLAY_VERSION=$S6_OVERLAY_VERSION" \
             -t ccdash:ci .
+      - name: stack test (compose restart, wake)
+        run: tests/stack/phase-b.sh
       - name: build test image
         run: docker build -f tests/Dockerfile.fake-claude -t ccdash-fake-claude:ci .

@@ -226,15 +226,24 @@ function fold(sid, events, env) {
   return { c, status };
 }
 
-// deps: { agentsDir, transcriptRoot, panes, table, now }
-function buildTree({ agentsDir, transcriptRoot, panes, table, now = Date.now(), all = false }) {
+const LIVE = new Set(['running', 'working', 'needs_approval', 'waiting', 'error']);
+
+// deps: { agentsDir, transcriptRoot, panes, table, now, states }. `states` is the reconciler's
+// snapshot (Map sid -> derived status): a conversation it knows takes its status from there and a
+// conversation it hides (already woken) is left out. Without a record the status comes from
+// the agent events and a /proc check, as before state.sh existed.
+function buildTree({ agentsDir, transcriptRoot, panes, table, now = Date.now(), all = false, states = null }) {
   const byProject = new Map();
   for (const [sid, events] of loadConversations(agentsDir)) {
-    const { c, status } = fold(sid, events, { panes, table });
-    if (!all && status !== 'running' && c.lastTs < now - DAY) continue;
+    const folded = fold(sid, events, { panes, table });
+    const c = folded.c;
+    const st = states?.get(sid) ?? null;
+    if (st?.hidden) continue;
+    const status = st ? st.status : folded.status;
+    if (!all && !LIVE.has(status) && c.lastTs < now - DAY) continue;
     const project = c.project || '(unknown)';
     const subagents = [...c.subs.values()].sort((a, b) => a.startTs - b.startTs).map((s) => {
-      const open = s.status === 'running' && status !== 'running';
+      const open = s.status === 'running' && !LIVE.has(status);
       return {
         agent_id: s.agent_id,
         agent_type: s.agent_type,
@@ -248,6 +257,7 @@ function buildTree({ agentsDir, transcriptRoot, panes, table, now = Date.now(), 
     if (!byProject.has(project)) byProject.set(project, []);
     byProject.get(project).push({
       sid, win: c.win, status, startedTs: sec(c.startedTs), endedTs: status === 'ended' ? sec(c.endedTs) : null, subagents,
+      ...(st ? { idle: st.idle, quiet: st.quiet, outsideTmux: st.outsideTmux, wakeable: st.status === 'sleeping' || st.status === 'ended' } : {}),
     });
   }
   return [...byProject.keys()].sort().map((project) => ({

@@ -1,7 +1,7 @@
 {
   "hooks": {
     "SessionStart": [
-      {"matcher": "startup|resume", "hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/agents.sh session"}]}
+      {"matcher": "startup|resume", "hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/agents.sh session"}, {"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh waiting"}]}
     ],
     "SubagentStart": [
       {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/agents.sh start"}]}
@@ -10,7 +10,24 @@
       {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/agents.sh stop"}]}
     ],
     "SessionEnd": [
-      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/agents.sh end"}]}
+      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/agents.sh end"}]},
+      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh ended"}]}
+    ],
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh working"}]}
+    ],
+    "PostToolUse": [
+      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh working"}]}
+    ],
+    "Notification": [
+      {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh needs_approval"}]},
+      {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh waiting"}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh waiting"}]}
+    ],
+    "StopFailure": [
+      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh error"}]}
     ]
   }
 }
