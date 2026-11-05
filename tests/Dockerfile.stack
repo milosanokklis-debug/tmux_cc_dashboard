@@ -1,0 +1,9 @@
+# Test stack image: the main image with the fake claude in place of the real CLI.
+# Build from the repo root (tests/stack/phase-b.sh does it):
+#   docker build -f tests/Dockerfile.stack --build-arg BASE=ccdash:ci -t ccdash-stack:ci .
+ARG BASE=ccdash:ci
+FROM ${BASE}
+RUN rm -f /usr/local/bin/claude
+COPY tests/fake-claude/claude /usr/local/bin/claude
+COPY tests/fixtures/2.1.317/ /usr/local/share/fake-claude/fixtures/
+RUN chmod 0755 /usr/local/bin/claude

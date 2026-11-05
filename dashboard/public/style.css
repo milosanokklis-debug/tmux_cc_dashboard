@@ -143,6 +143,10 @@ body.app .chip-icon { font-size: .8em; line-height: 1; width: 1em; text-align: c
 body.app .chip-claude, body.app .chip-running { background: var(--ok-bg); color: var(--ok-fg); }
 body.app .chip-shell { background: var(--warn-bg); color: var(--warn-fg); }
 body.app .chip-done { background: var(--info-bg); color: var(--info-fg); }
+body.app .chip-working { background: var(--ok-bg); color: var(--ok-fg); }
+body.app .chip-needs_approval, body.app .chip-sleeping { background: var(--warn-bg); color: var(--warn-fg); }
+body.app .chip-waiting, body.app .chip-ended { background: var(--info-bg); color: var(--info-fg); }
+body.app .chip-error { background: var(--err-bg); color: var(--err); }
 body.app .chip-gone { background: var(--err-bg); color: var(--err); }
 
 /* Dialog */
@@ -258,6 +262,9 @@ body.app .task-more { min-height: 1.75rem; margin: 0 0 .3rem -.5rem; padding: 0 
 @media (pointer: coarse) { body.app .task-more { min-height: var(--ctl); } }
 body.app .elapsed { flex: none; min-width: 4.4rem; text-align: right; color: var(--muted); font: .8125rem/1 var(--mono); font-variant-numeric: tabular-nums; }
 body.app .row .chip { flex: none; }
+body.app .flags { flex: none; font-size: .75rem; color: var(--muted); }
+body.app .wake { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin: 0 0 .3rem; }
+body.app .wake-note { flex: 1 1 14rem; margin: 0; color: var(--muted); font-size: .8125rem; overflow-wrap: anywhere; }
 body.app .node .node .row { padding-left: 0; }
 
 /* Phones: terminal on top, agent panel below and collapsible */

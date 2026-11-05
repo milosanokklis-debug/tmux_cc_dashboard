@@ -10,7 +10,7 @@ cmd=(bash -lc 'claude -- "$@"; exec bash -l' _)
 # means a literal ';' (so `x;` becomes `x\;` and `x\;` becomes `x\\;`). Checked against tmux 3.5a.
 # An empty prompt is dropped (same as the web path) instead of being passed on as "".
 tmux_args() { local a; targs=(); for a in "$@"; do [ -n "$a" ] || continue; [[ $a == *';' ]] && a="${a%;}\\;"; targs+=("$a"); done; }
-usage() { echo "usage: ccd-session start <project> [prompt] | attach <project> | ls" >&2; exit 2; }
+usage() { echo "usage: ccd-session start <project> [prompt] | wake <session-id> | attach <project> | ls" >&2; exit 2; }
 
 sub=${1:-}
 [ $# -gt 0 ] && shift
@@ -38,6 +38,39 @@ case "$sub" in
       tmux_args "$@"
       t new-session -d -s "$name" -c "$dir" "${cmd[@]}" ${targs[@]+"${targs[@]}"}
       t set -t "=$name:" @project_dir "$dir"
+    fi
+    echo "$name"
+    ;;
+  wake)
+    # Resumes a stopped conversation (claude --resume) in the project's tmux session. The old state
+    # record is replaced by the new conversation (CCDASH_RESUMED_FROM). The caller checks liveness.
+    [ $# -eq 1 ] || usage
+    sid=$1
+    [[ $sid =~ ^[0-9a-f-]{36}$ ]] || { echo "invalid session id" >&2; exit 2; }
+    rec=${CCDASH_STATE:-/home/ccd/.ccdash/sessions}/$sid.json
+    [ -f "$rec" ] || { echo "no such conversation" >&2; exit 1; }
+    dir=$(jq -r '.project // empty' "$rec" 2>/dev/null || true)
+    if [[ $dir != "$WS"/* ]] || [[ $dir == *..* ]] || [ ! -d "$dir" ]; then
+      echo "conversation project is not an existing directory under $WS" >&2
+      exit 1
+    fi
+    rel=${dir#"$WS"/}
+    proj=${rel%%/*}
+    [[ $proj =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || { echo "invalid project name" >&2; exit 1; }
+    name=$(name_for "$proj")
+    # --resume goes before any `--`; the id was validated above
+    # shellcheck disable=SC2016 # $1 is expanded by the inner bash, on purpose
+    wcmd=(bash -lc 'claude --resume "$1"; exec bash -l' _ "$sid")
+    if t has-session -t "=$name" 2>/dev/null; then
+      existing=$(t show-options -qv -t "=$name:" @project_dir 2>/dev/null || true)
+      if [ -n "$existing" ] && [ "$existing" != "$WS/$proj" ]; then
+        echo "session name $name is already used by $existing; rename the project" >&2
+        exit 1
+      fi
+      t new-window -t "=$name:" -c "$dir" -e "CCDASH_RESUMED_FROM=$sid" "${wcmd[@]}"
+    else
+      t new-session -d -s "$name" -c "$dir" -e "CCDASH_RESUMED_FROM=$sid" "${wcmd[@]}"
+      t set -t "=$name:" @project_dir "$WS/$proj"
     fi
     echo "$name"
     ;;
