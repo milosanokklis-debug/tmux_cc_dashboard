@@ -1,0 +1,10 @@
+# Build the image from this checkout instead of pulling it from ghcr.io:
+#   docker compose -f compose.yaml -f compose.build.yaml up -d --build
+# The image name is the one compose.yaml uses, so the local build is what runs.
+services:
+  ccdash:
+    build:
+      context: .
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:?set CLAUDE_CODE_VERSION in .env}
+        S6_OVERLAY_VERSION: ${S6_OVERLAY_VERSION:?set S6_OVERLAY_VERSION in .env}

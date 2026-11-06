@@ -1,11 +1,7 @@
 services:
   ccdash:
-    build:
-      context: .
-      args:
-        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:?set CLAUDE_CODE_VERSION in .env}
-        S6_OVERLAY_VERSION: ${S6_OVERLAY_VERSION:?set S6_OVERLAY_VERSION in .env}
-    image: ccdash:${CCDASH_VERSION:?set CCDASH_VERSION in .env}
+    # Pulled from ghcr.io. To build locally instead: docker compose -f compose.yaml -f compose.build.yaml up -d --build
+    image: ghcr.io/milosanokklis-debug/ccdash:${CCDASH_VERSION:?set CCDASH_VERSION in .env}
     container_name: ccdash
     restart: unless-stopped
     # gVisor: off unless CCDASH_RUNTIME=runsc is set in .env; `ccd doctor --live` decides (NOTES.md, Phase F: gVisor)
@@ -13,6 +9,8 @@ services:
     read_only: true
     environment:
       CCDASH_ORIGIN: ${CCDASH_ORIGIN:-}
+      # Seconds to wait for an approval; empty or unset = 120 (broker.js and permission.sh both fall back)
+      CCDASH_APPROVAL_WAIT: ${CCDASH_APPROVAL_WAIT:-}
     tmpfs:
       - /run:mode=0755,exec
       - /tmp:mode=1777

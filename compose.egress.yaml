@@ -1,5 +1,6 @@
 # Egress allowlist (Phase F). An OVERRIDE for compose.yaml, not a standalone file:
 #   docker compose -f compose.yaml -f compose.egress.yaml up -d
+# (add -f compose.build.yaml before it to build the ccdash image locally; the egress image is always built here)
 # (setup.sh / Phase I turns it on that way; see NOTES.md, "Phase F: egress").
 # ccdash moves to an `internal: true` network with no route out. The only way out is the `egress`
 # proxy (egress/proxy.js), which allows the hosts in egress/allowlist.txt plus the extras and logs
