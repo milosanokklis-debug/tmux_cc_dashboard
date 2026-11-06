@@ -122,3 +122,31 @@ test('packs: validation, missing record, kit failure, hooks refusal', async (t) 
   fs.unlinkSync(path.join(svc.projectsDir, 'demo.json'));
   assert.strictEqual((await post(s, '/api/projects/demo/packs', { design: true, code: true })).status, 409);
 });
+
+test('pull during packs, and packs during pull, are 409 (one lock per project)', async (t) => {
+  const svc = setup();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  withOp(svc, async () => { await gate; return { rc: 0, log: `head ${HEAD}\n` }; });
+  const s = await h.authed(svc);
+  t.after(s.stop);
+  const flags = { design: true, code: true };
+  const packing = post(s, '/api/projects/demo/packs', flags);
+  await new Promise((r) => setTimeout(r, 100));
+  let r = await post(s, '/api/projects/demo/pull', {});
+  assert.strictEqual(r.status, 409);
+  assert.strictEqual((await r.json()).error, 'another change to this project is in progress');
+  release();
+  assert.strictEqual((await packing).status, 200);
+
+  let release2;
+  const gate2 = new Promise((x) => { release2 = x; });
+  svc.next = async () => { await gate2; return { rc: 0, log: `head ${HEAD}\n` }; };
+  const pulling = post(s, '/api/projects/demo/pull', {});
+  await new Promise((x) => setTimeout(x, 100));
+  r = await post(s, '/api/projects/demo/packs', flags);
+  assert.strictEqual(r.status, 409);
+  release2();
+  assert.strictEqual((await pulling).status, 200);
+  assert.strictEqual((await post(s, '/api/projects/demo/packs', flags)).status, 200); // lock released
+});

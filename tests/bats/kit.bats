@@ -11,7 +11,7 @@ setup() {
   export CCDASH_PROJECTS=$BATS_TEST_TMPDIR/home/.ccdash/projects
   export CCDASH_KIT=$ROOT/tests/fixtures/agent-kit-stub.sh KIT_REPO=octo/kit
   export STUB_LOG=$BATS_TEST_TMPDIR/stub.log
-  unset STUB_EXIT STUB_VERSION STUB_MEMORY
+  unset STUB_EXIT STUB_VERSION STUB_MEMORY STUB_SECRET
   export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
   mkdir -p "$HOME" "$CCDASH_WS"
   git config --global init.defaultBranch main
@@ -222,7 +222,7 @@ subjects() { git -C "$D" log --format=%s; }
 # ---- hook gate ----------------------------------------------------------------------------------------------
 add_settings() { # add_settings <file> <json>
   git -C "$W" pull -q origin main 2>/dev/null
-  mkdir -p "$W/.claude"; printf '%s\n' "$2" > "$W/.claude/$1"
+  mkdir -p "$W/.claude"; rm -f "$W/.claude/$1"; printf '%s\n' "$2" > "$W/.claude/$1"
   git -C "$W" add .claude; git -C "$W" commit -qm "settings $1"; git -C "$W" push -q origin HEAD:main
 }
 KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","repo":"octo/kit"}}},"enabledPlugins":{"kit-core@agent-kit":true}}'
@@ -258,7 +258,7 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
   [ "$status" -eq 5 ]
   [[ $output == *"hooks: enabledPlugins,extraKnownMarketplaces"* ]]
   [ "$(git -C "$D" rev-parse HEAD)" = "$before" ]
-  add_settings agent-kit.json '{}'
+  add_settings agent-kit.json '{"kit_version":"1"}'
   run "$BIN/ccd-project" pull demo # now exempt
   [ "$status" -eq 0 ]
   git -C "$D" reset -q --hard "$before"
@@ -281,10 +281,86 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
   [ "$(git -C "$D" rev-parse HEAD)" = "$before" ]
 }
 
+@test "a plugin the kit does not write is refused even under an allowlisted marketplace; the exact upstream ones pass" {
+  export CCDASH_KIT=
+  "$BIN/ccd-onboard" octo/demo
+  before=$(git -C "$D" rev-parse HEAD)
+  add_settings agent-kit.json '{"kit_version":"1"}'
+  add_settings settings.json '{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","repo":"octo/kit"}}},"enabledPlugins":{"evil@agent-kit":true}}'
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 5 ]
+  [[ $output == *enabledPlugins* ]]
+  add_settings settings.json '{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","repo":"octo/kit"}},"hallmark":{"source":{"source":"github","repo":"Nutlope/hallmark"}}},"enabledPlugins":{"kit-core@agent-kit":true,"hallmark@hallmark":true}}'
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 0 ]
+  git -C "$D" reset -q --hard "$before"
+  add_settings settings.json '{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","repo":"octo/kit"}},"hallmark":{"source":{"source":"github","repo":"Nutlope/hallmark"}}},"enabledPlugins":{"kit-core@agent-kit":true,"other@hallmark":true}}'
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 5 ]
+}
+
+@test "agent-kit.json must be a regular file holding an object with kit_version" {
+  export CCDASH_KIT=
+  "$BIN/ccd-onboard" octo/demo
+  before=$(git -C "$D" rev-parse HEAD)
+  add_settings settings.json "$KITSET"
+  git -C "$W" pull -q origin main 2>/dev/null
+  ln -s settings.json "$W/.claude/agent-kit.json" # a symlink, even to valid JSON
+  git -C "$W" add .claude; git -C "$W" commit -qm link; git -C "$W" push -q origin HEAD:main
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 5 ]
+  git -C "$D" reset -q --hard "$before"
+  add_settings agent-kit.json '[1]'
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 5 ]
+  git -C "$D" reset -q --hard "$before"
+  add_settings agent-kit.json '{"kit_version":1}'
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 5 ]
+  [ "$(git -C "$D" rev-parse HEAD)" = "$before" ]
+}
+
+@test "a symlinked .claude: kit step refused with 'Could not write project files', exit 8, nothing changed" {
+  mkdir -p "$W/elsewhere"; echo '{}' > "$W/elsewhere/settings.json"; ln -s elsewhere "$W/.claude"
+  git -C "$W" add .; git -C "$W" commit -qm link; git -C "$W" push -q origin HEAD:main
+  run "$BIN/ccd-onboard" --trust-hooks octo/demo
+  [ "$status" -eq 8 ]
+  [[ $output == *"kit-error 6 Could not write project files"* ]]
+  [ -L "$D/.claude" ]
+  [ "$(cat "$D/elsewhere/settings.json")" = '{}' ]
+  [ ! -e "$D/elsewhere/agent-kit.json" ]
+  [ -z "$(git -C "$D" status --porcelain)" ]
+  [ ! -e "$STUB_LOG" ]
+}
+
+@test "the kit log shown on failure is a redacted tail, and the log file is owner-only" {
+  STUB_SECRET=hunter2hunter2 STUB_EXIT=5 run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 8 ]
+  [[ $output == *"token=***"* ]]
+  [[ $output == *"Bearer ***"* ]]
+  [[ $output != *hunter2* ]]
+  [ "$(stat -c %a "$HOME/.ccdash/kit-demo.log")" = 600 ]
+}
+
+@test "pull refuses to rebase over a local merge commit" {
+  "$BIN/ccd-onboard" octo/demo
+  git -C "$D" checkout -q -b side
+  echo s > "$D/.claude/side"; git -C "$D" add .claude
+  GIT_AUTHOR_EMAIL=ccdash@localhost git -C "$D" commit -qm side
+  git -C "$D" checkout -q main
+  git -C "$D" merge -q --no-ff side -m "local merge"
+  push_commit two
+  before=$(state)
+  run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 3 ]
+  [[ $output == *"local commits not from ccdash"* ]]
+  [ "$(state)" = "$before" ]
+}
+
 @test "settings.local.json is never exempt" {
   export CCDASH_KIT=
   "$BIN/ccd-onboard" octo/demo
-  add_settings agent-kit.json '{}'
+  add_settings agent-kit.json '{"kit_version":"1"}'
   add_settings settings.local.json "$KITSET"
   run "$BIN/ccd-project" pull demo
   [ "$status" -eq 5 ]

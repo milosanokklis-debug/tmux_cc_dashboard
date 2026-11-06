@@ -11,13 +11,18 @@ cmd=(bash -lc 'claude -- "$@"; exec bash -l' _)
 # An empty prompt is dropped (same as the web path) instead of being passed on as "".
 tmux_args() { local a; targs=(); for a in "$@"; do [ -n "$a" ] || continue; [[ $a == *';' ]] && a="${a%;}\\;"; targs+=("$a"); done; }
 # Start gate: Basic Memory must be registered and connected before a Claude is launched. Exit 7 and
-# `memory offline` + the `claude mcp list` output on stderr otherwise. Only the basic-memory line counts;
-# "Failed to connect", "Disconnected" and "Needs authentication" are all refused (whole-word `connected`).
+# `memory offline` + the `claude mcp list` output on stderr otherwise. Only the real entry counts: a line that
+# starts with `basic-memory: ` (exact server name) and ends with ` - [✓] Connected`. Anything else at the end
+# ("Failed to connect", "Disconnected", "Not connected", "Needs authentication", "Pending") is refused.
 mcp_gate() {
-  local out line
+  local out l status
   out=$(timeout "${CCDASH_MCP_TIMEOUT:-20}" claude mcp list 2>&1 </dev/null || true)
-  line=$(grep -Eiw 'basic-memory' <<<"$out" | grep -Eiw 'connected' | grep -Eiv 'failed|disconnected|needs auth' || true)
-  [ -n "$line" ] && return 0
+  while IFS= read -r l; do
+    [[ $l == 'basic-memory: '* && $l == *' - '* ]] || continue
+    status=${l##* - }
+    status=${status#✓}; status=${status#✔}; status=${status# }
+    [ "$status" = Connected ] && return 0
+  done <<<"$out"
   { echo "memory offline"; printf '%s\n' "$out"; } >&2
   exit 7
 }

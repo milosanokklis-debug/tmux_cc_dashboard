@@ -46,7 +46,8 @@ RUN set -eux; \
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force
 
 # Basic Memory, pinned, in its own venv (python 3.12+ needed; trixie has 3.13). Data lives in /home/ccd/basic-memory.
-RUN python3 -m venv /opt/basic-memory \
+RUN : "${BASIC_MEMORY_VERSION:?BASIC_MEMORY_VERSION build arg is empty; pass --build-arg BASIC_MEMORY_VERSION=<version>}" \
+ && python3 -m venv /opt/basic-memory \
  && /opt/basic-memory/bin/pip install --no-cache-dir "basic-memory==${BASIC_MEMORY_VERSION}" \
  && /opt/basic-memory/bin/basic-memory --help >/dev/null
 

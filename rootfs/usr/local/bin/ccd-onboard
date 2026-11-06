@@ -28,6 +28,15 @@ fi
 proj=${repo#*/}
 dir=$WS/$proj
 cp=$(dirname "$0")/ccd-project
+# The kit's GitHub repo (owner/repo): $KIT_REPO, else the origin of the kit checkout. ccd-project reads it from the
+# environment for the hook-gate exemption, so it is worked out once here, before any clone or pull. Empty when unknown.
+kit_repo=${KIT_REPO:-}
+if [ -z "$kit_repo" ]; then
+  u=$(git -C "$(dirname "${CCDASH_KIT:-/opt/agent-kit/agent-kit.sh}")" config --get remote.origin.url 2> /dev/null || true)
+  case $u in git@github.com:* | https://github.com/*) kit_repo=${u#git@github.com:}; kit_repo=${kit_repo#https://github.com/}; kit_repo=${kit_repo%.git}; kit_repo=${kit_repo%/} ;; esac
+fi
+KIT_REPO=$kit_repo
+export KIT_REPO
 rec=$PROJECTS/$proj.json
 if [ "$trust" = 0 ] && [ -e "$dir/.git" ] && [ "$(jq -r '.trustHooks // false' "$rec" 2>/dev/null || true)" = true ]; then trust=1; fi
 CCDASH_TRUST_HOOKS=$trust
@@ -54,12 +63,8 @@ if [ -n "$kit" ]; then
   [ "$design" != 1 ] || { packs+=(kit-design); words+=(design); }
   [ "$code" != 1 ] || { packs+=(kit-code); words+=(code); }
   packs_csv=$(IFS=,; echo "${packs[*]}")
-  kit_repo=${KIT_REPO:-}
-  if [ -z "$kit_repo" ]; then
-    u=$(git -C "$(dirname "$kit")" config --get remote.origin.url 2> /dev/null || true)
-    case $u in git@github.com:* | https://github.com/*) kit_repo=${u#git@github.com:}; kit_repo=${kit_repo#https://github.com/}; kit_repo=${kit_repo%.git}; kit_repo=${kit_repo%/} ;; esac
-  fi
   mkdir -p "$HOME/.ccdash"; log=$HOME/.ccdash/kit-$proj.log
+  rm -f "$log"; (umask 077; : > "$log") # the kit's stderr may carry secrets: owner-only
   # backup of every path the kit may write, to restore on failure (the tree was clean, ignored files included)
   bak=$(mktemp -d "${TMPDIR:-/tmp}/ccd-kit.XXXXXX")
   trap 'rm -rf "$bak"' EXIT
@@ -72,6 +77,7 @@ if [ -n "$kit" ]; then
   done
   restore() {
     local f
+    [ ! -L "$dir/.claude" ] || return 0 # never write or delete through a symlinked .claude
     for f in "${kitpaths[@]}"; do
       rm -rf "${dir:?}/$f"
       if [ -e "$bak/$f" ] || [ -L "$bak/$f" ]; then mkdir -p "$dir/$(dirname "$f")"; cp -a "$bak/$f" "$dir/$f"; fi
@@ -79,7 +85,11 @@ if [ -n "$kit" ]; then
     [ "$had_skills" = 1 ] || rmdir "$dir/.claude/skills" 2> /dev/null || true
     [ "$had_claude" = 1 ] || rmdir "$dir/.claude" 2> /dev/null || true
   }
-  out=$(NO_COLOR=1 KIT_REPO="$kit_repo" TMPDIR=/tmp "$kit" ensure "$dir" ${words[@]+"${words[@]}"} --json 2> "$log") && rc=0 || rc=$?
+  if [ -L "$dir/.claude" ]; then # a symlinked .claude would make the kit write outside the checkout: do not run it
+    echo ".claude is a symlink; the kit was not run" > "$log"; out=''; rc=6
+  else
+    out=$(NO_COLOR=1 KIT_REPO="$kit_repo" TMPDIR=/tmp "$kit" ensure "$dir" ${words[@]+"${words[@]}"} --json 2>> "$log") && rc=0 || rc=$?
+  fi
   res=$(printf '%s\n' "$out" | tail -n 1)
   ok=$(jq -r 'if type == "object" and .ok == true then "yes" else "no" end' <<< "$res" 2> /dev/null || echo no)
   kerr=0 kmsg=''
@@ -123,7 +133,9 @@ if [ -n "$kit" ]; then
       '$cur + {repo: $repo, ts: $ts, kitError: {code: $code, message: $msg}} | if $head == "" then del(.head) else .head = $head end' > "$rec.tmp.$$"
     mv "$rec.tmp.$$" "$rec"
     echo "kit-error $kerr $kmsg"
-    tail -n 20 "$log" | tr -d '\000'
+    # only the tail goes to the API, with obvious secrets blanked (the full log stays on disk, owner-only)
+    tail -n 20 "$log" | tr -d '\000' \
+      | sed -E '/(token|secret|password|key=|bearer)/I s/((token|secret|password|key=|bearer)[[:space:]:="]*)[^[:space:]"]*/\1***/Ig'
     exit 8
   fi
   kitjson=$(jq -cn --arg v "$kver" --arg m "$kmem" --arg p "$packs_csv" '{version: $v, packs: ($p | split(",")), memory: $m}')

@@ -129,6 +129,10 @@ async function openProject({ workspace, runFile, name }) {
 }
 
 const inFlight = new Map(); // "owner/repo" -> { job, prompt, token }: the same repo twice at once, with the same settings, shares one clone
+// ONE lock per project (keyed by the lowercased project name, i.e. the repo part) shared by add, pull and packs.
+const busy = new Set();
+const pulling = new Map(); // project name -> job: a second pull at the same time shares the first one's result
+const BUSY_MSG = 'another change to this project is in progress';
 
 // deps: { runFile, runOp, fetchImpl?, saveToken? }
 async function addProject(body, deps) {
@@ -157,6 +161,9 @@ async function addProject(body, deps) {
     }
     return running.job; // identical request: shares the first call's result
   }
+  const lock = repo.toLowerCase();
+  if (busy.has(lock)) throw new HttpError(409, BUSY_MSG);
+  busy.add(lock);
   const job = (async () => {
     let warning;
     if (token !== null) {
@@ -165,16 +172,13 @@ async function addProject(body, deps) {
       (deps.saveToken || github.saveToken)({ owner, token });
     }
     const op = await deps.runOp({ argv: ['ccd-onboard', ...(trust ? ['--trust-hooks'] : []), ...(body.design === true ? ['--design'] : []), ...(body.code === true ? ['--code'] : []), `${owner}/${repo}`] });
-    if (op.timedOut) throw new HttpError(504, 'clone timed out', { log: op.log });
-    refuseHooks(op);
-    kitFailed(op);
-    if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'clone refused', { log: op.log });
+    checkOnboard(op, { timeout: 'clone timed out', refused: 'clone refused' });
     if (op.rc !== 0) throw new HttpError(502, 'clone failed', { log: op.log });
     const session = await startSession({ runFile: deps.runFile, name: repo, prompt });
     return { project: repo, session, ...(warning ? { warning } : {}) };
   })();
   inFlight.set(key, { job, ...settings });
-  try { return await job; } finally { if (inFlight.get(key)?.job === job) inFlight.delete(key); }
+  try { return await job; } finally { busy.delete(lock); if (inFlight.get(key)?.job === job) inFlight.delete(key); }
 }
 
 // ccd-onboard / ccd-project exit 5: the repo defines hooks and was not trusted. Only event names leave
@@ -187,9 +191,8 @@ function refuseHooks(op) {
 
 // ccd-onboard exit 8: the agent-kit step failed and the checkout was left as it was after the clone/pull.
 // 409 { error: 'kit-failed', code, message, log } where log is the tail of the kit log.
-const KIT_FAILED_RC = 8;
 function kitFailed(op) {
-  if (op.rc !== KIT_FAILED_RC) return;
+  if (op.rc !== 8) return;
   const text = String(op.log || '');
   const m = /^kit-error (\d+) (.*)$/m.exec(text);
   const log = m ? text.slice(m.index + m[0].length).trim() : text.trim();
@@ -197,15 +200,27 @@ function kitFailed(op) {
 }
 
 const lastLine = (log) => String(log || '').trim().split('\n').pop().trim();
-const pulling = new Map(); // project name -> job: a second pull at the same time shares the first one's result
+const lastHead = (log) => [...String(log || '').matchAll(/^head ([0-9a-f]{40,64})$/gm)].pop();
+
+// The checks every ccd-onboard result gets: timeout (504), hooks (409), kit failure (409), exit 3 (409).
+// Other non-zero codes and the success cases are left to the caller.
+function checkOnboard(op, { timeout, refused }) {
+  if (op.timedOut) throw new HttpError(504, timeout, { log: op.log });
+  refuseHooks(op);
+  kitFailed(op);
+  if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || refused, { log: op.log });
+}
 
 // POST /api/projects/:proj/pull: `ccd-onboard <repo>` for a project that has an onboarding record.
 // Never starts, restarts or prompts a session. deps: { workspace, projectsDir?, runOp, panes, procTable }
 async function pullProject({ name, deps }) {
   if (!validProject(name)) throw new HttpError(400, 'invalid project name');
   if (!isProjectDir(deps.workspace, name)) throw new HttpError(404, 'no such project');
-  const running = pulling.get(name);
-  if (running) return running;
+  const lock = name.toLowerCase();
+  const sharing = pulling.get(name);
+  if (sharing) return sharing; // a second identical pull shares the first one's result
+  if (busy.has(lock)) throw new HttpError(409, BUSY_MSG);
+  busy.add(lock);
   const job = (async () => {
     const rec = readProjectRecord(deps.projectsDir, name);
     if (!rec?.repo) throw new HttpError(409, 'no onboarding record; add the project again');
@@ -214,11 +229,8 @@ async function pullProject({ name, deps }) {
     }
     const claude = stateOf(name, { workspace: deps.workspace, panes: await deps.panes(), table: deps.procTable() }).state === 'claude';
     const op = await deps.runOp({ argv: ['ccd-onboard', rec.repo], timeoutMs: 5 * 60 * 1000 });
-    if (op.timedOut) throw new HttpError(504, 'pull timed out', { log: op.log });
-    refuseHooks(op);
-    kitFailed(op);
-    if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'pull refused', { log: op.log });
-    const full = [...String(op.log || '').matchAll(/^head ([0-9a-f]{40,64})$/gm)].pop();
+    checkOnboard(op, { timeout: 'pull timed out', refused: 'pull refused' });
+    const full = lastHead(op.log);
     const unborn = op.rc === 0 && !full && /^nothing to pull yet/m.test(op.log || '');
     if (op.rc !== 0 || (!full && !unborn)) throw new HttpError(502, 'pull failed', { log: op.log });
     const head = full ? full[1].slice(0, 7) : null;
@@ -231,10 +243,8 @@ async function pullProject({ name, deps }) {
     return { project: name, repo: rec.repo, head, before: old ? old.slice(0, 7) : null, changed, claude, message, log: op.log };
   })();
   pulling.set(name, job);
-  try { return await job; } finally { if (pulling.get(name) === job) pulling.delete(name); }
+  try { return await job; } finally { busy.delete(lock); if (pulling.get(name) === job) pulling.delete(name); }
 }
-
-const packing = new Set(); // project names with a packs change in progress
 
 // POST /api/projects/:proj/packs { design: bool, code: bool }: reruns ccd-onboard with explicit pack flags (both ways).
 // Does not start, restart or prompt a session. Returns the project summary like GET /api/projects.
@@ -249,24 +259,22 @@ async function setPacks({ name, body, deps }) {
   if (rec.repo.split('/')[1].toLowerCase() !== name.toLowerCase()) {
     throw new HttpError(409, 'onboarding record does not match this project');
   }
-  if (packing.has(name) || pulling.has(name)) throw new HttpError(409, 'another change to this project is in progress');
-  packing.add(name);
+  const lock = name.toLowerCase();
+  if (busy.has(lock)) throw new HttpError(409, BUSY_MSG);
+  busy.add(lock);
   try {
     const argv = ['ccd-onboard', body.design ? '--design' : '--no-design', body.code ? '--code' : '--no-code', rec.repo];
     const op = await deps.runOp({ argv, timeoutMs: 10 * 60 * 1000 });
-    if (op.timedOut) throw new HttpError(504, 'kit timed out', { log: op.log });
-    refuseHooks(op);
-    kitFailed(op);
-    if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'refused', { log: op.log });
-    const full = [...String(op.log || '').matchAll(/^head ([0-9a-f]{40,64})$/gm)].pop();
+    checkOnboard(op, { timeout: 'kit timed out', refused: 'refused' });
+    const full = lastHead(op.log);
     if (op.rc !== 0) throw new HttpError(502, 'packs change failed', { log: op.log });
     const after = readProjectRecord(deps.projectsDir, name);
     const st = stateOf(name, { workspace: deps.workspace, panes: await deps.panes(), table: deps.procTable() });
     const message = /^kit \S+ changed$/m.test(op.log || '') ? `packs now ${(after?.kit?.packs || []).join(', ')}` : 'packs unchanged';
     return { name, ...st, repo: after?.repo ?? rec.repo, head: full ? full[1].slice(0, 7) : null, kit: after?.kit ?? null, message, log: op.log };
-  } finally { packing.delete(name); }
+  } finally { busy.delete(lock); }
 }
 
 module.exports = {
-  setPacks, KIT_FAILED_RC, pullProject, readProjectRecord, memoryOffline, MEMORY_OFFLINE_RC, DEFAULT_PROJECTS_DIR, validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
+  setPacks, pullProject, readProjectRecord, memoryOffline, MEMORY_OFFLINE_RC, DEFAULT_PROJECTS_DIR, validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
 };

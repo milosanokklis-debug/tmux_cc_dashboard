@@ -5,7 +5,7 @@
 # .claude/agent-kit.json, CLAUDE.md and (design only) .claude/skills/web-design-guidelines/; leaving design out
 # removes the kit-design entry and the vendored skill. Idempotent: "changed" is false when nothing differs.
 # Env: KIT_REPO (marketplace repo, default octo/kit), STUB_VERSION (0.9.2), STUB_MEMORY (connected),
-# STUB_LOG=<file> (appends the arguments and env it saw), STUB_EXIT=2..6 (write some junk first, then fail with the real kit's JSON line and exit code).
+# STUB_LOG=<file> (appends the arguments and env it saw), STUB_SECRET (printed to stderr on failure, to test redaction), STUB_EXIT=2..6 (write some junk first, then fail with the real kit's JSON line and exit code).
 set -euo pipefail
 [ -z "${STUB_LOG:-}" ] || echo "args=$* NO_COLOR=${NO_COLOR:-} TMPDIR=${TMPDIR:-} KIT_REPO=${KIT_REPO:-}" >> "$STUB_LOG"
 [ "${1:-}" = ensure ] || { echo "usage" >&2; exit 2; }
@@ -24,6 +24,7 @@ before=$(snap)
 mkdir -p .claude
 if [ -n "${STUB_EXIT:-}" ]; then
   echo "stub: scribbling then failing with ${STUB_EXIT}" >&2
+  [ -z "${STUB_SECRET:-}" ] || echo "using token=${STUB_SECRET} Bearer ${STUB_SECRET}" >&2
   echo '{"junk":true}' > .claude/settings.json
   echo junk >> CLAUDE.md
   mkdir -p .claude/skills/web-design-guidelines; echo junk > .claude/skills/web-design-guidelines/SKILL.md

@@ -12,7 +12,7 @@ log() { echo "ccd-memory-init: $*" >&2; }
 main() {
   local list
   mkdir -p "$BASIC_MEMORY_HOME" || { log "cannot create $BASIC_MEMORY_HOME"; return 1; }
-  if claude mcp list 2>&1 </dev/null | grep -Eiqw 'basic-memory'; then
+  if timeout 30 claude mcp list 2>&1 </dev/null | grep -Eiqw 'basic-memory'; then
     log "basic-memory already registered"
   else
     # name first: -e takes several values, so it must not sit right before the name

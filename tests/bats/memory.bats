@@ -75,6 +75,25 @@ EOS
   [ "$status" -eq 7 ]
 }
 
+fake_mcp_list() { # fake_mcp_list <printf format>: a claude whose `mcp list` prints exactly that line
+  rm -f "$HOME/bin/claude"
+  printf "$1\n" >"$BATS_TEST_TMPDIR/mcp-list"
+  printf '#!/bin/bash\n[ "$1 $2" = "mcp list" ] && cat %q\n' "$BATS_TEST_TMPDIR/mcp-list" >"$HOME/bin/claude"
+  chmod +x "$HOME/bin/claude"
+}
+
+@test "the gate matches only the exact basic-memory entry, anchored on its status" {
+  for v in 'basic-memory-x: y - \xe2\x9c\x93 Connected' 'basic-memory: y - Not connected' 'basic-memory: y - \xe2\x9c\x97 Disconnected' \
+    'basic-memory: y - \xe2\x9c\x97 Failed to connect' 'x basic-memory: y - \xe2\x9c\x93 Connected' 'basic-memory: y - Needs authentication'; do
+    fake_mcp_list "$v"
+    run "$BIN/ccd-session" start demo
+    [ "$status" -eq 7 ] || { echo "$v: status $status"; false; }
+  done
+  fake_mcp_list 'basic-memory: /opt/basic-memory/bin/basic-memory mcp - \xe2\x9c\x93 Connected'
+  run "$BIN/ccd-session" start demo
+  [ "$status" -eq 0 ]
+}
+
 @test "managed settings: server-wide allow rule mcp__basic-memory, deny kept" {
   f=$ROOT/rootfs/etc/claude-code/managed-settings.json
   run jq -e '.permissions.allow | index("mcp__basic-memory")' "$f"
