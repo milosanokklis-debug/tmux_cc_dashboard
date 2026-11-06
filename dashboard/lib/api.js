@@ -146,7 +146,7 @@ function createApi(svc) {
       if (req.method !== 'POST') return methodNotAllowed();
       let name;
       try { name = decodeURIComponent(open[1]); } catch { throw new HttpError(400, 'invalid project name'); }
-      const session = await projects.openProject({ workspace: svc.workspace, runFile: svc.runFile, name });
+      const session = await audited('open', ctx, { project: name }, () => projects.openProject({ workspace: svc.workspace, runFile: svc.runFile, name }));
       return send(res, 200, { session });
     }
     const pull = /^\/api\/projects\/([^/]+)\/pull$/.exec(pathname);
@@ -228,7 +228,7 @@ function createApi(svc) {
     const ctl = /^\/api\/conversations\/([^/]+)\/(prompt|interrupt|close|preview)$/.exec(pathname);
     if (ctl) {
       if (req.method !== (ctl[2] === 'preview' ? 'GET' : 'POST')) return methodNotAllowed();
-      if (ctl[2] === 'interrupt' || ctl[2] === 'close') {
+      if (ctl[2] !== 'preview') { // prompt text is never audited, only the id
         return send(res, 200, await audited(ctl[2], ctx, { sid: shortSid(ctl[1]) }, () => controls[ctl[2]](ctl[1], req)));
       }
       return send(res, 200, await controls[ctl[2]](ctl[1], req));

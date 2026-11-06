@@ -475,3 +475,11 @@ test('GET /api/tree through the API: needs ?all=1 for old conversations; sanitiz
   assert.strictEqual(all.projects[0].project, 'p');
   assert.strictEqual(all.projects[0].conversations[0].status, 'ended');
 });
+
+test('git identity refuses a name or email starting with a dash', () => {
+  const identity = require('../lib/identity');
+  for (const body of [{ name: '--system', email: 'a@b.co' }, { name: ' -x', email: 'a@b.co' }, { name: 'A', email: '-a@b.co' }]) {
+    assert.throws(() => identity.validate(body), (e) => e.status === 400);
+  }
+  identity.validate({ name: 'A-b', email: 'a@b.co' });
+});

@@ -103,7 +103,7 @@ key() { t send-keys -t "=$S:" "$@"; }
 launch() { # extra claude args
   t kill-session -t "=$S" 2>/dev/null
   # the broker socket is pointed nowhere so the managed permission hook falls through at once
-  t new-session -d -s "$S" -c "$DIR" -e CCDASH_BROKER_SOCK=/nonexistent -e CCDASH_SELFTEST=1 \
+  t new-session -d -s "$S" -c "$DIR" -e CCDASH_BROKER_SOCK=/nonexistent \
     bash -lc 'claude --settings "$@"; exec bash -l' _ "$T/settings.json" "$@" || return 1
   t set -t "=$S:" @project_dir "$DIR" 2>/dev/null
 }

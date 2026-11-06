@@ -29,9 +29,10 @@ function validate(body) {
   if (typeof email !== 'string') throw new HttpError(400, 'email must be text');
   const n = name.trim();
   if (n.length < 1 || n.length > 100) throw new HttpError(400, 'name must be 1 to 100 characters');
+  if (n.startsWith('-')) throw new HttpError(400, 'name must not start with a dash');
   if (CONTROL_RE.test(n)) throw new HttpError(400, 'name must not contain control characters');
   if (email.length > 254) throw new HttpError(400, 'email must be at most 254 characters');
-  if (CONTROL_RE.test(email) || !EMAIL_RE.test(email)) throw new HttpError(400, 'email is not a valid address');
+  if (email.startsWith('-') || CONTROL_RE.test(email) || !EMAIL_RE.test(email)) throw new HttpError(400, 'email is not a valid address');
   return { name: n, email };
 }
 

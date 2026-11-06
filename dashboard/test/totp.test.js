@@ -175,3 +175,12 @@ test('enrol mode: already enrolled -> 409; a generation change drops the limited
   s.app.refreshAuth();
   assert.notStrictEqual((await h.req(s.base, '/api/totp/enroll', { cookie })).status, 200);
 });
+
+test('enableTotp refuses to replace a secret that is already set unless rotating', async (t) => {
+  const s = await h.start();
+  t.after(s.stop);
+  await authstore.setCredentials({ dir: s.dir, username: h.USER, password: h.PASS, hashOptions: FAST });
+  await authstore.enableTotp({ dir: s.dir, secret: totp.generateSecret(), hashOptions: FAST });
+  await assert.rejects(authstore.enableTotp({ dir: s.dir, secret: totp.generateSecret(), hashOptions: FAST }), (e) => e.status === 409);
+  await authstore.enableTotp({ dir: s.dir, secret: totp.generateSecret(), rotate: true, hashOptions: FAST });
+});

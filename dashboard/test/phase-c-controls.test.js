@@ -198,3 +198,17 @@ test('Phase C: prompt, interrupt, close and preview against the fake claude', { 
     assert.ok(!s.t('list-panes', '-a', '-F', '#{pane_id}').split('\n').includes(pane));
   });
 });
+
+test('prompt re-checks the status inside the lock and never pastes onto a permission dialog', async () => {
+  const { createControls } = require('../lib/controls');
+  const sid = '00000000-0000-4000-8000-000000000009';
+  const rec = { status: 'waiting', pane: '%1' };
+  const calls = [];
+  let ticks = 0;
+  const reconciler = { tick: async () => { if (++ticks === 2) rec.status = 'needs_approval'; }, get: () => rec };
+  const tmux = { run: async (a) => { calls.push(a); }, runInput: async (a) => { calls.push(a); } };
+  const c = createControls({ reconciler, tmux });
+  const body = { on: (ev, f) => { if (ev === 'data') f(Buffer.from('{"text":"hi"}')); if (ev === 'end') f(); }, headers: {} };
+  await assert.rejects(c.prompt(sid, body), (e) => e.status === 409);
+  assert.strictEqual(calls.length, 0);
+});

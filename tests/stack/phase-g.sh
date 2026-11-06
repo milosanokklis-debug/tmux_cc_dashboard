@@ -92,6 +92,9 @@ r=$(body POST /api/projects '{"repo":"octo/demo"}')
 eq "project demo added through the API" "$(jq -r .session <<<"$r")" claude-demo
 ccd sh -c 'mkdir -p /home/ccd/.claude && echo "{\"display\":\"backup marker\"}" > /home/ccd/.claude/history.jsonl && echo marker-$$ > /workspace/demo/MARKER'
 marker=$(ccd cat /workspace/demo/MARKER)
+# The git volume is otherwise empty here, so its tar.gz is ~100 bytes and sits on the ">100" size check below.
+# Seed it with random (incompressible) content so that archive is clearly non-empty. Owned web:ccd as in the image.
+compose exec -T -u root ccdash sh -c 'head -c 300 /dev/urandom | base64 > /var/lib/ccdash-git/marker-owner && chown web:ccd /var/lib/ccdash-git/marker-owner && chmod 640 /var/lib/ccdash-git/marker-owner'
 secret=$(compose exec -T -u web ccdash node -e "const t=require('/opt/ccdash/dashboard/lib/totp'),s=t.generateSecret();require('/opt/ccdash/dashboard/lib/authstore').enableTotp({dir:'/var/lib/ccdash-web',secret:s}).then(()=>process.stdout.write(s))")
 eq "TOTP enabled (password alone is no longer enough)" "$(pw_status)" 401
 before=$(owners); indent '     before: ' <<<"$before"
