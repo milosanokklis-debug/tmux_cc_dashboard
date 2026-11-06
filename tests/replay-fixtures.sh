@@ -53,7 +53,7 @@ snap() {
   done)
 }
 if [ "${REPLAY_UPDATE:-}" = 1 ]; then
-  mkdir -p "$expected" && snap >"$expected/state.txt" && echo "updated $expected/state.txt"
+  if mkdir -p "$expected" && snap >"$expected/state.txt"; then echo "updated $expected/state.txt"; else echo "FAIL state snapshot"; fail=1; fi
 elif [ ! -f "$expected/state.txt" ]; then
   echo "FAIL state diff: $expected/state.txt (missing expected file; REPLAY_UPDATE=1 creates it)"; fail=1
 else

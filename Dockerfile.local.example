@@ -21,8 +21,3 @@ USER root
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3-venv python3-pip \
  && rm -rf /var/lib/apt/lists/*
-
-# Alternative: Go instead.
-# RUN apt-get update \
-#  && apt-get install -y --no-install-recommends golang \
-#  && rm -rf /var/lib/apt/lists/*

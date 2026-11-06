@@ -22,6 +22,8 @@ cd tmux_cc_dashboard
 sudo ./setup.sh
 ```
 
+`setup.sh` ships with the next release step (Phase I). Until then, install by hand with compose: copy `.env.example` to `.env`, then run `docker compose up -d`. To build the image locally, add `-f compose.yaml -f compose.build.yaml` to the command.
+
 setup.sh does the whole install. It asks no questions. You can run it again safely. It logs to /var/log/ccdash-setup.log.
 
 It does these steps:
@@ -188,13 +190,23 @@ To upgrade Claude Code on a local build:
 
 Add the same `-f` flags you use at install time, such as `-f compose.egress.yaml`.
 
+The published image on ghcr.io is private until the owner makes it public (package Settings on GitHub). Until then `docker compose pull` needs a login.
+
 For a released image, set `CCDASH_VERSION` in `.env` to the new version, then run `docker compose pull` and `docker compose up -d`.
 
 ## 9. Backup and restore
 
 The data lives in four volumes: `ccdash-home` (Claude login and conversations), `ccdash-workspace` (repos), `ccdash-web` (dashboard login and TOTP secret) and `ccdash-git` (git tokens). Archives hold secrets, so store them safely.
 
-Stop the stack first. Use the same `-f` flags you use to run it:
+First find the real volume names. Compose prefixes them with the project name, which is the checkout folder name by default, so the volume may be `tmux_cc_dashboard_ccdash-home`:
+
+```bash
+docker volume ls -q | grep ccdash-
+```
+
+In the commands below, replace `ccdash-home`, `ccdash-workspace`, `ccdash-web` and `ccdash-git` with the names you see.
+
+Stop the stack. Use the same `-f` flags you use to run it:
 
 ```bash
 docker compose stop
@@ -203,20 +215,18 @@ docker compose stop
 Back up each volume into the current folder:
 
 ```bash
-docker run --rm -v ccdash-home:/v -v "$PWD":/b debian tar czf /b/ccdash-home.tgz -C /v .
-docker run --rm -v ccdash-workspace:/v -v "$PWD":/b debian tar czf /b/ccdash-workspace.tgz -C /v .
-docker run --rm -v ccdash-web:/v -v "$PWD":/b debian tar czf /b/ccdash-web.tgz -C /v .
-docker run --rm -v ccdash-git:/v -v "$PWD":/b debian tar czf /b/ccdash-git.tgz -C /v .
+docker run --rm -v ccdash-home:/v -v "$PWD":/b debian:trixie-slim tar czf /b/ccdash-home.tgz -C /v --numeric-owner .
+docker run --rm -v ccdash-workspace:/v -v "$PWD":/b debian:trixie-slim tar czf /b/ccdash-workspace.tgz -C /v --numeric-owner .
+docker run --rm -v ccdash-web:/v -v "$PWD":/b debian:trixie-slim tar czf /b/ccdash-web.tgz -C /v --numeric-owner .
+docker run --rm -v ccdash-git:/v -v "$PWD":/b debian:trixie-slim tar czf /b/ccdash-git.tgz -C /v --numeric-owner .
 ```
 
 Restore an archive into its volume:
 
 ```bash
-docker run --rm -v ccdash-home:/v -v "$PWD":/b debian tar xzf /b/ccdash-home.tgz -C /v
+docker run --rm -v ccdash-home:/v -v "$PWD":/b debian:trixie-slim tar xzf /b/ccdash-home.tgz --numeric-owner -C /v
 ```
 
 Repeat the restore line for each volume and archive.
 
-Compose names volumes with the project prefix, which is the folder name by default. For example, the volume may be `tmux_cc_dashboard_ccdash-home`. Check the names with `docker volume ls` and use them in the commands.
-
-The commands run as root in the container, so tar keeps the file owners. Add `--numeric-owner` when you create an archive that you will restore on another host. Restoring overwrites files with the same names in the volume. Start the stack again with `docker compose up -d` after the restore.
+The commands run as root in the container, and `--numeric-owner` keeps the file owners by number. Restoring overwrites files with the same names in the volume. Start the stack again with `docker compose up -d` after the restore.

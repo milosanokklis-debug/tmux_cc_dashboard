@@ -17,11 +17,14 @@ while IFS= read -r line; do
   [ $infence -eq 1 ] || continue
   line=${line#"${line%%[![:space:]]*}"}
   line=${line#\$ }
+  line=${line%% \#*}
+  set -f # no globbing in the word split
   # shellcheck disable=SC2206
   words=($line)
+  set +f
   case $line in
     "ccd "*)
-      sub=${words[1]}
+      sub=${words[1]:-}
       if ! grep -Eq "^[[:space:]]*([a-z|-]*\\|)?${sub}(\\|[a-z|-]*)?\\)" "$ccd"; then
         echo "FAIL ccd subcommand '$sub' is not a case label in bin/ccd: $line"; fail=1
       fi
@@ -35,7 +38,7 @@ while IFS= read -r line; do
   for w in "${words[@]}"; do
     case $w in --[a-zA-Z]*)
       flag=${w%%=*}
-      grep -Fq -- "$flag" "$target" || { echo "FAIL flag '$flag' not found in ${target##*/}: $line"; fail=1; }
+      grep -Eq -- "(^|[^A-Za-z0-9-])${flag}([^A-Za-z0-9-]|\$)" "$target" || { echo "FAIL flag '$flag' not found in ${target##*/}: $line"; fail=1; }
     esac
   done
 done <"$readme"

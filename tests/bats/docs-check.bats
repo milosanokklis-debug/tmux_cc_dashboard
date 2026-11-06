@@ -48,3 +48,17 @@ readme() { printf '%s\n' "$@" >"$DOCS_README"; }
   [ "$status" -eq 0 ]
   [[ $output == *"skipping"* ]]
 }
+
+@test "a flag must match a whole word (--trust is not --trust-hooks)" {
+  readme '```' 'ccd clone --trust owner/repo' '```'
+  run "$ROOT/tests/docs-check.sh"
+  [ "$status" -ne 0 ]
+  [[ $output == *"--trust"* ]]
+}
+
+@test "trailing comments are ignored and bare ccd does not crash" {
+  readme '```' 'ccd ls # --nope' 'ccd' '```'
+  run "$ROOT/tests/docs-check.sh"
+  [[ $output != *"--nope"* ]]
+  [[ $output != *"unbound"* ]]
+}

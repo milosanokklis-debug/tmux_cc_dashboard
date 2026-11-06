@@ -108,7 +108,7 @@ async function startEnroll() {
     en.setAttribute('aria-busy', 'true');
     btn.textContent = 'Checking…';
     try {
-      const res = await fetch('/api/totp/enroll', { method: 'POST', headers: H, credentials: 'same-origin', body: JSON.stringify({ code: en.ecode.value.trim() }) });
+      const res = await fetch('/api/totp/enroll', { method: 'POST', headers: H, credentials: 'same-origin', body: JSON.stringify({ code: en.ecode.value.replace(/\s+/g, '') }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !Array.isArray(data.recovery)) {
         $('eerror').textContent = data.error || 'Failed. Try again.';
