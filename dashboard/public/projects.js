@@ -236,6 +236,7 @@
   function hooksRefused(d) {
     const list = (d.hooks || []).join(', ') || 'unknown events';
     showError('This repo defines hooks (' + list + '). Nothing was kept. Tick "I trust this repo\'s hooks" and add it again if you trust it.');
+    $('add-trust-list').textContent = 'Hook events: ' + list + '.';
     $('add-trust-field').hidden = false;
     $('add-trust').focus();
   }

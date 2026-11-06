@@ -140,6 +140,7 @@
     gidField(gidName, $('gid-name-err'), '');
     gidField(gidEmail, $('gid-email-err'), '');
     gidLoad();
+    sessLoad();
     load().then(focusFirst);
     $('notif-close').focus(); // until the state is known
   });
@@ -238,6 +239,106 @@
       }
     });
   }
+
+  // ---- Signed-in devices ----
+  const sessList = $('sess-list');
+  const rtf = typeof Intl !== 'undefined' && Intl.RelativeTimeFormat ? new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }) : null;
+  const UNITS = [['day', 86400000], ['hour', 3600000], ['minute', 60000]];
+
+  function rel(ms) {
+    const diff = ms - Date.now();
+    if (Math.abs(diff) < 60000) return 'just now';
+    for (const [unit, size] of UNITS) {
+      if (Math.abs(diff) >= size) {
+        const n = Math.round(diff / size);
+        return rtf ? rtf.format(n, unit) : Math.abs(n) + ' ' + unit + (Math.abs(n) === 1 ? '' : 's') + ' ago';
+      }
+    }
+    return 'just now';
+  }
+
+  function timeEl(ms) {
+    const t = h('time', { datetime: new Date(ms).toISOString(), title: new Date(ms).toLocaleString(), text: rel(ms) });
+    return t;
+  }
+
+  function sessState(msg) { $('sess-state').textContent = msg || ''; $('sess-state').hidden = !msg; }
+  function sessError(msg) { $('sess-error').textContent = msg || ''; }
+
+  function sessRow(s) {
+    const ua = s.ua || 'Unknown browser';
+    const label = ua.length > 60 ? ua.slice(0, 59) + '…' : ua;
+    const head = [h('span', { class: 'sess-ua', title: ua, text: label })];
+    if (s.current) head.push(h('span', { class: 'chip chip-done sess-badge', text: 'This device' }));
+    const meta = h('dl', { class: 'sess-meta' }, [
+      h('div', {}, [h('dt', { text: 'Signed in' }), h('dd', {}, [timeEl(s.created)])]),
+      h('div', {}, [h('dt', { text: 'Last seen' }), h('dd', {}, [timeEl(s.lastSeen)])]),
+      h('div', {}, [h('dt', { text: 'IP' }), h('dd', { class: 'sess-ip', text: s.ip || 'unknown' })]),
+    ]);
+    const li = h('li', { class: 'sess-row', 'data-testid': 'session-row', 'data-current': s.current ? 'true' : null }, [
+      h('div', { class: 'sess-head' }, head), meta,
+    ]);
+    if (!s.current) {
+      const btn = h('button', { type: 'button', class: 'btn btn-danger sess-revoke', 'data-testid': 'session-revoke', 'aria-label': 'Revoke session: ' + label + ', last seen ' + rel(s.lastSeen), text: 'Revoke' });
+      btn.addEventListener('click', () => sessRevoke(s.id, btn));
+      li.append(btn);
+    }
+    return li;
+  }
+
+  async function sessLoad(focusSel) {
+    sessError('');
+    $('sess-confirm').hidden = true;
+    if (!sessList.children.length) { sessList.hidden = true; $('sess-actions').hidden = true; sessState('Loading…'); }
+    let r;
+    try { r = await api('/api/sessions'); } catch (e) { return; }
+    if (!r.ok || !r.data || !Array.isArray(r.data.sessions)) {
+      sessList.replaceChildren(); sessList.hidden = true; $('sess-actions').hidden = true;
+      sessState('');
+      sessError('Could not load devices (' + ((r.data && r.data.error) || 'HTTP ' + r.status) + ').');
+      return;
+    }
+    const list = r.data.sessions;
+    sessList.replaceChildren(...list.map(sessRow));
+    sessList.hidden = !list.length;
+    $('sess-actions').hidden = !list.length;
+    sessState(list.length ? '' : 'No signed-in devices.');
+    if (focusSel) { const t = sessList.querySelector(focusSel) || $('sess-all'); if (t && !t.closest('[hidden]')) t.focus(); }
+  }
+
+  async function sessRevoke(id, btn) {
+    sessError('');
+    btn.disabled = true;
+    btn.textContent = 'Revoking…';
+    try {
+      const r = await api('/api/sessions/revoke', { method: 'POST', body: { id } });
+      if (r.ok && r.data && r.data.current) { window.location.assign('/login'); return; }
+      if (!r.ok && r.status !== 404) throw new Error((r.data && r.data.error) || 'HTTP ' + r.status);
+      notice(r.status === 404 ? 'That device was already signed out.' : 'Device signed out.', 'info');
+      await sessLoad('.sess-revoke');
+    } catch (e) {
+      if (e.message !== 'unauthorized') { sessError('Could not revoke: ' + e.message); btn.disabled = false; btn.textContent = 'Revoke'; }
+    }
+  }
+
+  $('sess-all').addEventListener('click', () => { $('sess-confirm').hidden = false; $('sess-actions').hidden = true; $('sess-all-no').focus(); });
+  $('sess-all-no').addEventListener('click', () => { $('sess-confirm').hidden = true; $('sess-actions').hidden = false; $('sess-all').focus(); });
+  $('sess-confirm').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); $('sess-all-no').click(); } });
+  $('sess-all-yes').addEventListener('click', async () => {
+    const btn = $('sess-all-yes');
+    sessError('');
+    btn.disabled = true;
+    btn.textContent = 'Logging out…';
+    try {
+      const r = await api('/api/sessions/revoke-all', { method: 'POST', body: {} });
+      if (!r.ok) throw new Error((r.data && r.data.error) || 'HTTP ' + r.status);
+      window.location.assign('/login');
+    } catch (e) {
+      if (e.message !== 'unauthorized') sessError('Could not log out everywhere: ' + e.message);
+      btn.disabled = false;
+      btn.textContent = 'Yes, log out everywhere';
+    }
+  });
 
   // Register the worker early when the user already opted in, so pushes arrive even before the panel is opened.
   if (supported() && Notification.permission === 'granted') {
