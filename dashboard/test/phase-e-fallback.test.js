@@ -92,6 +92,28 @@ test('a run starts a hidden claude in _ops, types /usage, captures, exits and ki
   assert.equal(fb.latest().ts, 1000);
 });
 
+test('a trust dialog is never taken for the prompt: the run aborts without typing', async () => {
+  const dlg = ' Do you trust the files in this folder?\n > 1. Yes, proceed\n   2. No, exit\n';
+  const tmux = fakeTmux({ screen: dlg });
+  const orig = tmux.run;
+  tmux.run = async (a) => (a[0] === 'capture-pane' ? dlg : orig(a));
+  const { fb } = mk({ env: { CCDASH_USAGE_FALLBACK: '1' }, tmux });
+  await fb.refresh();
+  assert.ok(!tmux.calls.some((c) => c[0] === 'send-keys'));
+  assert.deepEqual(tmux.calls.at(-1), ['kill-window', '-t', '@7']);
+  assert.equal(fb.latest(), null);
+});
+
+test('stale ccdash-usage windows are swept before the first run', async () => {
+  const tmux = fakeTmux();
+  const orig = tmux.run;
+  tmux.run = async (a) => (a[0] === 'list-windows' ? '@3 ccdash-usage\n@4 ccd-ops\n' : orig(a));
+  const { fb } = mk({ env: { CCDASH_USAGE_FALLBACK: '1' }, tmux });
+  await fb.refresh();
+  assert.ok(tmux.calls.some((c) => c[0] === 'kill-window' && c[2] === '@3'));
+  assert.ok(!tmux.calls.some((c) => c[0] === 'kill-window' && c[2] === '@4'));
+});
+
 test('at most once per interval; again after it', async () => {
   const { fb, tmux, advance } = mk({ env: { CCDASH_USAGE_FALLBACK: '1' } });
   await fb.refresh();

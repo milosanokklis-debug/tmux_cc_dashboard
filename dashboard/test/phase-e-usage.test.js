@@ -78,3 +78,13 @@ test('the fallback is used only when no reading has rate_limits', () => {
   const d = dir({ a: rec(1, FIXTURE.rate_limits) });
   assert.equal(gauges({ dir: d, now: NOW, fallback: fb }).source, 'statusline');
 });
+
+test('the file cap keeps the newest readings; prune removes old ones', () => {
+  const { readings, prune } = require('../lib/usage');
+  const d = dir({ fresh: rec(500, { five_hour: { used_percentage: 5, resets_at: NOW + 100 } }), old: rec(100, null) });
+  const old = (Date.now() - 8 * 24 * 3600 * 1000) / 1000;
+  fs.utimesSync(path.join(d, 'old.json'), old, old);
+  assert.equal(readings(d).length, 2);
+  assert.equal(prune(d), 1);
+  assert.deepEqual(fs.readdirSync(d), ['fresh.json']);
+});

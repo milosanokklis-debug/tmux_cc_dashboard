@@ -36,6 +36,10 @@ function parseUsage(text) {
   return limits;
 }
 
+// The input prompt: a line that starts with the prompt marker. A numbered menu ("> 1. Yes") or
+// any dialog mentioning trust is not it.
+const isReady = (screen) => !/trust/i.test(screen) && /^\s*[│|]?\s*(>|❯)\s*(?![0-9]+\.)/m.test(screen);
+
 // deps: { tmux ({run, ensureOps}), now (ms), wait (ms), intervalMs, flagFile, env, log }
 function createUsageFallback({
   tmux, now = () => Date.now(), wait = sleep, env = process.env, log = console.error,
@@ -45,6 +49,18 @@ function createUsageFallback({
   let last = null; // { ts (s), limits }
   let lastRun = -Infinity;
   let running = null;
+  let swept = false;
+
+  // Windows left behind in _ops by an earlier run that died: kill the ones running claude.
+  async function sweep() {
+    try {
+      const out = await tmux.run(['list-windows', '-t', '=_ops:', '-F', '#{window_id} #{window_name}']);
+      for (const line of String(out ?? '').split('\n')) {
+        const m = /^(@[0-9]+) ccdash-usage$/.exec(line.trim());
+        if (m) await tmux.run(['kill-window', '-t', m[1]]);
+      }
+    } catch { /* no _ops yet */ }
+  }
 
   const enabled = () => {
     if (env.CCDASH_USAGE_FALLBACK === '1') return true;
@@ -53,16 +69,19 @@ function createUsageFallback({
 
   async function once() {
     await tmux.ensureOps();
+    if (!swept) { swept = true; await sweep(); }
     const out = await tmux.run(['new-window', '-d', '-P', '-F', '#{window_id}', '-t', '=_ops:',
-      '-e', 'CCDASH_HIDDEN=1', '-c', '/workspace', '--', 'claude']);
+      '-n', 'ccdash-usage', '-e', 'CCDASH_HIDDEN=1', '-c', '/workspace', '--', 'claude']);
     const win = String(out ?? '').trim();
     if (!/^@[0-9]+$/.test(win)) throw new Error('no window');
     try {
       let screen = '';
-      for (let i = 0; i < readyPolls && !/>|❯/.test(screen); i++) { // wait for the prompt
+      for (let i = 0; i < readyPolls && !isReady(screen); i++) { // wait for the prompt
         await wait(pollMs);
         screen = await tmux.run(['capture-pane', '-p', '-t', win]);
+        if (/trust|onboarding|welcome|theme/i.test(screen)) throw new Error('claude shows a dialog'); // never answer one
       }
+      if (!isReady(screen)) throw new Error('claude not ready');
       await tmux.run(['send-keys', '-t', win, '-l', '/usage']);
       await tmux.run(['send-keys', '-t', win, 'Enter']);
       let limits = {};

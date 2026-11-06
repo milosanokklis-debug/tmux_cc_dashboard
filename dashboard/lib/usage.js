@@ -9,6 +9,7 @@ const { readRegular } = require('./safefile');
 const DEFAULT_DIR = '/home/ccd/.ccdash/usage';
 const MAX_FILES = 1000;
 const MAX_BYTES = 64 * 1024;
+const MAX_AGE_MS = 7 * 24 * 3600 * 1000; // readings older than this are deleted by prune()
 const WINDOWS = [['five_hour', 5 * 3600], ['seven_day', 7 * 24 * 3600]];
 
 const finite = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -34,14 +35,36 @@ function readings(dir = DEFAULT_DIR) {
   try { if (!fs.lstatSync(dir).isDirectory()) return out; } catch { return out; }
   let names;
   try { names = fs.readdirSync(dir); } catch { return out; }
+  // newest files first, so the cap drops the oldest and never the freshest
+  const dated = [];
   for (const n of names) {
-    if (!/^[A-Za-z0-9_-]{1,100}\.json$/.test(n) || out.length >= MAX_FILES) continue;
+    if (!/^[A-Za-z0-9_-]{1,100}\.json$/.test(n)) continue;
+    try { dated.push([n, fs.lstatSync(path.join(dir, n)).mtimeMs]); } catch { /* gone */ }
+  }
+  dated.sort((a, b) => b[1] - a[1]);
+  for (const [n] of dated.slice(0, MAX_FILES)) {
     const f = readRegular(path.join(dir, n), MAX_BYTES);
     if (!f || f.size > MAX_BYTES) continue;
     const r = parseReading(f.buf.toString('utf8'));
     if (r) out.push(r);
   }
   return out;
+}
+
+// Deletes regular *.json readings whose mtime is older than maxAgeMs. Returns how many.
+function prune(dir = DEFAULT_DIR, { nowMs = Date.now(), maxAgeMs = MAX_AGE_MS } = {}) {
+  let n = 0;
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return 0; }
+  for (const name of names) {
+    if (!/^[A-Za-z0-9_-]{1,100}\.json$/.test(name)) continue;
+    try {
+      const f = path.join(dir, name);
+      const st = fs.lstatSync(f);
+      if (st.isFile() && nowMs - st.mtimeMs > maxAgeMs) { fs.unlinkSync(f); n++; }
+    } catch { /* gone or not ours to delete */ }
+  }
+  return n;
 }
 
 // now: unix seconds. fallback: optional () => { ts, five_hour, seven_day } from usage-fallback.js.
@@ -71,4 +94,4 @@ function gauges({ dir = DEFAULT_DIR, now = Math.floor(Date.now() / 1000), fallba
   return out;
 }
 
-module.exports = { gauges, readings, parseReading, DEFAULT_DIR };
+module.exports = { gauges, readings, prune, DEFAULT_DIR };
