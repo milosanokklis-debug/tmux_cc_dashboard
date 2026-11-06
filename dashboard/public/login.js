@@ -91,8 +91,10 @@ async function startEnroll() {
     $('qr-status').hidden = true;
     $('ecode').focus();
   } catch (e) {
-    $('qr-status').textContent = 'Could not load the setup code (' + e.message + '). Reload the page and sign in again.';
     $('qr-status').setAttribute('role', 'alert');
+    $('qr-status').textContent = 'Could not load the setup code (' + e.message + '). Reload the page and sign in again.';
+    $('esubmit').disabled = true;
+    $('ecode').disabled = true;
     return;
   }
   if (enrollBound) return;
@@ -103,6 +105,7 @@ async function startEnroll() {
     $('eerror').textContent = '';
     $('ecode').removeAttribute('aria-invalid');
     btn.disabled = true;
+    en.setAttribute('aria-busy', 'true');
     btn.textContent = 'Checking…';
     try {
       const res = await fetch('/api/totp/enroll', { method: 'POST', headers: H, credentials: 'same-origin', body: JSON.stringify({ code: en.ecode.value.trim() }) });
@@ -118,6 +121,7 @@ async function startEnroll() {
       $('eerror').textContent = 'Network error. Try again.';
     } finally {
       btn.disabled = false;
+      en.removeAttribute('aria-busy');
       btn.textContent = 'Enable and sign in';
     }
   });
@@ -143,6 +147,16 @@ function showRecovery(codes) {
       sel.addRange(range);
       status.textContent = 'Could not copy automatically. The codes are selected: copy them yourself.';
     }
+  };
+  $('download').onclick = () => {
+    const url = URL.createObjectURL(new Blob([text + '\n'], { type: 'text/plain' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ccdash-recovery-codes.txt';
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   $('done').onclick = () => window.location.assign('/');
 }
