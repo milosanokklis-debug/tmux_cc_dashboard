@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# One stand-in for every external command setup.sh runs. Symlink it under the command's name in a directory that
+# comes first in PATH. State lives in $FAKE_STATE; every call is appended to $FAKE_STATE/calls.log.
+# Env: FAKE_STATE, FAKE_ROOT (CCDASH_SETUP_ROOT), FAKE_INVOKER, FAKE_FAIL (command name that exits 1),
+# FAKE_ROUTE (exists|fail: what `cloudflared tunnel route dns` answers), $FAKE_STATE/vols (names `docker volume ls` prints).
+set -u
+name=$(basename "$0")
+S=${FAKE_STATE:?}
+mkdir -p "$S/pkg" "$S/user"
+printf '%s %s\n' "$name" "$*" >>"$S/calls.log"
+[ "${FAKE_FAIL:-}" != "$name" ] || { echo "$name: forced failure" >&2; exit 1; }
+home_of() {
+  case $1 in
+    ccdash) echo "$FAKE_ROOT/home/ccdash" ;;
+    cloudflared) echo "$FAKE_ROOT/var/lib/cloudflared" ;;
+    "$FAKE_INVOKER") echo "$FAKE_ROOT/home/$1" ;;
+  esac
+}
+case $name in
+  apt-get)
+    if [ "${1:-}" = install ]; then
+      for a in "$@"; do case $a in -* | install | Dpkg::*) ;; *) : >"$S/pkg/$a" ;; esac; done
+    fi ;;
+  dpkg) [ "$1" = -s ] && [ -e "$S/pkg/$2" ] && echo 'Status: install ok installed' || exit 1 ;;
+  uname) echo x86_64 ;;
+  ss | visudo | usermod) ;;
+  getent)
+    u=$2
+    if [ "$u" = "$FAKE_INVOKER" ] || [ -e "$S/user/$u" ]; then
+      h=$(home_of "$u")
+      echo "$u:x:1003:1003::$h:/bin/bash"
+    else exit 2; fi ;;
+  useradd)
+    for a in "$@"; do u=$a; done
+    : >"$S/user/$u"
+    mkdir -p "$(home_of "$u")" ;;
+  loginctl) mkdir -p "$FAKE_ROOT/var/lib/systemd/linger" && : >"$FAKE_ROOT/var/lib/systemd/linger/$2" ;;
+  systemctl)
+    mkdir -p "$S/svc"
+    case $1 in
+      start) mkdir -p "$FAKE_ROOT/run/user/1003" && : >"$FAKE_ROOT/run/user/1003/bus" ;;
+      enable) : >"$S/svc/enabled"; : >"$S/svc/active" ;;
+      disable) rm -f "$S/svc/enabled" "$S/svc/active" ;;
+      is-enabled) [ -e "$S/svc/enabled" ] ;;
+      is-active) [ -e "$S/svc/active" ] ;;
+    esac ;;
+  sudo) # sudo -n -u USER cmd...
+    while [ $# -gt 0 ]; do case $1 in -n) shift ;; -u) shift 2 ;; *) break ;; esac; done
+    exec "$@" ;;
+  dockerd-rootless-setuptool.sh) : >"$S/rootless" ;;
+  curl)
+    url="" out="" data=""
+    while [ $# -gt 0 ]; do
+      case $1 in -o) out=$2; shift ;; --data) data=${2#@}; shift ;; -*) ;; *) url=$1 ;; esac
+      shift
+    done
+    case $url in
+      */healthz) echo ok ;;
+      *download.docker.com* | *pkg.cloudflare.com*) printf 'KEY\n' >"$out" ;;
+      */zones/*) echo '{"result":{"name":"example.com"}}' ;;
+      */accounts) echo '{"result":[{"id":"acct1"}]}' ;;
+      */access/apps)
+        if [ -n "$data" ]; then
+          cp "$data" "$S/access-app.json"
+          jq -c '{result: [{domain: .domain, policies: .policies}]}' "$data" >"$S/access-list.json"
+          echo '{"success":true}'
+        elif [ "${FAKE_CURL_FAIL:-}" = access-list ]; then exit 22
+        else cat "$S/access-list.json" 2>/dev/null || echo '{"result":[]}'; fi ;;
+      *) echo "fake curl: unexpected $url" >&2; exit 1 ;;
+    esac ;;
+  docker)
+    case $1 in
+      info) [ -e "$S/rootless" ] ;;
+      ps) ;;
+      image) [ -e "$S/image" ] ;;
+      volume) [ "$2" != ls ] || cat "$S/vols" 2>/dev/null ;;
+      compose)
+        for a in "$@"; do case $a in pull | up | down) verb=$a ;; esac; done
+        case ${verb:-} in
+          pull) : >"$S/image" ;;
+          up) cp "$(printf '%s\n' "$@" | grep -A1 -x -- --env-file | tail -1)" "$S/up.env"
+              grep '^CCDASH_TOTP_REQUIRED=' "$S/up.env" >>"$S/totp.history" ;;
+          down) mkdir -p "$S/volumes"; : >"$S/down" ;;
+        esac ;;
+      exec)
+        shift
+        case "$*" in
+          *ccdash-passwd.js*) [ -z "${FAKE_PASSWD_FAIL:-}" ] || exit 1; cat >"$S/passwd-stdin"; echo "$*" >"$S/passwd-args" ;;
+          *"git config --global user.email") cat "$S/git-email" 2>/dev/null ;;
+          *"git config --global user.email "*) echo "${*##* }" >"$S/git-email" ;;
+          *"claude auth status") [ -e "$S/claude-login" ] ;;
+          *"claude mcp list") echo 'basic-memory: connected' ;;
+          *) ;;
+        esac ;;
+    esac ;;
+  claude-login) : >"$S/claude-login"; echo claude-login-output ;;
+  cloudflared)
+    case "$1 $2" in
+      "tunnel login")
+        mkdir -p "$HOME/.cloudflared"
+        echo 'Please open the following URL and log in with your Cloudflare account:'
+        echo 'https://dash.cloudflare.com/argotunnel?aud=x&callback=y'
+        { echo '-----BEGIN ARGO TUNNEL TOKEN-----'
+          printf '{"zoneID":"z1","accountID":"a1","apiToken":"tok"}' | base64 -w0; echo
+          echo '-----END ARGO TUNNEL TOKEN-----'; } >"$HOME/.cloudflared/cert.pem"
+        exec sleep 300 ;; # the real one never exits
+      "tunnel list") if [ -e "$S/tunnel" ]; then echo '[{"id":"uuid-1","name":"ccdash","deleted_at":null}]'; else echo '[]'; fi ;;
+      "tunnel create") : >"$S/tunnel"; mkdir -p "$HOME/.cloudflared"; echo '{}' >"$HOME/.cloudflared/uuid-1.json" ;;
+      "tunnel route")
+        case "${FAKE_ROUTE:-}" in
+          exists) echo "Failed to add route: code: 1003, reason: Failed to create record $4: An A, AAAA, or CNAME record with that host already exists." >&2; exit 1 ;;
+          fail) echo "Failed to add route: code: 9109, reason: Valid user session required" >&2; exit 1 ;;
+        esac ;;
+    esac ;;
+  ccd) ;;
+  *) echo "fake: no behaviour for $name" >&2; exit 1 ;;
+esac

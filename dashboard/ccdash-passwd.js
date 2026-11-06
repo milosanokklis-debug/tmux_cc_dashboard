@@ -55,7 +55,25 @@ function removeTotp({ dir, out = console.log }) {
   out('TOTP removed. All existing sessions are ended.');
 }
 
+// `--stdin <username>`: the password is the first line of stdin (for setup.sh; never on argv). No TTY needed.
+async function passwordFromStdin({ username, input, dir, hashOptions }) {
+  const password = String(input).split('\n')[0].replace(/\r$/, '');
+  return applyPassword({ username, password, repeat: password, dir, hashOptions });
+}
+
+async function readAll(stream) {
+  let data = '';
+  stream.setEncoding('utf8');
+  for await (const chunk of stream) data += chunk;
+  return data;
+}
+
 async function main() {
+  if (process.argv[2] === '--stdin') {
+    if (process.argv.length !== 4) throw new Error('usage: ccdash-passwd --stdin <username>');
+    await passwordFromStdin({ username: process.argv[3], input: await readAll(process.stdin) });
+    return console.log('Password set. All existing sessions are ended.');
+  }
   if (!process.stdin.isTTY) throw new Error('needs an interactive terminal (docker exec -it)');
   const flag = process.argv[2];
   if (flag === '--no-totp') return removeTotp({});
@@ -68,7 +86,7 @@ async function main() {
   console.log('Password set. All existing sessions are ended.');
 }
 
-module.exports = { applyPassword, enrollTotp, removeTotp };
+module.exports = { applyPassword, passwordFromStdin, enrollTotp, removeTotp };
 if (require.main === module) {
   main().catch((e) => { console.error(`error: ${e.message}`); process.exit(1); });
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks the commands shown in README.md code blocks against bin/ccd (and setup.sh when it exists).
+# Checks the commands shown in README.md code blocks against bin/ccd and setup.sh.
 # Env: DOCS_README overrides the README path. Exit nonzero on any unknown subcommand or flag.
 set -uo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -30,7 +30,7 @@ while IFS= read -r line; do
       fi
       target=$ccd ;;
     "sudo ./setup.sh"* | "./setup.sh"*)
-      if [ ! -f "$setup" ]; then echo "note: setup.sh not present yet, skipping: $line"; continue; fi
+      [ -f "$setup" ] || { echo "FAIL setup.sh is missing: $line"; fail=1; continue; }
       target=$setup ;;
     *) continue ;;
   esac

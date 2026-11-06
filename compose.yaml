@@ -11,6 +11,8 @@ services:
       CCDASH_ORIGIN: ${CCDASH_ORIGIN:-}
       # Seconds to wait for an approval; empty or unset = 120 (broker.js and permission.sh both fall back)
       CCDASH_APPROVAL_WAIT: ${CCDASH_APPROVAL_WAIT:-}
+      # 1 = a correct password alone is not enough until TOTP is enrolled (setup.sh sets it unless Cloudflare Access is used)
+      CCDASH_TOTP_REQUIRED: ${CCDASH_TOTP_REQUIRED:-}
     tmpfs:
       - /run:mode=0755,exec
       - /tmp:mode=1777
