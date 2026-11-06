@@ -174,7 +174,7 @@ test('a pref switched off in the UI stops that push', async () => {
 
 test('signing out deletes the subscription', async () => {
   assert.equal((await config()).subscribed, true);
-  await Promise.all([page.waitForURL((u) => u.pathname === '/login'), page.click('#logout')]);
+  await Promise.all([page.waitForURL((u) => u.pathname === '/login', { waitUntil: 'commit' }), page.click('#logout')]);
   await login(page);
   assert.equal((await config()).subscribed, false);
   await openSettings();
