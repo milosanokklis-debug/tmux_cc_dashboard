@@ -182,7 +182,7 @@ run_setup() { run timeout 120 "$ROOT/setup.sh" "$@" </dev/null; }
   grep -qx 'CCDASH_TOTP_REQUIRED=' "$FAKE_ROOT/home/ccdash/ccdash/.env"
   rm -rf "$FAKE_STATE" "$FAKE_ROOT/home"; mkdir -p "$FAKE_STATE" "$FAKE_ROOT/home/tester"
   FAKE_CURL_FAIL=access-list CLOUDFLARE_ACCESS_EMAIL=me@example.com CLOUDFLARE_API_TOKEN=tok run_setup --hostname ccdash.example.com
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 0 ]
   [[ $output == *"cannot list the Cloudflare Access apps"* ]]
   [ ! -e "$FAKE_STATE/access-app.json" ]
   grep -qx 'CCDASH_TOTP_REQUIRED=1' "$FAKE_ROOT/home/ccdash/ccdash/.env"
@@ -224,4 +224,35 @@ run_setup() { run timeout 120 "$ROOT/setup.sh" "$@" </dev/null; }
   run_setup --uninstall --purge
   [[ $output == *"nothing removed"* ]]
   ! grep -q 'volume rm' <(calls)
+}
+
+@test "ccdash-egress-allow is installed 755 and --uninstall removes it" {
+  run_setup --no-cloudflare
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  f=$FAKE_ROOT/usr/local/bin/ccdash-egress-allow
+  [ "$(stat -c %a "$f")" = 755 ]
+  run_setup --uninstall
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$f" ]
+}
+
+@test "a failed password step leaves no temp file in the home directory" {
+  FAKE_PASSWD_FAIL=1 run_setup --no-cloudflare
+  [ "$status" -eq 1 ]
+  ! ls -A "$FAKE_ROOT/home/tester" | grep -q '^\.ccdash-login\.'
+}
+
+@test "a pre-existing Access app with another policy keeps TOTP required" {
+  mkdir -p "$FAKE_STATE"
+  printf '{"result":[{"domain":"ccdash.example.com","policies":[{"decision":"allow","include":[{"everyone":{}}]}]}]}' >"$FAKE_STATE/access-list.json"
+  CLOUDFLARE_ACCESS_EMAIL=me@example.com CLOUDFLARE_API_TOKEN=tok run_setup --hostname ccdash.example.com
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ $output == *"policy is not the expected"* ]]
+  grep -qx 'CCDASH_TOTP_REQUIRED=1' "$FAKE_ROOT/home/ccdash/ccdash/.env"
+}
+
+@test "the sign-in output is not written to the log" {
+  run_setup --no-cloudflare
+  [ "$status" -eq 0 ]
+  ! grep -q 'claude-login-output' "$CCDASH_SETUP_ROOT/var/log/ccdash-setup.log"
 }

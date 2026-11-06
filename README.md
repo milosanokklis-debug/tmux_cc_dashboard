@@ -24,6 +24,8 @@ sudo ./setup.sh
 
 setup.sh does the whole install. It asks no questions. You can run it again safely. It logs to /var/log/ccdash-setup.log.
 
+setup.sh is tested with fakes and in CI; it has not yet been run end to end on a real Debian machine. Please report problems.
+
 It does these steps:
 
 - Creates the host user `ccdash` with rootless Docker.

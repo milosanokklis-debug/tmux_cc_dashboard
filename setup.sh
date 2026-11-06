@@ -32,11 +32,14 @@ R=${CCDASH_SETUP_ROOT:-}
 LOG=${CCDASH_SETUP_LOG:-$R/var/log/ccdash-setup.log}
 [ -z "${CCDASH_SETUP_BIN:-}" ] || PATH=$CCDASH_SETUP_BIN:$PATH
 export PATH DEBIAN_FRONTEND=noninteractive
+# keep the API token out of the environment of every child process (apt, docker, ...); curl gets it from a 0600 file
+CF_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+unset CLOUDFLARE_API_TOKEN
 PORT=7690
 NO_CLOUDFLARE=0 HOSTNAME_ARG="" NO_SELFTEST=0 UNINSTALL=0 PURGE=0
 
 # ---- output -------------------------------------------------------------------------------------------------
-exec 3<&0 0</dev/null # fd 3 is the terminal; only the Claude sign-in reads it, so nothing else can block on input
+exec 3<&0 4>&1 0</dev/null # fd 4 is the terminal output, so a pasted sign-in code never reaches the log. # fd 3 is the terminal; only the Claude sign-in reads it, so nothing else can block on input
 if ! { mkdir -p "$(dirname "$LOG")" && : >>"$LOG"; }; then echo "setup: cannot write $LOG" >&2; exit 1; fi
 chmod 600 "$LOG" 2>/dev/null || true
 exec > >(tee -a "$LOG") 2>&1
@@ -47,7 +50,7 @@ WARNINGS=()
 CURRENT="start"
 rerun_cmd() {
   local c="" a
-  [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || c="--preserve-env=CLOUDFLARE_API_TOKEN "
+  [ -z "$CF_API_TOKEN" ] || c="--preserve-env=CLOUDFLARE_API_TOKEN "
   printf 'sudo %s%q' "$c" "$SELF"
   for a in "${ARGS[@]}"; do printf ' %q' "$a"; done
   printf '\n'
@@ -62,7 +65,8 @@ die() {
   exit 1
 }
 TMP=$(mktemp -d) || die "cannot create a temp dir"
-trap 'rm -rf "$TMP"' EXIT
+LOGIN_TMP=
+trap 'rm -rf "$TMP"; [ -z "$LOGIN_TMP" ] || rm -f "$LOGIN_TMP"' EXIT
 step() { CURRENT="$1"; say ""; say "== $1"; }
 
 # ---- arguments ----------------------------------------------------------------------------------------------
@@ -198,14 +202,15 @@ uninstall() {
     systemctl daemon-reload || true
     say "removed the tunnel service (the tunnel and DNS record stay in Cloudflare)"
   fi
-  rm -f "$SUDOERS" "$BIN_DIR/ccd" "$BIN_DIR/ccdash-docker" "$LIB_DIR/ccd"
+  rm -f "$SUDOERS" "$BIN_DIR/ccd" "$BIN_DIR/ccdash-docker" "$BIN_DIR/ccdash-egress-allow" "$LIB_DIR/ccd"
   rmdir "$LIB_DIR" 2>/dev/null || true
   if [ "$PURGE" -eq 1 ]; then
     [ -z "$INSTALL_DIR" ] || rm -rf "${INSTALL_DIR:?}"
     local h
     h=$(pw_field "${INVOKER:-nobody}" 6)
     [ -z "$h" ] || rm -f "$h/ccdash-login.txt"
-    say "purged the install directory and the login file (volumes: see above)"
+    rm -rf "${CF_HOME:?}" "${CF_CONF%/*}" # the cloudflared login cert and tunnel credentials
+    say "purged the install directory, the login file and the cloudflared login/credentials (volumes: see above)"
   else
     say "kept the volumes (ccdash-home, ccdash-workspace, ccdash-web, ccdash-git), $INSTALL_DIR and ~/ccdash-login.txt"
   fi
@@ -288,7 +293,8 @@ ccdash_user() {
   if [ ! -e "$R/var/lib/systemd/linger/ccdash" ]; then
     loginctl enable-linger ccdash || die "enable-linger failed"
   fi
-  put "$SRC/host/ccdash-docker" "$BIN_DIR/ccdash-docker" 755 root:root || true
+  put "$SRC/host/ccdash-docker" "$BIN_DIR/ccdash-docker" 755 root:root
+  put "$SRC/host/ccdash-egress-allow" "$BIN_DIR/ccdash-egress-allow" 755 root:root
   # the invoking account may run exactly this wrapper as ccdash
   printf '%s ALL=(ccdash) NOPASSWD: /usr/local/bin/ccdash-docker\n' "$INVOKER" >"$TMP/sudoers" || die "mktemp write failed"
   if ! same_file "$TMP/sudoers" "$SUDOERS"; then
@@ -299,15 +305,15 @@ ccdash_user() {
     say "wrote $SUDOERS"
   fi
   # ccd: the real script plus a wrapper that points it at ccdash-docker
-  put "$SRC/bin/ccd" "$LIB_DIR/ccd" 755 root:root || true
+  put "$SRC/bin/ccd" "$LIB_DIR/ccd" 755 root:root
   cat >"$TMP/ccd-wrapper" <<EOF
 #!/bin/sh
 # Installed by setup.sh. Runs ccd against the rootless Docker of the ccdash user.
-CCDASH_DOCKER=\${CCDASH_DOCKER:-sudo -n -u ccdash /usr/local/bin/ccdash-docker}
+CCDASH_DOCKER=\${CCDASH_DOCKER:-$DOCKER_STR}
 export CCDASH_DOCKER
 exec $LIB_DIR/ccd "\$@"
 EOF
-  put "$TMP/ccd-wrapper" "$BIN_DIR/ccd" 755 root:root || true
+  put "$TMP/ccd-wrapper" "$BIN_DIR/ccd" 755 root:root
   rt=$R/run/user/$uid
   [ -e "$rt/bus" ] || systemctl start "user@$uid.service" || warn "could not start user@$uid.service"
   wait_for "$WAIT" "ccdash user session" test -e "$rt/bus" || die "the ccdash user's systemd session did not start ($rt/bus)"
@@ -330,11 +336,11 @@ write_env_and_start() {
   mkdir -p "$INSTALL_DIR" || die "cannot create $INSTALL_DIR"
   chown_if_root ccdash:ccdash "$INSTALL_DIR"
   chmod 750 "$INSTALL_DIR"
-  for f in "${files[@]}"; do put "$SRC/$f" "$INSTALL_DIR/$f" 644 ccdash:ccdash || true; done
+  for f in "${files[@]}"; do put "$SRC/$f" "$INSTALL_DIR/$f" 644 ccdash:ccdash; done
   if [ "${CCDASH_SETUP_EGRESS:-0}" = 1 ]; then
     mkdir -p "$INSTALL_DIR/egress"
     chown_if_root ccdash:ccdash "$INSTALL_DIR/egress"
-    for f in Dockerfile proxy.js allowlist.txt; do put "$SRC/egress/$f" "$INSTALL_DIR/egress/$f" 644 ccdash:ccdash || true; done
+    for f in Dockerfile proxy.js allowlist.txt; do put "$SRC/egress/$f" "$INSTALL_DIR/egress/$f" 644 ccdash:ccdash; done
   fi
   e=$INSTALL_DIR/.env
   if [ ! -f "$e" ]; then
@@ -346,17 +352,17 @@ write_env_and_start() {
   local k v
   for k in CCDASH_VERSION CLAUDE_CODE_VERSION S6_OVERLAY_VERSION BASIC_MEMORY_VERSION KIT_REPO KIT_REF; do
     v=$(get_env "$SRC/.env.example" "$k")
-    if [ -n "$v" ] && [ -z "$(get_env "$e" "$k")" ]; then set_env "$e" "$k" "$v" || true; fi # never override a pinned value
+    if [ -n "$v" ] && [ -z "$(get_env "$e" "$k")" ]; then set_env "$e" "$k" "$v"; fi # never override a pinned value
   done
   start_stack
 }
 
 # (re)apply the settings that can change during a run, pull if needed, compose up (a no-op when nothing changed)
 start_stack() {
-  local e=$INSTALL_DIR/.env image
-  if [ -n "$ORIGIN" ]; then set_env "$e" CCDASH_ORIGIN "$ORIGIN" || true; fi
+  local e=$INSTALL_DIR/.env image totp_val
+  if [ -n "$ORIGIN" ]; then set_env "$e" CCDASH_ORIGIN "$ORIGIN"; fi
   if [ "$TOTP_REQUIRED" -eq 1 ]; then totp_val=1; else totp_val=""; fi
-  set_env "$e" CCDASH_TOTP_REQUIRED "$totp_val" || true
+  set_env "$e" CCDASH_TOTP_REQUIRED "$totp_val"
   compose_files
   image="ghcr.io/milosanokklis-debug/ccdash:$(get_env "$e" CCDASH_VERSION)"
   if ! "${DOCKER[@]}" image inspect "$image" >/dev/null 2>&1; then
@@ -383,6 +389,7 @@ login() {
   pw=$(set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)
   [ "${#pw}" -eq 24 ] || die "could not generate a password"
   t=$(mktemp "$home/.ccdash-login.XXXXXX") || die "cannot create a file in $home"
+  LOGIN_TMP=$t
   install -m 600 "${own[@]}" /dev/null "$t" || die "cannot create $t"
   printf 'ccdash dashboard login\nUsername: %s\nPassword: %s\n' "$INVOKER" "$pw" >"$t"
   if ! printf '%s\n' "$pw" | dexec -i -u web ccdash node /opt/ccdash/dashboard/ccdash-passwd.js --stdin "$INVOKER" >/dev/null; then
@@ -390,6 +397,7 @@ login() {
     die "could not set the dashboard password"
   fi
   mv -f "$t" "$LOGIN_FILE" || die "cannot write $LOGIN_FILE"
+  LOGIN_TMP=
   pw=""
   say "login written to $LOGIN_FILE (mode 600, owner $INVOKER); the password is not in this log"
 }
@@ -421,9 +429,9 @@ claude_login() {
   say "Open the URL that Claude prints in a browser, approve, then paste the code here."
   if [ -n "${CCDASH_SETUP_CLAUDE_LOGIN:-}" ]; then
     # shellcheck disable=SC2086 # a hook command line, split on purpose
-    $CCDASH_SETUP_CLAUDE_LOGIN <&3
+    $CCDASH_SETUP_CLAUDE_LOGIN <&3 >&4 2>&4
   elif [ -t 3 ]; then
-    dexec -it -u ccd ccdash claude auth login <&3
+    dexec -it -u ccd ccdash claude auth login <&3 >&4 2>&4
   else
     warn "Claude sign-in needs a terminal. Run: ccd login (then /login)"
     return 0
@@ -434,7 +442,7 @@ claude_login() {
 cf_as() { sudo -n -u cloudflared env "HOME=$CF_HOME" "$CLOUDFLARED" "$@"; }
 cf_api() { # cf_api METHOD PATH [body-file]
   local hdr=$TMP/cf-header
-  printf 'Authorization: Bearer %s\n' "${CF_TOKEN:-$CLOUDFLARE_API_TOKEN}" >"$hdr"
+  printf 'Authorization: Bearer %s\n' "${CF_TOKEN:-$CF_API_TOKEN}" >"$hdr"
   local data=()
   [ -z "${3:-}" ] || data=(--data "@$3")
   curl -fsS --max-time 30 -X "$1" -H "@$hdr" -H 'Content-Type: application/json' "${data[@]}" "https://api.cloudflare.com/client/v4$2"
@@ -452,7 +460,7 @@ cf_login() {
   [ ! -s "$cert" ] || { say "cloudflared is already logged in"; return 0; }
   say "Open the URL below in a browser and pick the domain for ccdash."
   : >"$out"
-  cf_as tunnel login >"$out" 2>&1 </dev/null & # prints a URL and never exits by itself
+  cf_as tunnel login >"$out" 2>&1 </dev/null 4>&- & # prints a URL and never exits by itself
   pid=$!
   while [ ! -s "$cert" ]; do
     if [ "$shown" -eq 0 ] && url=$(grep -m1 -o 'https://[^ ]*' "$out") && [ -n "$url" ]; then
@@ -552,7 +560,7 @@ cloudflare_publish() { # DNS route and service start: after Access exists when a
 
 access_app() {
   step "9/12 Second factor"
-  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+  if [ -z "$CF_API_TOKEN" ]; then
     say "TOTP is required at the first login (no CLOUDFLARE_API_TOKEN)"
     return 0
   fi
@@ -571,10 +579,20 @@ access_app() {
     TOTP_REQUIRED=1
     return 1
   fi
-  apps=$(cf_api GET "/accounts/$acct/access/apps") || die "cannot list the Cloudflare Access apps (token needs Access: Apps and Policies edit); not creating one blind, which could duplicate it. TOTP stays required"
+  if ! apps=$(cf_api GET "/accounts/$acct/access/apps"); then
+    warn "cannot list the Cloudflare Access apps (token needs Access: Apps and Policies edit); not creating one blind, which could duplicate it. TOTP stays required"
+    TOTP_REQUIRED=1
+    return 1
+  fi
   if jq -e --arg d "$CF_HOST" '.result[]? | select(.domain == $d)' >/dev/null 2>&1 <<<"$apps"; then
-    say "Access app for $CF_HOST already exists"
-    TOTP_REQUIRED=0
+    # trust an existing app only when its policy is exactly: allow this one email
+    if jq -e --arg d "$CF_HOST" --arg e "$email" '[.result[] | select(.domain == $d)] | length == 1 and all(.[]; (.policies // []) | length > 0 and all(.[]; .decision == "allow" and ((.include // []) | length == 1) and .include[0].email.email == $e))' >/dev/null 2>&1 <<<"$apps"; then
+      say "Access app for $CF_HOST already exists with the expected email policy"
+      TOTP_REQUIRED=0
+    else
+      warn "an Access app for $CF_HOST exists but its policy is not the expected email include for $email; TOTP stays required"
+      TOTP_REQUIRED=1
+    fi
     return 0
   fi
   body=$TMP/access-app.json
