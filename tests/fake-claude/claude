@@ -15,7 +15,9 @@ settings=${FAKE_CLAUDE_SETTINGS:-/etc/claude-code/managed-settings.json}
 tmo=${FAKE_CLAUDE_TIMEOUT:-5}
 sid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
 fhome=${FAKE_CLAUDE_HOME:-${HOME:-/tmp}/.fake-claude}
-mkdir -p "$fhome/history"
+mkdir -p "$fhome/history" "$fhome/prompts"
+events=$fhome/events.log
+event() { printf '%s\n' "$1" >>"$events"; } # one line per notable event, for tests
 export CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-$PWD}
 
 source=startup resume_id=
@@ -49,15 +51,18 @@ hook_cmds() {
   jq -r --arg e "$1" --arg m "$2" '
     .hooks[$e][]?
     | select((.matcher // "") as $x | $x == "" or $x == "*" or ($m | test("^(" + $x + ")$")))
-    | .hooks[]? | select(.type == "command") | .command' "$settings" 2>/dev/null
+    | .hooks[]? | select(.type == "command") | "\(.timeout // "")\t\(.command)"' "$settings" 2>/dev/null
 }
 
 # run_hooks EVENT MATCH_VALUE JSON -> runs each hook with JSON on stdin; stdout passes through.
 run_hooks() {
-  local cmd rc
+  local cmd rc t
   while IFS= read -r cmd; do
     [ -n "$cmd" ] || continue
-    printf '%s' "$3" | timeout "$tmo" bash -c "$cmd"
+    t=$tmo # a PermissionRequest hook runs with its own configured timeout (it may wait up to 150 s)
+    if [ "$1" = PermissionRequest ] && [[ ${cmd%%$'\t'*} =~ ^[0-9]+$ ]]; then t=${cmd%%$'\t'*}; fi
+    cmd=${cmd#*$'\t'}
+    printf '%s' "$3" | timeout "$t" bash -c "$cmd"
     rc=$?
     [ "$rc" -eq 0 ] || echo "fake-claude: hook for $1 exited $rc" >&2
   done < <(hook_cmds "$1" "$2")
@@ -72,16 +77,23 @@ fire() {
 }
 
 permission() {
-  local json out decision ans
+  local json out decision ans msg
   json=$(payload PermissionRequest) || return 0
   out=$(run_hooks PermissionRequest "$(jq -r .tool_name <<<"$json")" "$json")
   decision=$(jq -rs '[.[] | .hookSpecificOutput.decision.behavior? // empty] | last // empty' <<<"$out" 2>/dev/null)
   case $decision in
-    allow | deny) echo "permission: $decision" ;;
+    allow | deny)
+      echo "permission: $decision"
+      event "permission $decision"
+      msg=$(jq -rs '[.[] | .hookSpecificOutput.decision.message? // empty] | last // empty' <<<"$out" 2>/dev/null)
+      if [ -n "$msg" ]; then echo "permission-message: $msg"; event "permission-message: $msg"; fi
+      ;;
     *)
       echo "fall-through: asking user"
-      if read -r ans; then
-        case $ans in y | Y | yes) echo "permission: allow (user)" ;; *) echo "permission: deny (user)" ;; esac
+      # A lone ESC (as tmux send-keys Escape) cancels the dialog and denies; otherwise the rest of the line follows.
+      if IFS= read -rsn1 ans; then
+        if [ "$ans" = $'\e' ]; then ans=esc; elif [ -n "$ans" ]; then IFS= read -r rest || true; ans=$ans$rest; fi
+        case $ans in y | Y | yes) echo "permission: allow (user)"; event "permission allow (user)" ;; *) echo "permission: deny (user)"; event "permission deny (user)" ;; esac
       fi
       ;;
   esac
@@ -104,13 +116,51 @@ finish() {
   exit 0
 }
 
+# long_turn -> blocks up to 120 s polling stdin. Returns 0 on a lone ESC (an interrupt), 1 on timeout
+# or EOF. Everything else typed or pasted meanwhile is ignored, including bracketed pastes (ESC[200~
+# ... ESC[201~) and other escape sequences, so a pasted /exit does not end the turn.
+long_turn() {
+  local end=$((SECONDS + 120)) c n seq rc
+  echo "working..."
+  while [ "$SECONDS" -lt "$end" ]; do
+    IFS= read -rsn1 -t 0.2 c
+    rc=$?
+    [ "$rc" -gt 128 ] && continue
+    [ "$rc" -eq 0 ] || return 1
+    [ "$c" = $'\e' ] || continue
+    IFS= read -rsn1 -t 0.1 n || return 0 # nothing follows the ESC: a real Esc key
+    [ "$n" = "[" ] || continue
+    seq=
+    while IFS= read -rsn1 -t 0.1 n; do seq+=$n; [[ $n == [A-Za-z~] ]] && break; done
+    if [ "$seq" = "200~" ]; then
+      seq=
+      while IFS= read -rsn1 -t 0.5 n; do seq+=$n; [[ $seq == *$'\e[201~' ]] && break; done
+    fi
+  done
+  return 1
+}
+
+printf '\e[?2004h' # bracketed paste on, as the real CLI does
+if [ -t 0 ]; then stty -icanon 2>/dev/null; trap 'stty icanon 2>/dev/null' EXIT; fi # no 4095-byte cooked line cap for big pastes
 fire SessionStart SessionStart .source ".source=\"$source\""
 
+pn=0
 while printf '> ' && IFS= read -r line; do
-  read -ra words <<<"$line"
+  prompt=$line
+  if [[ $line == $'\e[200~'* ]]; then # bracketed paste: lines up to the one ending ESC[201~; that NL is the Enter
+    prompt=${line#$'\e[200~'}
+    while [[ $prompt != *$'\e[201~' ]]; do
+      IFS= read -r line || break
+      prompt+=$'\n'$line
+    done
+    prompt=${prompt%$'\e[201~'}
+  fi
+  IFS=$' \t\n' read -d '' -ra words <<<"$prompt" || true
   [ "${words[0]:-}" = /exit ] && finish
-  printf '%s\n' "$line" >>"$hist"
-  fire UserPromptSubmit UserPromptSubmit .prompt ".prompt=\"$(jq -rn --arg l "$line" '$l|@json|.[1:-1]')\""
+  pn=$((pn + 1))
+  printf '%s' "$prompt" >"$fhome/prompts/$sid.$pn" # exact bytes
+  printf '%s\n' "${prompt//$'\n'/\\n}" >>"$hist"   # history: one line, newlines as \n
+  fire UserPromptSubmit UserPromptSubmit .prompt ".prompt=\"$(jq -rn --arg l "$prompt" '$l|@json|.[1:-1]')\""
   stop=Stop esc=0
   for ((i = 0; i < ${#words[@]}; i++)); do
     case ${words[i]} in
@@ -125,6 +175,13 @@ while printf '> ' && IFS= read -r line; do
         esac
         ;;
       /esc) esc=1 ;;
+      /long)
+        if long_turn; then
+          esc=1
+          event interrupted
+          fire Notification Notification-idle_prompt .notification_type # hypothetical, like /esc
+        fi
+        ;;
       /status) status ;;
     esac
   done

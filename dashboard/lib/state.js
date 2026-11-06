@@ -72,13 +72,20 @@ function derive(records, { panes, table, serverPid = null, serverStart = null, n
       else if (otherServer(r) || !runsClaude(r.pane)) status = 'sleeping';
     }
     out.set(r.sid, {
-      sid: r.sid, pane: r.pane, status, outsideTmux, resumedFrom: r.resumedFrom,
+      sid: r.sid, pane: r.pane, status, outsideTmux, project: r.project ? path.basename(r.project) : '(unknown)', resumedFrom: r.resumedFrom,
       hidden: replaced.has(r.sid),
       idle: status === 'waiting' && r.waitingSince !== null && now - r.waitingSince * 1000 >= idleMs,
       quiet: status === 'working' && now - r.ts * 1000 >= quietMs,
     });
   }
   return out;
+}
+
+// One conversation's state file, read the same safe way (no follow, regular file, size cap), or null.
+function readRecord(dir, sid) {
+  if (typeof sid !== 'string' || !SID_RE.test(sid)) return null;
+  const f = readRegular(path.join(dir, `${sid}.json`), MAX_BYTES);
+  return f && f.size <= MAX_BYTES ? parseRecord(sid, f.buf.toString('utf8')) : null;
 }
 
 const seconds = (v, dflt) => (/^[0-9]+$/.test(v ?? '') && Number(v) > 0 ? Number(v) : dflt);
@@ -95,6 +102,7 @@ function createReconciler({
   let snapshot = null; // null until the first successful pass
   let timer = null;
   let down = false;
+  const listeners = [];
 
   async function tick() {
     let panes;
@@ -115,14 +123,18 @@ function createReconciler({
       return snapshot;
     }
     down = false;
+    const startedAt = now(); // state files read from here on; listeners may trust anything older was seen
     snapshot = derive(readRecords(stateDir), {
       panes, table: procTable(), serverPid, serverStart, now: now(), idleMs: idleSec * 1000, quietMs: quietSec * 1000,
     });
+    for (const fn of listeners) { try { fn(snapshot, startedAt); } catch (e) { log('reconciler listener:', e.message); } }
     return snapshot;
   }
 
   return {
     tick,
+    readOne: (sid) => readRecord(stateDir, sid),
+    onTick: (fn) => { listeners.push(fn); },
     snapshot: () => snapshot,
     get: (sid) => snapshot?.get(sid) ?? null,
     start() {
@@ -135,4 +147,4 @@ function createReconciler({
   };
 }
 
-module.exports = { createReconciler, derive, readRecords, parseRecord };
+module.exports = { clean, createReconciler, derive, readRecords, readRecord, parseRecord };

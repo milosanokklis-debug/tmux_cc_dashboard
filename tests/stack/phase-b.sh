@@ -17,7 +17,7 @@ jar=$(mktemp)
 fail=0
 # The compose file goes in on stdin and the working directory is /, so a Docker user that cannot
 # read the checkout still works.
-compose() { (cd / && $D compose -p "$P" -f - "$@" < <(sed -e "s|@IMAGE@|$CCDASH_TEST_IMAGE|" -e "s|@PORT@|$CCDASH_TEST_PORT|" "$root/tests/stack/compose.yaml")); }
+compose() { (cd / && $D compose -p "$P" -f - "$@" < <(sed -e "s|@IMAGE@|$CCDASH_TEST_IMAGE|" -e "s|@PORT@|$CCDASH_TEST_PORT|" -e '/# phase-c$/d' "$root/tests/stack/compose.yaml")); }
 ccd() { compose exec -T -u ccd ccdash "$@"; }
 cleanup() { [ -n "${KEEP:-}" ] && return; compose down -v --remove-orphans >/dev/null 2>&1 || true; rm -f "$jar"; }
 trap cleanup EXIT

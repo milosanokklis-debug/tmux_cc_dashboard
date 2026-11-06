@@ -1,3 +1,4 @@
 #!/command/execlineb -P
 foreground { install -d -o ccd -g ccd -m 0750 /run/ccdash }
-install -d -o ccd -g ccd -m 0770 /run/ccdash/ops
+foreground { install -d -o ccd -g ccd -m 0770 /run/ccdash/ops }
+install -d -o web -g ccd -m 0750 /run/ccdash-web

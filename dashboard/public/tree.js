@@ -2,6 +2,7 @@
 // Agent tree panel: projects > conversations (tmux windows) > subagents.
 (function () {
   const { api, h, poller, fmtDuration, chip, notice } = window.ccdash;
+  const controls = window.ccdash.controls;
   const $ = (id) => document.getElementById(id);
 
   const CONV = {
@@ -15,7 +16,11 @@
     gone: { label: 'gone', icon: '✕' },
   };
   // Extra flags the reconciler sets next to the status.
-  const FLAGS = [['idle', 'idle'], ['quiet', 'quiet'], ['outsideTmux', 'outside tmux']];
+  const FLAGS = [
+    ['idle', 'idle', 'Idle: no activity for a while.'],
+    ['quiet', 'quiet', 'Quiet: running, but it has not printed anything recently.'],
+    ['outsideTmux', 'outside tmux', 'Outside tmux: Claude runs somewhere other than a tmux window here, so it cannot be prompted or closed from this page.'],
+  ];
   const AGENT = {
     running: { label: 'running', icon: '●' },
     done: { label: 'done', icon: '✓' },
@@ -23,8 +28,12 @@
 
   let current = null; // project id of the open terminal
   let lastJson = null;
+  let lastData = null;
   let skew = 0; // server clock minus client clock, seconds
   let ticker = null;
+  const waking = new Set(); // sids with a wake request in flight
+  const seenApprovals = new Set(); // approval ids already counted for the auto-open
+  const phone = window.matchMedia('(max-width: 720px)');
   const expanded = new Set(); // task rows the user opened, by conversation/agent id
 
   const nowSec = () => Date.now() / 1000 + skew;
@@ -60,7 +69,7 @@
       // It starts hidden and fitTasks() reveals it only for text that is really cut off.
       const more = h('button', {
         type: 'button', class: 'btn btn-ghost task-more', 'aria-expanded': String(open), 'aria-controls': task.id,
-        'data-key': key, hidden: !open, text: open ? 'Show less' : 'Show full task',
+        'data-key': key, 'data-fk': key, hidden: !open, text: open ? 'Show less' : 'Show full task',
       });
       more.addEventListener('click', () => {
         const now = more.getAttribute('aria-expanded') !== 'true';
@@ -74,28 +83,40 @@
     return li;
   }
 
+  // A persistent live region (the tree re-renders, so a status inside a card would be lost).
+  function say(text) { const el = $('tree-status'); if (el) el.textContent = text; }
+
   async function wake(c, btn) {
-    btn.disabled = true;
+    const name = c.win || c.sid;
+    waking.add(c.sid);
+    btn.disabled = true; btn.textContent = 'Waking…'; btn.setAttribute('aria-busy', 'true');
+    say('Waking ' + name + '…');
     try {
       const r = await api('/api/conversations/' + encodeURIComponent(c.sid) + '/wake', { method: 'POST', body: {} });
-      if (r.ok) notice('Woke ' + (c.win || c.sid) + '.', 'info');
-      else notice('Could not wake the conversation: ' + ((r.data && r.data.error) || 'HTTP ' + r.status), 'error');
+      if (r.ok) { notice('Woke ' + name + '.', 'info'); say('Woke ' + name + '.'); }
+      else {
+        const m = 'Could not wake the conversation: ' + ((r.data && r.data.error) || 'HTTP ' + r.status);
+        notice(m, 'error'); say(m);
+      }
     } catch (e) {
-      if (e.message !== 'unauthorized') notice('Could not wake the conversation.', 'error');
+      if (e.message !== 'unauthorized') { notice('Could not wake the conversation.', 'error'); say('Could not wake the conversation.'); }
     }
-    btn.disabled = false;
+    waking.delete(c.sid);
+    btn.disabled = false; btn.textContent = 'Wake'; btn.removeAttribute('aria-busy');
     refresh();
   }
 
   function wakeControl(c) {
     const note = h('p', { class: 'wake-note', id: 'wake-' + domId(c.sid), text: 'Resumes the full history. A step that was interrupted does not continue, and processes Claude started do not come back.' });
-    const btn = h('button', { type: 'button', class: 'btn', 'aria-describedby': note.id, text: 'Wake' });
+    const busy = waking.has(c.sid);
+    const btn = h('button', { type: 'button', class: 'btn', 'aria-describedby': note.id, 'aria-busy': busy ? 'true' : null, text: busy ? 'Waking…' : 'Wake' });
+    btn.disabled = busy;
     btn.addEventListener('click', () => wake(c, btn));
     return h('div', { class: 'wake' }, [btn, note]);
   }
 
-  function convItem(c) {
-    const running = c.status === 'running';
+  function convItem(c, project) {
+    const running = c.endedTs == null && !['sleeping', 'ended', 'gone'].includes(c.status);
     const li = h('li', { class: 'node conv' }, [
       h('div', { class: 'row' }, [
         h('span', { class: 'conv-name', text: c.win || c.sid }),
@@ -104,33 +125,48 @@
       ]),
     ]);
     const flags = FLAGS.filter(([k]) => c[k]);
-    if (flags.length) li.firstChild.insertBefore(h('span', { class: 'flags', text: flags.map((f) => f[1]).join(', ') }), li.firstChild.children[2]);
+    if (flags.length) {
+      const box = h('span', { class: 'flags' }, flags.map((f) => h('span', { class: 'flag', title: f[2], text: f[1] })));
+      li.firstChild.insertBefore(box, li.firstChild.children[2]);
+    }
+    if (c.approval) li.append(controls.approvalCard(c, project));
     if (c.wakeable) li.append(wakeControl(c));
+    const box = controls.convControls(c);
+    if (box.length) li.append(h('div', { class: 'conv-controls' }, box));
     if (c.subagents.length) li.append(h('ul', { class: 'branch', 'aria-label': 'Subagents of ' + (c.win || c.sid) }, c.subagents.map((a) => agentItem(a, c.sid))));
     return li;
   }
 
-  function render(data) {
+  function render(data, focusKey) {
+    lastData = data;
     let projects = data.projects;
     const all = $('tree-all-projects').checked;
     if (!all && current) projects = projects.filter((p) => p.project === current);
     const ul = $('tree');
     // replaceChildren drops focus, so remember which task button had it and put it back.
-    const focused = ul.contains(document.activeElement) ? document.activeElement.dataset.key : null;
+    const act = document.activeElement;
+    const focused = focusKey || (ul.contains(act) && act.dataset ? (act.dataset.fk || act.dataset.key) : null);
+    const caret = ul.contains(act) && act.selectionStart != null && !focusKey ? [act.selectionStart, act.selectionEnd] : null;
+    controls.releasePreviews();
+    renderStrip(data);
     ul.replaceChildren(
       ...projects.map((p) => {
         const isCurrent = p.project === current;
         const head = h('div', { class: 'project-head' }, [h('h3', { class: 'project-name', text: p.project })]);
         if (isCurrent && all) head.append(h('span', { class: 'here', text: 'this terminal' }));
         const li = h('li', { class: 'project' + (isCurrent ? ' is-current' : '') }, [head]);
-        li.append(h('ul', { class: 'branch', 'aria-label': 'Conversations in ' + p.project }, p.conversations.map(convItem)));
+        li.append(h('ul', { class: 'branch', 'aria-label': 'Conversations in ' + p.project }, p.conversations.map((c) => convItem(c, p.project))));
         return li;
       })
     );
     fitTasks(); // before focusing: a still-hidden button cannot take focus
     if (focused) {
-      const again = ul.querySelector('.task-more[data-key="' + CSS.escape(focused) + '"]');
-      if (again) again.focus();
+      const q = CSS.escape(focused);
+      const again = ul.querySelector('[data-fk="' + q + '"]:not(:disabled)') || ul.querySelector('.task-more[data-key="' + q + '"]');
+      if (again) {
+        again.focus();
+        if (caret && again.setSelectionRange) try { again.setSelectionRange(caret[0], caret[1]); } catch { /* not a text control */ }
+      }
     }
     const empty = $('tree-empty');
     empty.hidden = projects.length > 0;
@@ -139,6 +175,47 @@
         ? 'No Claude conversations recorded yet.'
         : 'No active Claude conversations. Start claude in the terminal and its subagents appear here.';
     }
+  }
+
+  // "Needs approval" strip: every pending approval in the data, even for projects the filter hides.
+  function renderStrip(data) {
+    const items = [];
+    for (const p of data.projects) for (const c of p.conversations) if (c.approval) items.push({ project: p.project, c });
+    syncApprovalToggle(items);
+    const box = $('approvals');
+    const strip = controls.approvalStrip(items, jumpTo);
+    const focused = box.contains(document.activeElement) ? document.activeElement.dataset.fk : null;
+    box.replaceChildren(...(strip ? [strip] : []));
+    if (focused) { const again = box.querySelector('[data-fk="' + CSS.escape(focused) + '"]'); if (again) again.focus(); }
+  }
+
+  // Phones: the panel starts collapsed, so surface pending approvals on the Agents toggle and open the
+  // panel once per approval. A user who collapses it again while that approval is pending is left alone.
+  function syncApprovalToggle(items) {
+    const n = items.length;
+    const toggle = $('tree-toggle');
+    const text = n ? 'Agents, ' + n + ' needs approval' : 'Agents';
+    if (toggle.textContent !== text) toggle.textContent = text;
+    const ids = new Set(items.map((it) => it.c.approval.id));
+    let fresh = false;
+    for (const id of ids) if (!seenApprovals.has(id)) { seenApprovals.add(id); fresh = true; }
+    for (const id of seenApprovals) if (!ids.has(id)) seenApprovals.delete(id);
+    if (fresh && phone.matches && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+  }
+
+  function jumpTo(id) {
+    const find = () => $('tree').querySelector('[data-approval-id="' + CSS.escape(id) + '"]');
+    let card = find();
+    if (!card && lastData) {
+      $('tree-all-projects').checked = true;
+      render(lastData);
+      card = find();
+    }
+    if (!card) return;
+    card.scrollIntoView({ block: 'nearest' });
+    const btn = card.querySelector('[data-testid="approve"]');
+    const target = btn && !btn.disabled ? btn : card.querySelector('[data-testid="deny"]');
+    if (target && !target.disabled) target.focus();
   }
 
   // Show 'Show full task' only where the two-line clamp hides text. Open tasks keep their button
@@ -180,6 +257,10 @@
   const poll = poller(load, 2000);
 
   function refresh() { lastJson = null; poll.now(); }
+  controls.setOnChange((opts) => {
+    if (opts && opts.focus && lastData) render(lastData, opts.focus);
+    else { if (lastData) render(lastData); refresh(); }
+  });
   $('tree-all-projects').addEventListener('change', refresh);
   $('tree-all-time').addEventListener('change', refresh);
 
@@ -187,7 +268,12 @@
     start(project) {
       current = project;
       lastJson = null;
+      seenApprovals.clear();
+      $('tree-toggle').textContent = 'Agents';
       $('tree').replaceChildren();
+      $('approvals').replaceChildren();
+      controls.releasePreviews();
+      controls.reset();
       $('tree-empty').hidden = true;
       poll.start();
       clearInterval(ticker);
@@ -195,6 +281,7 @@
     },
     stop() {
       poll.stop();
+      controls.releasePreviews();
       clearInterval(ticker);
       current = null;
     },

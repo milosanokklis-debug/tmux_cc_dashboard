@@ -1,7 +1,7 @@
 'use strict';
 // tmux access (always execFile with an argv array, never a shell), the /proc process
 // table, and the ccd-ops poller used for long jobs such as git clone.
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -9,6 +9,7 @@ const { readRegular } = require('./safefile');
 const { setTimeout: sleep } = require('node:timers/promises');
 
 const DENIED = /access not allowed/;
+const denied = (stdout, stderr) => DENIED.test(stderr) || stdout.trim() === 'access not allowed';
 
 function runFile(file, args, { timeout = 15000, exec = execFile } = {}) {
   return new Promise((resolve, reject) => {
@@ -26,11 +27,31 @@ function runFile(file, args, { timeout = 15000, exec = execFile } = {}) {
 // A tmux client denied by server-access prints "access not allowed" and still exits 0,
 // so the output is checked as well as the exit status. Only stderr (or an output that is
 // exactly the message) counts: stdout carries session/option/pane text that ccd controls.
-function createTmux({ sock = process.env.CCDASH_TMUX || '/run/ccdash/tmux.sock', exec = execFile } = {}) {
+function createTmux({ sock = process.env.CCDASH_TMUX || '/run/ccdash/tmux.sock', exec = execFile, spawnFn = spawn } = {}) {
   async function run(args) {
     const { stdout, stderr } = await runFile('tmux', ['-S', sock, ...args], { exec });
-    if (DENIED.test(stderr) || stdout.trim() === 'access not allowed') throw new Error('tmux: access not allowed');
+    if (denied(stdout, stderr)) throw new Error('tmux: access not allowed');
     return stdout;
+  }
+
+  // Like run, with `input` written to tmux's stdin (e.g. `load-buffer -b id -`). The input is never
+  // part of an error message or a log line.
+  function runInput(args, input) {
+    return new Promise((resolve, reject) => {
+      const child = spawnFn('tmux', ['-S', sock, ...args], { stdio: ['pipe', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf8').on('data', (d) => { if (stdout.length < 1024 * 1024) stdout += d; });
+      child.stderr.setEncoding('utf8').on('data', (d) => { if (stderr.length < 64 * 1024) stderr += d; });
+      child.stdin.on('error', () => { /* tmux exited early: the exit status reports it */ });
+      child.on('error', (e) => reject(new Error(e.message)));
+      child.on('close', (code) => {
+        if (denied(stdout, stderr)) return reject(new Error('tmux: access not allowed'));
+        if (code !== 0) return reject(new Error(stderr.trim() || `tmux exited ${code}`));
+        resolve(stdout);
+      });
+      child.stdin.end(input);
+    });
   }
 
   // [{ session, window, paneId, panePid, active, projectDir }] for every pane of every session.
@@ -65,7 +86,7 @@ function createTmux({ sock = process.env.CCDASH_TMUX || '/run/ccdash/tmux.sock',
     }
   }
 
-  return { sock, run, listPanes, ensureOps };
+  return { sock, run, runInput, listPanes, ensureOps };
 }
 
 // Map pid -> { ppid, comm } read from /proc (the container does not mount it with hidepid).

@@ -25,6 +25,7 @@ EOS
       + h("SubagentStart") + h("SubagentStop") + h("SessionEnd") + h("Notification")),
      statusLine: {type: "command", command: ($c|sub(" .*";"") + "-status")}}' \
     >"$FAKE_CLAUDE_SETTINGS"
+  export FAKE_CLAUDE_HOME=$BATS_TEST_TMPDIR/fh
   CLAUDE=$ROOT/tests/fake-claude/claude
 }
 
@@ -107,4 +108,40 @@ perm_settings() { # $1 = stdout of the PermissionRequest hook
   FAKE_CLAUDE_TIMEOUT=1 run "$CLAUDE" <<<"hi"
   [ "$status" -eq 0 ]
   [[ $output == *"exited 124"* ]]
+}
+
+@test "a bracketed paste is one prompt, multi-line text kept exactly, recorded in prompts/" {
+  text=$'it\'s "q" $(touch /nonexistent/x) `id`; a && b \\ \xc3\xa9\n\n  indented\nthe word Enter'
+  run "$CLAUDE" <<<"$(printf '\033[200~%s\033[201~' "$text")"$'\n/exit'
+  [ "$status" -eq 0 ]
+  f=$(ls "$FAKE_CLAUDE_HOME"/prompts/*.1)
+  [ "$(cat "$f"; printf x)" = "${text}x" ]
+  [ "$(grep -c '^UserPromptSubmit ' "$M")" -eq 1 ]
+  [ "$(wc -l <"$FAKE_CLAUDE_HOME"/history/*)" -eq 1 ] # history keeps one line per prompt
+  [ ! -e "$FAKE_CLAUDE_HOME"/prompts/*.2 ]
+}
+
+@test "a paste containing a cue word runs the cue" {
+  run "$CLAUDE" <<<$'\033[200~first\n/tool\033[201~'
+  grep -qx 'PostToolUse Bash' "$M"
+}
+
+@test "/long blocks until Esc, then prints interrupted, notifies idle and fires no Stop" {
+  output=$(printf 'go /long\n\033[200~/exit\033[201~\n\033' | "$CLAUDE")
+  [[ $output == *"working..."* ]]
+  [[ $output == *"interrupted"* ]]
+  grep -qx interrupted "$FAKE_CLAUDE_HOME/events.log"
+  grep -qx 'Notification ' "$M"
+  ! grep -qx 'Stop ' "$M"
+  [ "$(grep -c '^SessionEnd' "$M")" -eq 1 ] # only at EOF: the pasted /exit did not end the turn
+}
+
+@test "/perm uses the hook timeout and reports the deny message" {
+  jq -n '{hooks: {PermissionRequest: [{matcher: "Bash", hooks: [{type: "command", timeout: 4,
+    command: "sleep 2; printf %s \"{\\\"hookSpecificOutput\\\":{\\\"decision\\\":{\\\"behavior\\\":\\\"deny\\\",\\\"message\\\":\\\"use rg instead\\\"}}}\""}]}]}}' >"$FAKE_CLAUDE_SETTINGS"
+  FAKE_CLAUDE_TIMEOUT=1 run "$CLAUDE" <<<"x /perm"
+  [[ $output == *"permission: deny"* ]]
+  [[ $output == *"permission-message: use rg instead"* ]]
+  grep -qx 'permission deny' "$FAKE_CLAUDE_HOME/events.log"
+  grep -qx 'permission-message: use rg instead' "$FAKE_CLAUDE_HOME/events.log"
 }

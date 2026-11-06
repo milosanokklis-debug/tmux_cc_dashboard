@@ -23,6 +23,9 @@
       {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh needs_approval"}]},
       {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh waiting"}]}
     ],
+    "PermissionRequest": [
+      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/permission.sh", "timeout": 150}]}
+    ],
     "Stop": [
       {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh waiting"}]}
     ],

@@ -257,7 +257,7 @@ function buildTree({ agentsDir, transcriptRoot, panes, table, now = Date.now(), 
     if (!byProject.has(project)) byProject.set(project, []);
     byProject.get(project).push({
       sid, win: c.win, status, startedTs: sec(c.startedTs), endedTs: status === 'ended' ? sec(c.endedTs) : null, subagents,
-      ...(st ? { idle: st.idle, quiet: st.quiet, outsideTmux: st.outsideTmux, wakeable: st.status === 'sleeping' || st.status === 'ended' } : {}),
+      ...(st ? { idle: st.idle, quiet: st.quiet, outsideTmux: st.outsideTmux, wakeable: st.status === 'sleeping' || st.status === 'ended', canPrompt: st.status === 'waiting' } : {}),
     });
   }
   return [...byProject.keys()].sort().map((project) => ({

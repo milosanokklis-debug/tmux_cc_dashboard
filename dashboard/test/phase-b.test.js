@@ -3,85 +3,10 @@
 // real reconciler. Only the paths and the timings are overridden (see stack()).
 const test = require('node:test');
 const assert = require('node:assert');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { createReconciler } = require('../lib/state');
-const { createTmux, readProcTable, hasClaude } = require('../lib/tmux');
-
-const ROOT = path.resolve(__dirname, '..', '..');
-const SESSION = path.join(ROOT, 'rootfs/usr/local/bin/ccd-session');
-const haveTmux = spawnSync('tmux', ['-V']).status === 0 && spawnSync('jq', ['--version']).status === 0;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function stack() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-b-'));
-  const home = path.join(tmp, 'home');
-  const ws = path.join(tmp, 'ws');
-  const bin = path.join(tmp, 'bin');
-  const sock = path.join(tmp, 'tmux.sock');
-  for (const d of [home, ws, bin]) fs.mkdirSync(d);
-  fs.symlinkSync(path.join(ROOT, 'tests/fake-claude/claude'), path.join(bin, 'claude'));
-  // bash -l resets PATH from /etc/profile; ~/.bash_profile puts the fake claude back
-  fs.writeFileSync(path.join(home, '.bash_profile'), `export PATH=${bin}:$PATH\n`);
-  const settings = path.join(tmp, 'settings.json');
-  fs.writeFileSync(settings, fs.readFileSync(path.join(ROOT, 'rootfs/etc/claude-code/managed-settings.json'), 'utf8')
-    .replaceAll('/usr/local/lib/ccdash', path.join(ROOT, 'rootfs/usr/local/lib/ccdash')));
-  const stateDir = path.join(home, '.ccdash', 'sessions');
-  const env = {
-    ...process.env, HOME: home, CCDASH_WS: ws, CCDASH_TMUX: sock, CCDASH_STATE: stateDir,
-    FAKE_CLAUDE_SETTINGS: settings, FAKE_CLAUDE_FIXTURES: path.join(ROOT, 'tests/fixtures/2.1.317'),
-    FAKE_CLAUDE_HOME: path.join(tmp, 'fake'), FAKE_CLAUDE_TIMEOUT: '5',
-  };
-  delete env.TMUX; delete env.TMUX_PANE;
-  const tmux = createTmux({ sock });
-  const t = (...a) => execFileSync('tmux', ['-S', sock, ...a], { env, encoding: 'utf8' });
-  const rec = createReconciler({ stateDir, tmux, idleSec: 5, quietSec: 5, intervalMs: 200, log: () => {} });
-  const s = {
-    tmp, ws, env, stateDir, tmux, rec, t,
-    ccd: (...a) => execFileSync(SESSION, a, { env, encoding: 'utf8' }).trim(),
-    project(name) { fs.mkdirSync(path.join(ws, name)); return name; },
-    records() {
-      if (!fs.existsSync(stateDir)) return [];
-      return fs.readdirSync(stateDir).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(path.join(stateDir, f), 'utf8')));
-    },
-    // newest conversation of a project that has not been replaced by a wake
-    cur(name) {
-      const d = rec.snapshot() ?? new Map();
-      const mine = s.records().filter((r) => r.project === path.join(ws, name)).sort((a, b) => b.ts - a.ts);
-      return mine.map((r) => d.get(r.sid)).filter((c) => c && !c.hidden)[0] ?? null;
-    },
-    async until(fn, what, ms = 10000) {
-      const end = Date.now() + ms;
-      let last;
-      while (Date.now() < end) { last = fn(); if (last) return last; await sleep(50); }
-      assert.fail(`timed out waiting for ${what}`);
-      return null;
-    },
-    async status(name, want, ms) { return s.until(() => { const c = s.cur(name); return c && c.status === want ? c : null; }, `${name} to be ${want} (now ${s.cur(name)?.status})`, ms); },
-    send(name, text) {
-      const pane = s.cur(name).pane ?? s.records().find((r) => r.project === path.join(ws, name)).pane;
-      t('send-keys', '-t', pane, '-l', text);
-      t('send-keys', '-t', pane, 'Enter');
-    },
-    claudePid(name) {
-      const pane = s.records().filter((r) => r.project === path.join(ws, name)).sort((a, b) => b.ts - a.ts)[0].pane;
-      const panePid = Number(t('display', '-p', '-t', pane, '#{pane_pid}'));
-      const table = readProcTable();
-      for (const [pid, p] of table) if (p.comm === 'claude' && hasClaude(table, panePid) && isDescendant(table, pid, panePid)) return pid;
-      return null;
-    },
-    cleanup() { rec.stop(); try { t('kill-server'); } catch { /* none */ } fs.rmSync(tmp, { recursive: true, force: true }); },
-  };
-  rec.start();
-  return s;
-}
-
-function isDescendant(table, pid, root) {
-  for (let p = pid; p && table.has(p); p = table.get(p).ppid) if (p === root) return true;
-  return false;
-}
+const { SESSION, haveTmux, sleep, stack } = require('./stack');
 
 test('Phase B: status, liveness and wake against the fake claude', { skip: !haveTmux && 'needs tmux and jq' }, async (t) => {
   const s = stack();
@@ -96,13 +21,13 @@ test('Phase B: status, liveness and wake against the fake claude', { skip: !have
     await s.status('p2', 'waiting');
     assert.strictEqual(s.cur('p1').outsideTmux, false);
 
-    s.send('p1', '/perm'); // a prompt Claude is busy with (blocked on the dialog)
-    await s.status('p1', 'working');
+    s.send('p1', '/perm'); // the PermissionRequest hook marks needs_approval, then (no broker) the dialog shows
+    await s.status('p1', 'needs_approval');
     s.send('p1', 'y');
     await s.status('p1', 'waiting');
 
     s.send('p1', 'run /tool /perm'); // tool call, then blocked
-    await s.status('p1', 'working');
+    await s.status('p1', 'needs_approval');
     s.send('p1', 'y');
     await s.status('p1', 'waiting');
 
@@ -200,7 +125,15 @@ test('Phase B: status, liveness and wake against the fake claude', { skip: !have
     const live = [...s.rec.snapshot().values()].filter((c) => c.status === 'waiting');
     assert.ok(live.length >= 2, 'p4 and p5 woken conversations plus p6');
     s.t('kill-server');
-    s.t('new-session', '-d', '-s', 'keep'); // what s6 does: a fresh server with a new pid
+    // The old server dies asynchronously; starting a new one while it still holds the socket makes
+    // tmux print "server exited unexpectedly". Wait until it is gone, then retry the start on that error.
+    await s.until(() => { try { s.t('has-session'); return false; } catch { return true; } }, 'old tmux server gone', 5000);
+    for (let i = 0; ; i++) {
+      try { s.t('new-session', '-d', '-s', 'keep'); break; } catch (e) { // what s6 does: a fresh server with a new pid
+        if (i >= 5 || !/server exited unexpectedly|no server running/.test(String(e.stderr ?? e.message))) throw e;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
     await s.until(() => live.every((c) => s.rec.get(c.sid)?.status === 'sleeping'), 'every conversation sleeping', 10000);
   });
 });
