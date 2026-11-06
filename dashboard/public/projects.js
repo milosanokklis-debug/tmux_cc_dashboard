@@ -24,10 +24,35 @@
     const status = h('div', { class: 'card-result', role: 'status', 'aria-live': 'polite' });
     const failure = h('div', { class: 'card-result is-error', role: 'alert' });
     const results = h('div', { class: 'card-results' }, [status, failure]);
-    const li = h('li', { class: 'card' }, [h('h3', { class: 'card-name', text: p.name }), meta, results, button]);
-    const c = { li, chip: null, state: null, button, meta, head, pull, status, alert: failure, repo: null };
+    // Kit line: version, pack chips, memory chip. "No kit" when the project was never onboarded.
+    const kit = h('div', { class: 'card-kit' });
+    // Pack editor: a collapsible so the card stays compact. The Apply button is enabled only when the boxes differ from the current packs.
+    const id = 'packs-' + p.name.replace(/[^A-Za-z0-9_-]/g, '_');
+    const packDesign = h('input', { type: 'checkbox', id: id + '-design', name: 'design' });
+    const packCode = h('input', { type: 'checkbox', id: id + '-code', name: 'code' });
+    const apply = h('button', { type: 'button', class: 'btn btn-primary card-apply', text: 'Apply', disabled: true, 'aria-describedby': id + '-hint' });
+    const packsBox = h('fieldset', { class: 'packs-fields' }, [
+      h('legend', { text: 'Packs for ' + p.name }),
+      h('p', { class: 'packs-core', text: 'Core (always on)' }),
+      h('label', { class: 'check', for: id + '-design' }, [packDesign, document.createTextNode(' Design pack')]),
+      h('label', { class: 'check', for: id + '-code' }, [packCode, document.createTextNode(' Code pack')]),
+    ]);
+    const packs = h('details', { class: 'card-packs' }, [
+      h('summary', { text: 'Packs' }),
+      h('div', { class: 'packs-body' }, [
+        packsBox,
+        h('p', { id: id + '-hint', class: 'hint', text: 'Applying reruns onboarding. It can take a few minutes and does not restart Claude.' }),
+        apply,
+      ]),
+    ]);
+    const li = h('li', { class: 'card' }, [h('h3', { class: 'card-name', text: p.name }), meta, kit, packs, results, button]);
+    const c = { li, chip: null, state: null, button, meta, head, pull, status, alert: failure, repo: null, kit, packs, packDesign, packCode, packsBox, apply, base: null };
     button.addEventListener('click', () => openProject(p.name, button));
     pull.addEventListener('click', () => pullProject(p.name, c));
+    const changed = () => { c.apply.disabled = c.apply.getAttribute('aria-busy') === 'true' ? false : !packsDirty(c); };
+    packDesign.addEventListener('change', changed);
+    packCode.addEventListener('change', changed);
+    apply.addEventListener('click', () => applyPacks(p.name, c));
     return c;
   }
 
@@ -54,6 +79,117 @@
     c.pull.setAttribute('aria-label', 'Pull latest for ' + p.name);
     c.meta.hidden = !(c.repo || c.head.textContent);
     c.pull.hidden = !c.repo;
+    renderKit(c, p.kit);
+  }
+
+  const MEMORY = {
+    connected: { label: 'Memory connected', icon: '✓', cls: 'ok' },
+    missing: { label: 'Memory missing', icon: '!', cls: 'warn' },
+    unknown: { label: 'Memory unknown', icon: '?', cls: 'warn' },
+  };
+
+  function renderKit(c, kit) {
+    const sig = JSON.stringify(kit || null);
+    if (c.kitSig === sig) return;
+    c.kitSig = sig;
+    if (!kit) {
+      c.kit.replaceChildren(h('span', { class: 'chip chip-nokit' }, [
+        h('span', { class: 'chip-icon', 'aria-hidden': 'true', text: '–' }),
+        h('span', { text: 'No kit' }),
+      ]));
+      c.packs.hidden = true;
+      c.base = null;
+      return;
+    }
+    const kids = [h('span', { class: 'kit-version', text: 'kit ' + (kit.version || '?') })];
+    for (const pk of kit.packs || []) kids.push(h('span', { class: 'chip chip-pack', text: pk }));
+    const m = MEMORY[kit.memory] || MEMORY.unknown;
+    kids.push(h('span', { class: 'chip chip-mem-' + m.cls }, [
+      h('span', { class: 'chip-icon', 'aria-hidden': 'true', text: m.icon }),
+      h('span', { text: m.label }),
+    ]));
+    c.kit.replaceChildren(...kids);
+    c.packs.hidden = false;
+    // Refresh the boxes from the server unless the user has edited them or an apply is running.
+    const wasDirty = packsDirty(c);
+    c.base = { design: (kit.packs || []).includes('kit-design'), code: (kit.packs || []).includes('kit-code') };
+    if (c.apply.getAttribute('aria-busy') !== 'true' && !wasDirty) {
+      c.packDesign.checked = c.base.design;
+      c.packCode.checked = c.base.code;
+    }
+    c.apply.disabled = c.apply.getAttribute('aria-busy') === 'true' ? false : !packsDirty(c);
+  }
+
+  function packsDirty(c) {
+    return !!c.base && (c.packDesign.checked !== c.base.design || c.packCode.checked !== c.base.code);
+  }
+
+  // Shows a message (and optional log, in a collapsible pre) in the card's live regions.
+  // Failures go to the alert region, results to the polite status region; the other is cleared.
+  function showResult(c, msg, opts) {
+    opts = opts || {};
+    const kids = [];
+    if (opts.title) kids.push(h('p', { class: 'card-result-title', text: opts.title }));
+    kids.push(h('p', { class: 'card-result-msg', text: msg }));
+    if (opts.log) {
+      kids.push(h('details', { open: opts.open }, [
+        h('summary', { text: opts.logLabel || 'Show log' }),
+        h('div', { role: 'group', 'aria-label': opts.logName || 'Log' }, [h('pre', { tabindex: '0', text: String(opts.log) })]),
+      ]));
+    }
+    if (opts.retry) kids.push(opts.retry);
+    const region = opts.error ? c.alert : c.status;
+    (opts.error ? c.status : c.alert).replaceChildren();
+    region.replaceChildren(...kids);
+    c.li.classList.toggle('is-memory-offline', !!opts.offline);
+  }
+
+  async function applyPacks(name, c) {
+    const btn = c.apply;
+    if (btn.getAttribute('aria-busy') === 'true' || !packsDirty(c)) return;
+    const want = { design: c.packDesign.checked, code: c.packCode.checked };
+    btn.setAttribute('aria-disabled', 'true');
+    btn.setAttribute('aria-busy', 'true');
+    btn.disabled = false;
+    btn.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), document.createTextNode('Applying…'));
+    c.packDesign.disabled = c.packCode.disabled = true;
+    c.status.replaceChildren();
+    c.alert.replaceChildren();
+    c.li.classList.remove('is-memory-offline');
+    showResult(c, 'Applying packs… this can take a few minutes.', {});
+    try {
+      const r = await api('/api/projects/' + encodeURIComponent(name) + '/packs', { method: 'POST', body: want });
+      const d = r.data || {};
+      if (r.ok) {
+        showResult(c, d.message || 'Packs updated.', {});
+        const kit = (d.project && d.project.kit) || null;
+        if (kit) { c.kitSig = null; renderKit(c, kit); }
+        if (active) load();
+      } else if (d.error === 'kit-failed') {
+        const retry = h('button', { type: 'button', class: 'btn card-retry', text: 'Retry', 'aria-label': 'Retry applying packs for ' + name });
+        retry.addEventListener('click', () => applyPacks(name, c));
+        showResult(c, d.message || 'The kit failed (code ' + d.code + ').', { error: true, log: d.log, open: true, logName: 'Kit log for ' + name, retry });
+      } else if (d.error === 'memory-offline') {
+        showMemoryOffline(c, d);
+      } else {
+        showResult(c, d.error || 'Could not change packs (HTTP ' + r.status + ').', { error: true });
+      }
+    } catch (e) {
+      if (e.message !== 'unauthorized') showResult(c, 'Network error: ' + e.message, { error: true });
+    } finally {
+      btn.removeAttribute('aria-disabled');
+      btn.removeAttribute('aria-busy');
+      btn.textContent = 'Apply';
+      c.packDesign.disabled = c.packCode.disabled = false;
+      btn.disabled = !packsDirty(c);
+    }
+  }
+
+  function showMemoryOffline(c, d) {
+    showResult(c, d.message || 'memory offline', {
+      error: true, offline: true, title: 'Memory offline', log: d.output, open: true,
+      logLabel: 'Show output', logName: 'Memory check output',
+    });
   }
 
   function render(list) {
@@ -121,9 +257,19 @@
     button.setAttribute('aria-disabled', 'true');
     button.setAttribute('aria-busy', 'true');
     button.textContent = starting ? 'Starting…' : 'Opening…';
+    const own = cards.get(name);
+    if (own) { own.status.replaceChildren(); own.alert.replaceChildren(); own.li.classList.remove('is-memory-offline'); }
     try {
       const r = await api('/api/projects/' + encodeURIComponent(name) + '/open', { method: 'POST' });
-      if (!r.ok) throw new Error((r.data && r.data.error) || 'HTTP ' + r.status);
+      const d = r.data || {};
+      if (!r.ok && cards.has(name) && (d.error === 'memory-offline' || d.error === 'kit-failed')) {
+        const c = cards.get(name);
+        if (d.error === 'memory-offline') showMemoryOffline(c, d);
+        else showResult(c, d.message || 'The kit failed.', { error: true, log: d.log, open: true, logName: 'Kit log for ' + name });
+        c.alert.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
       window.ccdash.go(name);
     } catch (e) {
       if (e.message !== 'unauthorized') notice('Could not open ' + name + ': ' + e.message, 'error');
@@ -144,6 +290,7 @@
     btn.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), document.createTextNode('Pulling…'));
     c.status.replaceChildren();
     c.alert.replaceChildren();
+    c.li.classList.remove('is-memory-offline');
     const show = (msg, log, isError) => {
       const kids = [h('p', { class: 'card-result-msg', text: msg })];
       if (log) {
@@ -298,12 +445,18 @@
     if (token) body.token = token;
     if (prompt.trim()) body.prompt = prompt;
     if (!$('add-trust-field').hidden && $('add-trust').checked) body.trustHooks = true;
+    if ($('add-design').checked) body.design = true;
+    if ($('add-code').checked) body.code = true;
     setBusy(true);
     try {
       const r = await api('/api/projects', { method: 'POST', body });
       if (!r.ok) {
         const d = r.data || {};
         if (r.status === 409 && d.error === 'repo-has-hooks') { hooksRefused(d); return; }
+        if (r.status === 409 && (d.error === 'kit-failed' || d.error === 'memory-offline')) {
+          showError(d.message || d.error, d.log || d.output);
+          return;
+        }
         showError(d.error || 'Could not add project (HTTP ' + r.status + ').', d.log);
         if (r.status === 400 && /repo|owner/i.test(d.error || '')) markRepoInvalid(true);
         return;
