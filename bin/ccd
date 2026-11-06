@@ -27,6 +27,9 @@ case "${1:-}" in
     echo "git identity set to $name $email"
     ;;
   login) run claude ;;
-  passwd) [ $# -le 2 ] && { [ $# -lt 2 ] || [ "$2" = --totp ] || [ "$2" = --no-totp ]; } || usage; $D exec -it -u web ccdash node /opt/ccdash/dashboard/ccdash-passwd.js "${@:2}" ;;
+  passwd)
+    if [ "$#" -le 2 ] && { [ "$#" -lt 2 ] || [ "$2" = --totp ] || [ "$2" = --no-totp ]; }; then
+      $D exec -it -u web ccdash node /opt/ccdash/dashboard/ccdash-passwd.js "${@:2}"
+    else usage; fi ;;
   *) usage ;;
 esac
