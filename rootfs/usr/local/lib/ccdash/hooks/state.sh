@@ -2,6 +2,8 @@
 # Records the conversation state (working, needs_approval, waiting, error, ended) per session id
 # in ~/.ccdash/sessions/<sid>.json. Must never block or fail Claude: every path exits 0.
 set -uo pipefail
+# a hidden helper Claude (CCDASH_HIDDEN=1, the /usage fallback) is not a conversation
+if [ "${CCDASH_HIDDEN:-}" = 1 ]; then cat >/dev/null; exit 0; fi
 umask 027
 base=${HOME:-/tmp}/.ccdash
 dir=$base/sessions

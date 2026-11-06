@@ -12,6 +12,11 @@ if [ -r /run/s6/container_environment/CCDASH_APPROVAL_WAIT ]; then
   CCDASH_APPROVAL_WAIT=$(cat /run/s6/container_environment/CCDASH_APPROVAL_WAIT)
   export CCDASH_APPROVAL_WAIT
 fi
+# statusline.sh runs CCDASH_STATUSLINE_CMD when it is set (a custom status line)
+if [ -r /run/s6/container_environment/CCDASH_STATUSLINE_CMD ]; then
+  CCDASH_STATUSLINE_CMD=$(cat /run/s6/container_environment/CCDASH_STATUSLINE_CMD)
+  export CCDASH_STATUSLINE_CMD
+fi
 (
   i=0
   while [ "$i" -lt 300 ]; do

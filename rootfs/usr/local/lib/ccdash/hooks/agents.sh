@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Records Claude Code session/subagent events. Must never block or fail Claude.
 set -uo pipefail
+# a hidden helper Claude (CCDASH_HIDDEN=1, the /usage fallback) is not a conversation
+if [ "${CCDASH_HIDDEN:-}" = 1 ]; then cat >/dev/null; exit 0; fi
 umask 027
 ev=${1:-}
 d=${HOME:-/tmp}/.ccdash/agents
