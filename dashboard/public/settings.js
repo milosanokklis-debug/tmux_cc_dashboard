@@ -242,24 +242,25 @@
 
   // ---- Signed-in devices ----
   const sessList = $('sess-list');
-  const rtf = typeof Intl !== 'undefined' && Intl.RelativeTimeFormat ? new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }) : null;
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
   const UNITS = [['day', 86400000], ['hour', 3600000], ['minute', 60000]];
 
   function rel(ms) {
     const diff = ms - Date.now();
     if (Math.abs(diff) < 60000) return 'just now';
-    for (const [unit, size] of UNITS) {
-      if (Math.abs(diff) >= size) {
-        const n = Math.round(diff / size);
-        return rtf ? rtf.format(n, unit) : Math.abs(n) + ' ' + unit + (Math.abs(n) === 1 ? '' : 's') + ' ago';
-      }
-    }
-    return 'just now';
+    const [unit, size] = UNITS.find(([, sz]) => Math.abs(diff) >= sz);
+    return rtf.format(Math.round(diff / size), unit);
   }
 
-  function timeEl(ms) {
-    const t = h('time', { datetime: new Date(ms).toISOString(), title: new Date(ms).toLocaleString(), text: rel(ms) });
-    return t;
+  // "Chrome 126 on Windows" from a User-Agent string; null when nothing is recognised.
+  function describeUa(ua) {
+    const m = /(Edg|Firefox|Chrome|CriOS|FxiOS|curl)\/(\d+)/.exec(ua);
+    const safari = !m && /Safari\//.test(ua) && /Version\/(\d+)/.exec(ua);
+    if (!m && !safari) return null;
+    const [name, ver] = m ? [m[1], m[2]] : ['Safari', safari[1]];
+    const browser = { Edg: 'Edge', CriOS: 'Chrome', FxiOS: 'Firefox' }[name] || name;
+    const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad|iPod/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows' : /Mac OS X|Macintosh/.test(ua) ? 'macOS' : /Linux|X11/.test(ua) ? 'Linux' : '';
+    return browser + ' ' + ver + (os ? ' on ' + os : '');
   }
 
   function sessState(msg) { $('sess-state').textContent = msg || ''; $('sess-state').hidden = !msg; }
@@ -267,16 +268,16 @@
 
   function sessRow(s) {
     const ua = s.ua || 'Unknown browser';
-    const label = ua.length > 60 ? ua.slice(0, 59) + '…' : ua;
+    const label = describeUa(ua) || (ua.length > 60 ? ua.slice(0, 59) + '…' : ua);
     const head = [h('span', { class: 'sess-ua', title: ua, text: label })];
     if (s.current) head.push(h('span', { class: 'chip chip-done sess-badge', text: 'This device' }));
     const meta = h('dl', { class: 'sess-meta' }, [
-      h('div', {}, [h('dt', { text: 'Signed in' }), h('dd', {}, [timeEl(s.created)])]),
-      h('div', {}, [h('dt', { text: 'Last seen' }), h('dd', {}, [timeEl(s.lastSeen)])]),
+      h('div', {}, [h('dt', { text: 'Signed in' }), h('dd', {}, [h('time', { datetime: new Date(s.created).toISOString(), title: new Date(s.created).toLocaleString(), text: rel(s.created) })])]),
+      h('div', {}, [h('dt', { text: 'Last seen' }), h('dd', {}, [h('time', { datetime: new Date(s.lastSeen).toISOString(), title: new Date(s.lastSeen).toLocaleString(), text: rel(s.lastSeen) })])]),
       h('div', {}, [h('dt', { text: 'IP' }), h('dd', { class: 'sess-ip', text: s.ip || 'unknown' })]),
     ]);
     const li = h('li', { class: 'sess-row', 'data-testid': 'session-row', 'data-current': s.current ? 'true' : null }, [
-      h('div', { class: 'sess-head' }, head), meta,
+      h('div', { class: 'sess-head' }, head), ...(label !== ua ? [h('p', { class: 'sess-ua-full', text: ua })] : []), meta,
     ]);
     if (!s.current) {
       const btn = h('button', { type: 'button', class: 'btn btn-danger sess-revoke', 'data-testid': 'session-revoke', 'aria-label': 'Revoke session: ' + label + ', last seen ' + rel(s.lastSeen), text: 'Revoke' });
@@ -314,8 +315,8 @@
       const r = await api('/api/sessions/revoke', { method: 'POST', body: { id } });
       if (r.ok && r.data && r.data.current) { window.location.assign('/login'); return; }
       if (!r.ok && r.status !== 404) throw new Error((r.data && r.data.error) || 'HTTP ' + r.status);
-      notice(r.status === 404 ? 'That device was already signed out.' : 'Device signed out.', 'info');
       await sessLoad('.sess-revoke');
+      sessState(r.status === 404 ? 'That device was already signed out.' : 'Device signed out.');
     } catch (e) {
       if (e.message !== 'unauthorized') { sessError('Could not revoke: ' + e.message); btn.disabled = false; btn.textContent = 'Revoke'; }
     }

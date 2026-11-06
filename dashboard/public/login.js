@@ -6,6 +6,8 @@ form.addEventListener('submit', async (ev) => {
   ev.preventDefault();
   errorEl.textContent = '';
   form.password.removeAttribute('aria-invalid');
+  form.code.removeAttribute('aria-invalid');
+  form.code.setAttribute('aria-describedby', 'code-hint');
   form.password.removeAttribute('aria-describedby');
   const button = form.querySelector('button');
   button.disabled = true;
@@ -26,9 +28,11 @@ form.addEventListener('submit', async (ev) => {
     if (res.ok && data.enroll) { startEnroll(); return; }
     if (res.ok) { window.location.assign('/'); return; }
     if (data.totp) {
+      const retry = !document.getElementById('codebox').hidden;
       document.getElementById('codebox').hidden = false;
       form.code.focus();
       errorEl.textContent = data.error || '';
+      if (retry && data.error) { form.code.setAttribute('aria-invalid', 'true'); form.code.setAttribute('aria-describedby', 'code-hint error'); }
       return;
     }
     errorEl.textContent = data.error || 'Sign in failed.';
