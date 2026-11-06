@@ -19,10 +19,13 @@
     const head = h('span', { class: 'card-head' });
     const pull = h('button', { type: 'button', class: 'btn card-pull', text: 'Pull' });
     const meta = h('div', { class: 'card-meta' }, [head, pull]);
-    // Persistent polite status region: polling never rebuilds it, so a result message survives re-renders.
-    const result = h('div', { class: 'card-result', role: 'status', 'aria-live': 'polite' });
-    const li = h('li', { class: 'card' }, [h('h3', { class: 'card-name', text: p.name }), meta, result, button]);
-    const c = { li, chip: null, state: null, button, meta, head, pull, result, repo: null };
+    // Two persistent live regions, both always in the DOM: a polite status for results, an alert for failures.
+    // Polling never rebuilds them, so a message survives re-renders.
+    const status = h('div', { class: 'card-result', role: 'status', 'aria-live': 'polite' });
+    const failure = h('div', { class: 'card-result is-error', role: 'alert' });
+    const results = h('div', { class: 'card-results' }, [status, failure]);
+    const li = h('li', { class: 'card' }, [h('h3', { class: 'card-name', text: p.name }), meta, results, button]);
+    const c = { li, chip: null, state: null, button, meta, head, pull, status, alert: failure, repo: null };
     button.addEventListener('click', () => openProject(p.name, button));
     pull.addEventListener('click', () => pullProject(p.name, c));
     return c;
@@ -42,7 +45,7 @@
       : 'Open ' + p.name + ' (' + STATES[p.state].label + ')');
     c.repo = p.repo || null;
     const pulling = c.pull.getAttribute('aria-busy') === 'true';
-    const headText = p.head ? 'HEAD ' + p.head : '';
+    const headText = p.head ? 'head ' + p.head : '';
     // While a pull runs, or right after one, the pull response is fresher than a poll that began before it.
     if (!pulling && c.head.textContent !== headText && !(c.freshHead && Date.now() < c.freshHead.until && c.head.textContent === c.freshHead.text)) {
       c.head.textContent = headText;
@@ -116,8 +119,8 @@
     btn.setAttribute('aria-disabled', 'true');
     btn.setAttribute('aria-busy', 'true');
     btn.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), document.createTextNode('Pulling…'));
-    c.result.replaceChildren();
-    c.result.classList.remove('is-error');
+    c.status.replaceChildren();
+    c.alert.replaceChildren();
     const show = (msg, log, isError) => {
       const kids = [h('p', { class: 'card-result-msg', text: msg })];
       if (log) {
@@ -126,8 +129,10 @@
           h('pre', { tabindex: '0', 'aria-label': 'Pull log for ' + name, text: String(log) }),
         ]));
       }
-      c.result.classList.toggle('is-error', !!isError);
-      c.result.replaceChildren(...kids);
+      // Failures go to the alert region, results to the polite status region; the other one is cleared.
+      const region = isError ? c.alert : c.status;
+      (isError ? c.status : c.alert).replaceChildren();
+      region.replaceChildren(...kids);
     };
     try {
       const r = await api('/api/projects/' + encodeURIComponent(name) + '/pull', { method: 'POST', body: {} });
@@ -137,7 +142,7 @@
       } else {
         show(d.message || 'Pulled ' + name + '.', null, false);
         if (d.head) {
-          c.head.textContent = 'HEAD ' + d.head;
+          c.head.textContent = 'head ' + d.head;
           c.head.hidden = false;
           c.meta.hidden = false;
           c.freshHead = { text: c.head.textContent, until: Date.now() + 10000 };

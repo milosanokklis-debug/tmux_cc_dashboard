@@ -1,7 +1,7 @@
 'use strict';
 // Notifications settings: Web Push subscribe / unsubscribe and which events to notify about.
 (function () {
-  const { api, notice } = window.ccdash;
+  const { api, h, notice } = window.ccdash;
   const $ = (id) => document.getElementById(id);
   const KEYS = ['approval', 'error', 'finished'];
   const STATE_TEXT = {
@@ -26,9 +26,8 @@
   }
 
   function showError(msg) {
-    const el = $('notif-error');
-    el.textContent = msg || '';
-    el.hidden = !msg;
+    // The live region stays rendered; it is empty (and collapsed by CSS :empty) when there is no message.
+    $('notif-error').textContent = msg || '';
   }
 
   function prefsFromUi() {
@@ -137,7 +136,6 @@
   $('notif-open').addEventListener('click', () => {
     opener = $('notif-open');
     dlg.showModal();
-    gidDirty = false;
     gidStatus('');
     gidField(gidName, $('gid-name-err'), '');
     gidField(gidEmail, $('gid-email-err'), '');
@@ -156,16 +154,15 @@
   const gidEmail = $('gid-email');
   let gidDirty = false;
 
+  // Field-error slots and the status line are always rendered; empty ones keep their reserved space or collapse via CSS.
   function gidField(input, errEl, msg) {
     errEl.textContent = msg || '';
-    errEl.hidden = !msg;
     if (msg) input.setAttribute('aria-invalid', 'true'); else input.removeAttribute('aria-invalid');
   }
 
   function gidStatus(msg, isError) {
     const el = $('gid-status');
     el.textContent = msg || '';
-    el.hidden = !msg;
     el.classList.toggle('is-error', !!isError);
   }
 
@@ -207,7 +204,7 @@
     if (!v.ok) { v.first.focus(); return; }
     save.setAttribute('aria-busy', 'true');
     save.setAttribute('aria-disabled', 'true');
-    save.textContent = 'Saving…';
+    save.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), document.createTextNode('Saving…'));
     try {
       const r = await api('/api/git-identity', { method: 'POST', body: { name: v.name, email: v.email } });
       const d = r.data || {};
