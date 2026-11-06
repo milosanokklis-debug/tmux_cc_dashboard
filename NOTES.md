@@ -343,3 +343,10 @@ Tests: `dashboard/test/phase-e-events.test.js`.
 
 ### Review fixes (Phase E)
 - Transcript view skips one oversized line (full window, no newline, not at EOF) and sets `truncated`; the token reader drops a partial line over 8 MB and skips to the next newline. usage/*.json: newest by mtime first before the 1000 cap, files older than 7 days deleted by statusline.sh (ccd side, at most daily; the dashboard runs as web and cannot). /events: at most 8 sockets per session (32 total). hook.log is truncated above 256 KB. The usage fallback aborts on any trust/onboarding text, names its window `ccdash-usage` and kills stale ones before its first run. Env knobs CCDASH_EVENTS_* and CCDASH_USAGE_DIR removed.
+
+## Phase F: TOTP
+- `dashboard/lib/totp.js` (node:crypto: base32, `hotp`, `verify(secret, code, nowMs)` -> matched step or null, `otpauthUri`). QR: `qrcode-generator` 2.0.4 (pinned, zero deps) via `dashboard/lib/qr.js` (`terminal`, `svg`).
+- auth.json (0600) gains `totp: {secret, lastStep}`, `recovery: [argon2id hashes]` (10 codes, removed on use), optional `totpRequired`. Env `CCDASH_TOTP_REQUIRED=1` does the same. A password change keeps them; `ccd passwd --totp` / `--no-totp` end all sessions.
+- `POST /login {username, password, code?}`: TOTP on and no `code` -> `401 {totp:true}` (refunded, not a failure). Wrong/reused/old-step code or spent recovery code -> `401` generic, counted like a wrong password. `code` is a TOTP code or a recovery code.
+- Enrol mode (`totpRequired` and nothing enrolled): a correct password returns `200 {ok:true, enroll:true}` with a limited, in-memory, 10 min session. It may only call `GET /api/totp/enroll` -> `{uri, qrSvg}` and `POST /api/totp/enroll {code}` -> `{ok, recovery:[10 codes]}` plus a full session cookie. Everything else (and WebSockets) returns 403/401.
+- Audit hook: `createApp({audit})`, default no-op, `audit(event, {ip, outcome})` for `login` (ok/fail/enroll), `totp.change`, `totp.enroll`, `auth.change` (credentials changed on disk).

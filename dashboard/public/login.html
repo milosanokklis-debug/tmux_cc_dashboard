@@ -18,8 +18,22 @@
     <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
     <label for="password">Password</label>
     <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <div id="codebox" hidden>
+      <label for="code">Authentication or recovery code</label>
+      <input id="code" name="code" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="none" spellcheck="false">
+    </div>
     <p id="error" role="alert"></p>
     <button type="submit">Sign in</button>
+  </form>
+  <form id="enroll" hidden novalidate>
+    <p>Two-factor sign-in is required. Scan this code with an authenticator app, then enter a code from it.</p>
+    <div id="qr"></div>
+    <label for="ecode">Code</label>
+    <input id="ecode" name="ecode" type="text" inputmode="numeric" autocomplete="one-time-code" spellcheck="false">
+    <p id="eerror" role="alert"></p>
+    <button type="submit">Enable and sign in</button>
+    <pre id="recovery" hidden></pre>
+    <button type="button" id="done" hidden>Continue</button>
   </form>
 </main>
 <script src="/assets/login.js" defer></script>

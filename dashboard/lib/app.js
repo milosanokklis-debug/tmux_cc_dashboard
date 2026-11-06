@@ -3,6 +3,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { setTimeout: sleep } = require('node:timers/promises');
 const { WebSocketServer } = require('ws');
 const authstore = require('./authstore');
@@ -16,6 +17,10 @@ const { createTerm } = require('./term');
 const { createEvents } = require('./events');
 const { createBroker } = require('./broker');
 const { createPush } = require('./push');
+const totp = require('./totp');
+const qr = require('./qr');
+
+const ENROLL_TTL_MS = 10 * 60 * 1000;
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const TYPES = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
@@ -41,6 +46,8 @@ function createApp({
   log = console.error,
   services = {},
   broker: brokerOpts = {}, // { sock (null = off), waitSec }
+  audit = () => {}, // audit(event, { ip, outcome, ... }); hook for the audit log (ids and outcomes only)
+  hashOptions, // argon2 options for recovery codes (tests use cheap ones)
 } = {}) {
   const svc = { ...defaultServices(), ...services };
   const rec = svc.reconciler;
@@ -86,7 +93,9 @@ function createApp({
     }
     authBroken = false;
     authStamp = stamp;
+    const changed = auth && next && auth.generation !== next.generation;
     auth = next;
+    if (changed) audit('auth.change', { outcome: 'ok' }); // password or TOTP changed by `ccd passwd`
     if (sessions && sessions.setGeneration(generationOf())) { registry.closeAll(); svc.push.clear(); }
   }
   refreshAuth();
@@ -95,10 +104,23 @@ function createApp({
 
   function tick() {
     refreshAuth();
+    for (const [k, e] of enrolling) if (e.expires <= clock.now()) enrolling.delete(k);
     for (const key of sessions.sweep()) registry.closeSession(key);
     registry.closeWhere((key) => !sessions.map.has(key));
     svc.push.prune((k) => sessions.map.has(k)); // also covers sessions dropped lazily on a failed validate
   }
+
+  // Limited sessions for "TOTP required, not enrolled": in memory only, may use nothing but /api/totp/enroll.
+  const enrolling = new Map(); // session key -> { expires, secret }
+  const enrollSession = (req) => {
+    const id = sec.sessionIdFromRequest(req);
+    if (!id) return null;
+    const key = sessions.keyOf(id);
+    const e = enrolling.get(key);
+    if (!e) return null;
+    if (e.expires <= clock.now()) { enrolling.delete(key); return null; }
+    return { key, e };
+  };
 
   const currentSession = (req) => {
     const id = sec.sessionIdFromRequest(req);
@@ -142,6 +164,8 @@ function createApp({
 
     const id = currentSession(req);
     if (!id) {
+      const enr = enrollSession(req);
+      if (enr) return enrollRoute(req, res, pathname, enr);
       if (isApi) return send(res, 401, { error: 'unauthorized' });
       return redirect(res, '/login');
     }
@@ -179,6 +203,37 @@ function createApp({
     }
   }
 
+  async function enrollRoute(req, res, pathname, { key, e }) {
+    if (pathname !== '/api/totp/enroll' || (req.method !== 'GET' && req.method !== 'POST')) {
+      return send(res, 403, { error: 'two-factor enrolment required' });
+    }
+    const ip = sec.clientIp(req);
+    if (req.method === 'GET') {
+      e.secret ??= totp.generateSecret();
+      const uri = totp.otpauthUri({ secret: e.secret, account: auth.username });
+      return send(res, 200, { uri, qrSvg: qr.svg(uri) });
+    }
+    const { code } = await readJson(req);
+    if (!e.secret || typeof code !== 'string' || code.length > 20) throw new HttpError(400, 'invalid request');
+    const attempt = limiter.begin(ip);
+    if (attempt.locked) {
+      return send(res, 429, { error: 'Too many failed attempts. Try again later.' }, undefined,
+        { 'Retry-After': String(Math.ceil(attempt.retryAfterMs / 1000)) });
+    }
+    if (attempt.delayMs) await delay(attempt.delayMs);
+    const step = totp.verify(e.secret, code, clock.now());
+    attempt.finish(step !== null);
+    if (step === null || enrolling.get(key) !== e) {
+      audit('totp.enroll', { ip, outcome: 'fail' });
+      return send(res, 401, { error: 'Invalid code.' });
+    }
+    const recovery = await authstore.enableTotp({ dir: webDir, secret: e.secret, step, hashOptions });
+    enrolling.delete(key);
+    refreshAuth();
+    audit('totp.change', { ip, outcome: 'ok' });
+    return send(res, 200, { ok: true, recovery }, undefined, { 'Set-Cookie': sec.sessionCookie(sessions.create()) });
+  }
+
   async function login(req, res) {
     const body = await readJson(req);
     const { username, password } = body;
@@ -196,16 +251,36 @@ function createApp({
     // password changed while argon2 ran, the login is discarded (no session).
     const creds = auth;
     const gen = sessions.generation;
-    const ok = await authstore.verifyLogin(creds, username, password);
+    const ip = sec.clientIp(req);
+    const pwOk = await authstore.verifyLogin(creds, username, password);
+    let ok = pwOk;
+    if (pwOk && creds.totp) {
+      const code = typeof body.code === 'string' ? body.code.trim() : '';
+      if (!code) { // password right, code still needed: not a failure
+        attempt.finish(true);
+        return send(res, 401, { totp: true, error: 'Enter your authentication code.' });
+      }
+      const step = code.length <= 32 ? totp.verify(creds.totp.secret, code, clock.now()) : null;
+      if (step !== null) ok = authstore.acceptStep(webDir, step);
+      else ok = code.length <= 32 && await authstore.useRecovery(webDir, code);
+    }
     attempt.finish(ok);
     if (!ok) {
-      log(`login failed from ${sec.clientIp(req)}`);
-      return send(res, 401, { error: 'Invalid username or password.' });
+      log(`login failed from ${ip}`);
+      audit('login', { ip, outcome: 'fail' });
+      return send(res, 401, { error: pwOk && creds.totp ? 'Invalid username, password or code.' : 'Invalid username or password.' });
     }
     refreshAuth();
     if (sessions.generation !== gen) {
       return send(res, 409, { error: 'Credentials changed. Try again.' });
     }
+    if (authstore.totpRequired(creds) && !creds.totp) { // limited session until a second factor is enrolled
+      const eid = crypto.randomBytes(32).toString('base64url');
+      enrolling.set(sessions.keyOf(eid), { expires: clock.now() + ENROLL_TTL_MS, secret: null });
+      audit('login', { ip, outcome: 'enroll' });
+      return send(res, 200, { ok: true, enroll: true }, undefined, { 'Set-Cookie': sec.sessionCookie(eid) });
+    }
+    audit('login', { ip, outcome: 'ok' });
     return send(res, 200, { ok: true }, undefined, { 'Set-Cookie': sec.sessionCookie(sessions.create()) });
   }
 
