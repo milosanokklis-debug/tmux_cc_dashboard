@@ -125,12 +125,15 @@
 
 <dialog id="usage-dialog" class="dialog dialog-wide" aria-labelledby="usage-title" data-testid="usage-panel">
   <div class="dialog-body">
-    <h2 id="usage-title">Usage</h2>
+    <div class="sheet-head">
+      <h2 id="usage-title">Usage</h2>
+      <button type="button" id="usage-close-x" class="btn" data-testid="usage-close-x">Close</button>
+    </div>
     <section class="settings-section" aria-labelledby="usage-limits-h">
       <h3 id="usage-limits-h">Plan limits</h3>
       <div id="usage-error" class="usage-error" role="status" hidden></div>
       <div id="usage-gauges" class="gauges"></div>
-      <p id="usage-source" class="hint" data-testid="usage-source" role="status"></p>
+      <p id="usage-source" class="hint" data-testid="usage-source"></p>
     </section>
     <section class="settings-section" aria-labelledby="usage-tokens-h">
       <h3 id="usage-tokens-h">Tokens</h3>
@@ -153,7 +156,7 @@
   <p class="hint">Read-only. This view follows the agent’s transcript while it is open.</p>
   <p id="tx-status" class="tx-status" role="status" data-testid="transcript-status"></p>
   <div class="tx-wrap">
-    <div id="tx-log" class="tx-log" role="log" tabindex="0" aria-label="Agent transcript (read-only)" data-testid="transcript-log"></div>
+    <div id="tx-log" class="tx-log" role="log" aria-live="off" tabindex="0" aria-label="Agent transcript (read-only)" data-testid="transcript-log"></div>
     <button type="button" id="tx-jump" class="btn tx-jump" hidden data-testid="transcript-jump">New output below</button>
   </div>
   <p id="tx-empty" class="muted" hidden>No entries yet.</p>

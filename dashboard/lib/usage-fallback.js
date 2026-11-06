@@ -4,7 +4,7 @@
 // ~/.ccdash/usage-fallback.enabled (ccd doctor --live writes it when rate_limits is missing).
 // A helper Claude is started in a window of the hidden _ops session with CCDASH_HIDDEN=1 (so the
 // hooks record nothing), /usage is typed in, the pane is captured, /exit ends it. At most one run
-// per interval (10 min; CCDASH_USAGE_FALLBACK_SEC overrides it for tests).
+// per interval (10 min).
 const fs = require('node:fs');
 const { setTimeout: sleep } = require('node:timers/promises');
 
@@ -43,7 +43,7 @@ const isReady = (screen) => !/trust/i.test(screen) && /^\s*[│|]?\s*(>|❯)\s*(
 // deps: { tmux ({run, ensureOps}), now (ms), wait (ms), intervalMs, flagFile, env, log }
 function createUsageFallback({
   tmux, now = () => Date.now(), wait = sleep, env = process.env, log = console.error,
-  intervalMs = (/^[0-9]+$/.test(env.CCDASH_USAGE_FALLBACK_SEC ?? '') ? Number(env.CCDASH_USAGE_FALLBACK_SEC) * 1000 : 600 * 1000),
+  intervalMs = 600 * 1000,
   flagFile = DEFAULT_FLAG, readyPolls = 40, pollMs = 500,
 } = {}) {
   let last = null; // { ts (s), limits }

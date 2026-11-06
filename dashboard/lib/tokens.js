@@ -33,7 +33,7 @@ function priceOf(model) {
   const hit = PRICES.find(([re]) => re.test(model));
   if (!hit) return null;
   const p = hit[1];
-  return { input: p.input, output: p.output, cache_creation: p.cache_creation ?? p.input * 1.25, cache_read: p.cache_read ?? p.input * 0.1 };
+  return { input: p.input, output: p.output, cache_creation: p.input * 1.25, cache_read: p.input * 0.1 };
 }
 
 const zero = () => ({ input: 0, output: 0, cache_creation: 0, cache_read: 0, messages: 0, cost_usd: 0 });

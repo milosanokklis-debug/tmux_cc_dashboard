@@ -7,7 +7,6 @@
   const { api, h, fmtNum, fmtUsd, fmtDuration } = window.ccdash;
   const events = window.ccdash.events;
   const $ = (id) => document.getElementById(id);
-  const PRICE_LABEL = 'API-price estimate, not billing';
   const SOURCE = { statusline: 'Claude Code statusline', 'usage-command': '/usage command (fallback)' };
   const WINDOWS = [
     ['five_hour', '5-hour limit'],
@@ -162,7 +161,7 @@
     const head = h('tr', {}, [
       h('th', { scope: 'col', class: 'label-col', text: label }),
       ...COLS.map(([, t]) => h('th', { scope: 'col', class: 'num', text: t })),
-      h('th', { scope: 'col', class: 'num' }, [h('span', { text: 'Est. $' }), h('span', { class: 'price-sub', text: PRICE_LABEL })]),
+      h('th', { scope: 'col', class: 'num' }, [h('span', { text: 'Est. $' })]),
     ]);
     const body = rows.map((row) => {
       const l = rowLabel(kind, row, names);
@@ -210,7 +209,7 @@
     if (tokens.total) {
       kids.push(h('p', { class: 'tok-summary', 'data-testid': 'token-summary' }, [
         h('span', { class: 'tok-sum-fig', text: fmtUsd(tokens.total.cost_usd) }),
-        h('span', { class: 'price-label', 'data-testid': 'price-note', text: PRICE_LABEL }),
+        h('span', { class: 'price-label', 'data-testid': 'price-note', text: tokens?.price_note || '' }),
         unpriced ? h('span', { class: 'tok-unpriced', 'data-testid': 'unpriced-count', text: 'excludes ' + unpriced + ' unpriced model' + (unpriced === 1 ? '' : 's') }) : null,
         h('span', { class: 'muted', text: fmtNum(tokens.total.input) + ' in, ' + fmtNum(tokens.total.output) + ' out in total' }),
       ].filter(Boolean)));
@@ -318,6 +317,7 @@
   $('token-panel').setAttribute('aria-labelledby', 'token-tab-' + tab);
   $('usage-open').addEventListener('click', open);
   $('usage-close').addEventListener('click', () => dlg.close());
+  $('usage-close-x').addEventListener('click', () => dlg.close());
   dlg.addEventListener('close', () => { clearInterval(tickTimer); tickTimer = null; if (opener) opener.focus(); });
   document.addEventListener('visibilitychange', () => { if (dlg.open && !document.hidden) tick(); });
 })();
