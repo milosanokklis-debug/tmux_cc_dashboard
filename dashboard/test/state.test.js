@@ -155,6 +155,14 @@ test('POST wake: sleeping and ended conversations run ccd-session wake', async (
   }
 });
 
+test('POST wake: exit 7 is 409 memory-offline with the mcp list output', async (t) => {
+  const { s, wake } = await wakeStack('sleeping', async () => ({ rc: 7, log: 'memory offline\nbasic-memory: x - \u2717 Failed to connect\n' }));
+  t.after(s.stop);
+  const r = await wake(SID);
+  assert.strictEqual(r.status, 409);
+  assert.deepStrictEqual(await r.json(), { error: 'memory-offline', message: 'memory offline', output: 'basic-memory: x - \u2717 Failed to connect' });
+});
+
 test('POST wake: refuses bad ids, unknown, live and already woken conversations; reports failures', async (t) => {
   const { s, svc, wake } = await wakeStack('sleeping');
   t.after(s.stop);

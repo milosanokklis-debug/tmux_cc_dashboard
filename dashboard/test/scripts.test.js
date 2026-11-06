@@ -86,12 +86,12 @@ test('ccd-session hands the prompt to claude unchanged (trailing ;, newlines, qu
   { skip: SKIP || (HAS_TMUX ? false : 'tmux not installed') }, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-sess-'));
     fs.mkdirSync(path.join(dir, 'ws', 'p'), { recursive: true }); fs.mkdirSync(path.join(dir, 'bin')); fs.mkdirSync(path.join(dir, 'home'));
-    fs.writeFileSync(path.join(dir, 'bin', 'claude'), '#!/bin/bash\nprintf \'%s\\0\' "$@" > "$OUTF"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, 'bin', 'claude'), '#!/bin/bash\n[ "$1" = mcp ] && { echo "basic-memory: x - \u2713 Connected"; exit 0; } # the start gate\nprintf \'%s\\0\' "$@" > "$OUTF"\n', { mode: 0o755 });
     // a login shell resets PATH from /etc/profile: put the stub back from ~/.bash_profile
     fs.writeFileSync(path.join(dir, 'home', '.bash_profile'), `export PATH=${dir}/bin:$PATH\n`);
     const sock = path.join(dir, 'sock');
     const out = path.join(dir, 'out');
-    const env = { HOME: path.join(dir, 'home'), OUTF: out, CCDASH_WS: path.join(dir, 'ws'), CCDASH_TMUX: sock };
+    const env = { PATH: `${dir}/bin:${process.env.PATH}`, HOME: path.join(dir, 'home'), OUTF: out, CCDASH_WS: path.join(dir, 'ws'), CCDASH_TMUX: sock };
     try {
       for (const prompt of ['a;', 'a\;', 'a\\\;', ';', '-x;;', 'two\nlines;', '$(id) "q" \'s\';', '\\', 'plain', '-x', '']) {
         fs.rmSync(out, { force: true });

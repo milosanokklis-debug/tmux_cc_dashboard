@@ -31,7 +31,7 @@ jobs:
       - name: Read pinned versions
         run: |
           set -eu
-          grep -E '^(CLAUDE_CODE_VERSION|S6_OVERLAY_VERSION)=' .env.example >> "$GITHUB_ENV"
+          grep -E '^(CLAUDE_CODE_VERSION|S6_OVERLAY_VERSION|BASIC_MEMORY_VERSION|KIT_REPO|KIT_REF)=' .env.example >> "$GITHUB_ENV"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build (no push)
@@ -45,6 +45,9 @@ jobs:
           build-args: |
             CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
             S6_OVERLAY_VERSION=${{ env.S6_OVERLAY_VERSION }}
+            BASIC_MEMORY_VERSION=${{ env.BASIC_MEMORY_VERSION }}
+            KIT_REPO=${{ env.KIT_REPO }}
+            KIT_REF=${{ env.KIT_REF }}
       - name: Smoke test (arch, tools)
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -82,7 +85,7 @@ jobs:
       - name: Read pinned versions and compute the version
         run: |
           set -eu
-          grep -E '^(CLAUDE_CODE_VERSION|S6_OVERLAY_VERSION)=' .env.example >> "$GITHUB_ENV"
+          grep -E '^(CLAUDE_CODE_VERSION|S6_OVERLAY_VERSION|BASIC_MEMORY_VERSION|KIT_REPO|KIT_REF)=' .env.example >> "$GITHUB_ENV"
           echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -102,3 +105,6 @@ jobs:
           build-args: |
             CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
             S6_OVERLAY_VERSION=${{ env.S6_OVERLAY_VERSION }}
+            BASIC_MEMORY_VERSION=${{ env.BASIC_MEMORY_VERSION }}
+            KIT_REPO=${{ env.KIT_REPO }}
+            KIT_REF=${{ env.KIT_REF }}

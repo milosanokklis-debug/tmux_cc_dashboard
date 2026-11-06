@@ -54,3 +54,12 @@ Usage and transcripts (off by default):
 CI (`.github/workflows/test.yml`) runs: shellcheck on every shell script, `bats tests/bats`,
 `cd dashboard && npm ci && npm test`, `tests/replay-fixtures.sh`, and two `docker build`s.
 Locally: `bats tests/bats && tests/replay-fixtures.sh` (needs bash, jq, bats, shellcheck).
+
+## `claude mcp`
+
+`claude mcp list` and `claude mcp add ...` are answered without starting the REPL. `FAKE_CLAUDE_MCP`
+selects the `list` output: `connected` (default) prints `basic-memory: /opt/basic-memory/bin/basic-memory mcp - ✓ Connected`;
+`failed` prints `... - ✗ Failed to connect` (the real wording); `disconnected` prints `... - ✗ Disconnected`
+(not real wording, a trap: a naive `grep connected` would pass it); `none` prints `No MCP servers configured`.
+`mcp add` appends its argv to `$FAKE_CLAUDE_HOME/mcp-add.log` and, after that, `list` shows basic-memory
+as connected even with `FAKE_CLAUDE_MCP=none` (so init idempotency can be tested). Other `mcp` subcommands exit 2.

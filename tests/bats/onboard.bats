@@ -7,6 +7,7 @@ setup() {
   export HOME=$BATS_TEST_TMPDIR/home
   export CCDASH_WS=$BATS_TEST_TMPDIR/ws
   export CCDASH_PROJECTS=$BATS_TEST_TMPDIR/home/.ccdash/projects
+  export CCDASH_KIT= # these tests are about clone/pull/hook trust; the kit step has its own file (kit.bats)
   export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
   mkdir -p "$HOME" "$CCDASH_WS"
   git config --global init.defaultBranch main

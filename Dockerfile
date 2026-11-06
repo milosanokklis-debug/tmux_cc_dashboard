@@ -17,10 +17,13 @@ FROM debian:trixie-slim
 ARG TARGETARCH
 ARG CLAUDE_CODE_VERSION
 ARG S6_OVERLAY_VERSION
+ARG BASIC_MEMORY_VERSION
+ARG KIT_REPO=milosanokklis-debug/new_ai_setup
+ARG KIT_REF=81532ea0037fc2dd5ecc0837e24738de35d00460
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      tmux ncurses-term jq git curl ca-certificates procps less nodejs npm python3 xz-utils \
+      tmux ncurses-term jq git curl ca-certificates procps less nodejs npm python3 python3-venv xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # s6-overlay: noarch + arch-specific tarballs
@@ -42,6 +45,17 @@ RUN set -eux; \
 # Claude Code, pinned, system-wide
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force
 
+# Basic Memory, pinned, in its own venv (python 3.12+ needed; trixie has 3.13). Data lives in /home/ccd/basic-memory.
+RUN : "${BASIC_MEMORY_VERSION:?BASIC_MEMORY_VERSION build arg is empty; pass --build-arg BASIC_MEMORY_VERSION=<version>}" \
+ && python3 -m venv /opt/basic-memory \
+ && /opt/basic-memory/bin/pip install --no-cache-dir "basic-memory==${BASIC_MEMORY_VERSION}" \
+ && /opt/basic-memory/bin/basic-memory --help >/dev/null
+
+# Agent kit, pinned to a commit, root-owned and read-only (.git kept so the origin can be read)
+RUN git clone "https://github.com/${KIT_REPO}" /opt/agent-kit \
+ && git -C /opt/agent-kit checkout --detach "${KIT_REF}" \
+ && chown -R root:root /opt/agent-kit && chmod -R a-w /opt/agent-kit
+
 RUN useradd -m -s /bin/bash ccd \
  && useradd -r -M -s /usr/sbin/nologin -G ccd web \
  && chmod 0750 /home/ccd \
@@ -50,13 +64,14 @@ RUN useradd -m -s /bin/bash ccd \
  && install -d -o web -g ccd -m 2750 /var/lib/ccdash-git
 
 COPY rootfs/ /
-RUN chmod 0755 /usr/local/bin/ccd-session /usr/local/bin/ccd-project /usr/local/bin/ccd-onboard /usr/local/bin/ccd-ops \
+RUN chmod 0755 /usr/local/bin/ccd-session /usr/local/bin/ccd-project /usr/local/bin/ccd-onboard /usr/local/bin/ccd-ops /usr/local/bin/ccd-memory-init \
       /usr/local/lib/ccdash/git-credential-ccdash /usr/local/lib/ccdash/hooks/agents.sh /usr/local/lib/ccdash/hooks/state.sh \
       /usr/local/lib/ccdash/hooks/permission.sh /usr/local/lib/ccdash/hooks/statusline.sh /usr/local/lib/ccdash/reader.js \
       /etc/s6-overlay/s6-rc.d/init-ccdash/up \
       /etc/s6-overlay/s6-rc.d/tmux/run /etc/s6-overlay/s6-rc.d/dashboard/run /etc/s6-overlay/s6-rc.d/ccd-reader/run \
  && git config --system credential.helper /usr/local/lib/ccdash/git-credential-ccdash \
- && git config --system credential.useHttpPath true
+ && git config --system credential.useHttpPath true \
+ && git config --system --add safe.directory /opt/agent-kit
 
 COPY --from=dashboard-build /opt/ccdash/dashboard /opt/ccdash/dashboard
 

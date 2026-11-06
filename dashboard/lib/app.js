@@ -327,7 +327,7 @@ function createApp({
       if (e instanceof HttpError) {
         // After an oversize body, stop reading: answer, then drop the connection.
         if (e.status === 413) res.once('finish', () => req.destroy());
-        return send(res, e.status, { ...e.extra, error: e.message }, undefined, e.status === 413 ? { Connection: 'close' } : {});
+        return send(res, e.status, { error: e.message, ...e.extra }, undefined, e.status === 413 ? { Connection: 'close' } : {});
       }
       console.error('internal error:', e.message);
       send(res, 500, { error: 'internal error' });

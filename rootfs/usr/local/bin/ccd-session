@@ -10,6 +10,22 @@ cmd=(bash -lc 'claude -- "$@"; exec bash -l' _)
 # means a literal ';' (so `x;` becomes `x\;` and `x\;` becomes `x\\;`). Checked against tmux 3.5a.
 # An empty prompt is dropped (same as the web path) instead of being passed on as "".
 tmux_args() { local a; targs=(); for a in "$@"; do [ -n "$a" ] || continue; [[ $a == *';' ]] && a="${a%;}\\;"; targs+=("$a"); done; }
+# Start gate: Basic Memory must be registered and connected before a Claude is launched. Exit 7 and
+# `memory offline` + the `claude mcp list` output on stderr otherwise. Only the real entry counts: a line that
+# starts with `basic-memory: ` (exact server name) and ends with ` - [✓] Connected`. Anything else at the end
+# ("Failed to connect", "Disconnected", "Not connected", "Needs authentication", "Pending") is refused.
+mcp_gate() {
+  local out l status
+  out=$(timeout "${CCDASH_MCP_TIMEOUT:-20}" claude mcp list 2>&1 </dev/null || true)
+  while IFS= read -r l; do
+    [[ $l == 'basic-memory: '* && $l == *' - '* ]] || continue
+    status=${l##* - }
+    status=${status#✓}; status=${status#✔}; status=${status# }
+    [ "$status" = Connected ] && return 0
+  done <<<"$out"
+  { echo "memory offline"; printf '%s\n' "$out"; } >&2
+  exit 7
+}
 # Prints the project's tmux session name, creating the session if it is missing. $1 project,
 # $2 dir, $3 "window" to add a window when the session exists (wake), then the command to run.
 launch() {
@@ -28,8 +44,10 @@ launch() {
       echo "session name $name is already used by ${existing:-another project}; rename the project" >&2
       exit 1
     fi
-    [ "$mode" = window ] && t new-window -t "=$name:" -c "$dir" "$@"
+    # a start on a live session launches nothing, so it needs no gate
+    if [ "$mode" = window ]; then mcp_gate; t new-window -t "=$name:" -c "$dir" "$@"; fi
   else
+    mcp_gate
     t new-session -d -s "$name" -c "$dir" "$@"
     t set -t "=$name:" @project_dir "$dir"
   fi

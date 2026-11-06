@@ -34,5 +34,5 @@
     ]
   },
   "statusLine": {"type": "command", "command": "/usr/local/lib/ccdash/hooks/statusline.sh"},
-  "permissions": {"deny": ["Bash(tmux:*)"]}
+  "permissions": {"allow": ["mcp__basic-memory"], "deny": ["Bash(tmux:*)"]}
 }

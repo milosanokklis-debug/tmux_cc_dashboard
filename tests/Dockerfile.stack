@@ -7,3 +7,7 @@ RUN rm -f /usr/local/bin/claude
 COPY tests/fake-claude/claude /usr/local/bin/claude
 COPY tests/fixtures/2.1.317/ /usr/local/share/fake-claude/fixtures/
 RUN chmod 0755 /usr/local/bin/claude
+# ccd-onboard now runs the agent-kit; the stack tests have no network and a fake claude, so the kit is replaced by an
+# inert one (reports ok, changed=false, writes nothing). The kit step itself is covered by tests/bats/kit.bats.
+COPY tests/fixtures/agent-kit-inert.sh /opt/agent-kit/agent-kit.sh
+RUN chmod 0755 /opt/agent-kit/agent-kit.sh
