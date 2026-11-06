@@ -21,6 +21,7 @@
   let target = null; // { conv, agent }
   let offset = null;
   let opener = null;
+  let openerKey = null;
   let busyGen = -1; // generation with a request in flight
 
   const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 24;
@@ -39,7 +40,7 @@
         ].filter(Boolean));
       case 'tool_result':
         return h('div', { class: 'tx-part tx-result', 'data-kind': 'tool_result' }, [
-          h('span', { class: 'tx-tool-name', text: 'Result' + (p.name ? ': ' + p.name : '') }),
+          h('span', { class: 'tx-tool-name', text: 'Result' }),
           h('pre', { text: clip(text, RESULT_SHORT) }),
         ]);
       default:
@@ -115,6 +116,7 @@
     close();
     target = { conv: opts.conv, agent: opts.agent };
     opener = opts.opener || null;
+    openerKey = opener && opener.dataset ? opener.dataset.fk || null : null;
     $('tx-title').textContent = 'Transcript: ' + (opts.title || 'agent');
     log.replaceChildren();
     $('tx-empty').hidden = true;
@@ -127,7 +129,15 @@
   jump.addEventListener('click', () => { log.scrollTop = log.scrollHeight; jump.hidden = true; log.focus(); });
   log.addEventListener('scroll', () => { if (atBottom()) jump.hidden = true; }, { passive: true });
   $('tx-close').addEventListener('click', () => dlg.close());
-  dlg.addEventListener('close', () => { close(); if (opener && opener.isConnected) opener.focus(); });
+  dlg.addEventListener('close', () => {
+    close();
+    // The tree re-renders while the sheet is open, so find the opener again by its key.
+    const key = openerKey;
+    let back = opener && opener.isConnected ? opener : null;
+    if (!back && key) back = $('tree').querySelector('[data-fk="' + CSS.escape(key) + '"]');
+    if (!back) back = $('tree-toggle');
+    if (back) back.focus();
+  });
   document.addEventListener('visibilitychange', () => { if (target && !document.hidden && !timer) fetchMore(); });
 
   window.ccdash.transcript = { open };

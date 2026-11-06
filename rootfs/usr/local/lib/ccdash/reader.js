@@ -111,18 +111,24 @@ function serve({ sock = DEFAULT_SOCK, root = DEFAULT_ROOT, log = console.error }
     c.on('error', () => {});
     c.setTimeout(10000, () => c.destroy());
     let buf = '';
-    c.on('data', (d) => {
-      buf += d.toString('utf8');
+    c.setEncoding('utf8');
+    // Answers the complete lines in buf; stops (and returns) when the peer is not taking replies.
+    const pump = () => {
       let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
+      while (!c.destroyed && (nl = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
         let req = null;
         try { req = JSON.parse(line); } catch { /* answered as bad_request */ }
-        c.write(`${JSON.stringify(handle(root, req))}\n`);
+        if (!c.write(`${JSON.stringify(handle(root, req))}\n`)) {
+          c.pause(); // backpressure: no more requests until the replies are taken
+          c.once('drain', () => { c.resume(); pump(); });
+          return;
+        }
       }
       if (buf.length > MAX_REQUEST) { buf = ''; c.end(`${JSON.stringify({ ok: false, error: 'too_large' })}\n`); c.destroy(); }
-    });
+    };
+    c.on('data', (d) => { buf += d; pump(); });
   });
   const prev = process.umask(0o007); // the socket is created 0660
   server.listen(sock, () => {
@@ -133,7 +139,7 @@ function serve({ sock = DEFAULT_SOCK, root = DEFAULT_ROOT, log = console.error }
   return server;
 }
 
-module.exports = { handle, resolveInside, serve, MAX_LENGTH, DEFAULT_ROOT, DEFAULT_SOCK };
+module.exports = { handle, serve, MAX_LENGTH };
 
 if (require.main === module) {
   serve({ sock: process.env.CCDASH_READER_SOCK || DEFAULT_SOCK, root: process.env.CCDASH_READER_ROOT || DEFAULT_ROOT });

@@ -15,9 +15,8 @@ class ReaderError extends Error {
 }
 
 function loadService() {
-  for (const p of [process.env.CCDASH_READER_MODULE, '/usr/local/lib/ccdash/reader.js',
+  for (const p of ['/usr/local/lib/ccdash/reader.js',
     path.join(__dirname, '..', '..', 'rootfs', 'usr', 'local', 'lib', 'ccdash', 'reader.js')]) {
-    if (!p) continue;
     try { return require(p); } catch { /* try the next */ }
   }
   throw new ReaderError('unavailable');

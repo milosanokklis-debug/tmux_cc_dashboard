@@ -84,9 +84,7 @@ function createApi(svc) {
     }
     return { now: Math.floor(now / 1000), projects: projectsTree }; // unix seconds
   }
-  let lastPrune = -Infinity;
   function usagePayload() {
-    if (Date.now() - lastPrune > 3600 * 1000) { lastPrune = Date.now(); usage.prune(svc.usageDir); } // hourly
     const fb = svc.usageFallback;
     const g = usage.gauges({ dir: svc.usageDir, now: Math.floor(svc.now() / 1000), fallback: fb ? fb.latest : null });
     if (g.five_hour.status === 'unknown' && g.seven_day.status === 'unknown') fb?.refresh(); // off unless switched on
