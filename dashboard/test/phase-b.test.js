@@ -125,7 +125,15 @@ test('Phase B: status, liveness and wake against the fake claude', { skip: !have
     const live = [...s.rec.snapshot().values()].filter((c) => c.status === 'waiting');
     assert.ok(live.length >= 2, 'p4 and p5 woken conversations plus p6');
     s.t('kill-server');
-    s.t('new-session', '-d', '-s', 'keep'); // what s6 does: a fresh server with a new pid
+    // The old server dies asynchronously; starting a new one while it still holds the socket makes
+    // tmux print "server exited unexpectedly". Wait until it is gone, then retry the start on that error.
+    await s.until(() => { try { s.t('has-session'); return false; } catch { return true; } }, 'old tmux server gone', 5000);
+    for (let i = 0; ; i++) {
+      try { s.t('new-session', '-d', '-s', 'keep'); break; } catch (e) { // what s6 does: a fresh server with a new pid
+        if (i >= 5 || !/server exited unexpectedly|no server running/.test(String(e.stderr ?? e.message))) throw e;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
     await s.until(() => live.every((c) => s.rec.get(c.sid)?.status === 'sleeping'), 'every conversation sleeping', 10000);
   });
 });
