@@ -13,6 +13,33 @@ if [ -z "$fixtures" ]; then
 fi
 settings=${FAKE_CLAUDE_SETTINGS:-/etc/claude-code/managed-settings.json}
 tmo=${FAKE_CLAUDE_TIMEOUT:-5}
+# `claude mcp ...` (no REPL). FAKE_CLAUDE_MCP picks what `mcp list` shows: connected (default),
+# disconnected (a trap: "Disconnected" is not the real wording, and must not pass the gate), failed
+# (the real "Failed to connect") or none (no servers). `mcp add` appends its argv to $fhome/mcp-add.log
+# and, unless FAKE_CLAUDE_MCP=none is overridden by a test, registers basic-memory for later lists.
+if [ "${1:-}" = mcp ]; then
+  mhome=${FAKE_CLAUDE_HOME:-${HOME:-/tmp}/.fake-claude}
+  mkdir -p "$mhome"
+  case ${2:-} in
+    list)
+      echo "Checking MCP server health..."
+      echo
+      bm=/opt/basic-memory/bin/basic-memory
+      registered=${FAKE_CLAUDE_MCP:-connected}
+      [ -f "$mhome/mcp-registered" ] && [ "$registered" = none ] && registered=connected
+      case $registered in
+        connected) echo "basic-memory: $bm mcp - $(printf '\342\234\223') Connected" ;;
+        disconnected) echo "basic-memory: $bm mcp - $(printf '\342\234\227') Disconnected" ;;
+        failed) echo "basic-memory: $bm mcp - $(printf '\342\234\227') Failed to connect" ;;
+        none) echo "No MCP servers configured. Use \`claude mcp add\` to add a server." ;;
+      esac
+      ;;
+    add) printf '%s\n' "$*" >>"$mhome/mcp-add.log"; : >"$mhome/mcp-registered"; echo "Added stdio MCP server ${3:-}" ;;
+    *) echo "fake-claude: unsupported mcp command: $*" >&2; exit 2 ;;
+  esac
+  exit 0
+fi
+
 sid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
 fhome=${FAKE_CLAUDE_HOME:-${HOME:-/tmp}/.fake-claude}
 mkdir -p "$fhome/history" "$fhome/prompts"

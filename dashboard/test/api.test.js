@@ -262,6 +262,19 @@ test('open maps ccd-session failures: collision 409, otherwise 500 with the mess
   assert.match((await r.json()).error, /already used/);
 });
 
+test('open maps the memory gate (exit 7) to 409 {error:memory-offline, message, output}', async (t) => {
+  const svc = h.fakeServices();
+  fs.mkdirSync(path.join(svc.workspace, 'demo'));
+  svc.runFile = async () => { throw Object.assign(new Error('x'), { code: 7, stderr: 'memory offline\nbasic-memory: /opt/basic-memory/bin/basic-memory mcp - \u2717 Failed to connect\n' }); };
+  const s = await h.authed(svc);
+  t.after(s.stop);
+  const r = await post(s, '/api/projects/demo/open');
+  assert.strictEqual(r.status, 409);
+  assert.deepStrictEqual(await r.json(), {
+    error: 'memory-offline', message: 'memory offline', output: 'basic-memory: /opt/basic-memory/bin/basic-memory mcp - \u2717 Failed to connect',
+  });
+});
+
 // ---- add ----------------------------------------------------------------------------------
 
 test('POST /api/projects: validation errors are 400 and nothing runs', async (t) => {

@@ -255,6 +255,7 @@ function createApi(svc) {
     try {
       const op = await svc.runOp({ argv: ['ccd-session', 'wake', sid], timeoutMs: 60 * 1000 });
       if (op.timedOut) throw new HttpError(504, 'wake timed out', { log: op.log });
+      if (op.rc === projects.MEMORY_OFFLINE_RC) throw projects.memoryOffline(op.log);
       if (op.rc !== 0) throw new HttpError(502, 'wake failed', { log: op.log });
       await svc.reconciler.tick();
       return { ok: true, session: op.log.trim().split('\n').pop() };

@@ -8,3 +8,6 @@ services:
       args:
         CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:?set CLAUDE_CODE_VERSION in .env}
         S6_OVERLAY_VERSION: ${S6_OVERLAY_VERSION:?set S6_OVERLAY_VERSION in .env}
+        BASIC_MEMORY_VERSION: ${BASIC_MEMORY_VERSION:?set BASIC_MEMORY_VERSION in .env}
+        KIT_REPO: ${KIT_REPO:-milosanokklis-debug/new_ai_setup}
+        KIT_REF: ${KIT_REF:-81532ea0037fc2dd5ecc0837e24738de35d00460}

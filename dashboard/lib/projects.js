@@ -85,12 +85,22 @@ function listProjects({ workspace, panes, procTable, projectsDir }) {
   });
 }
 
+// ccd-session exits 7 when the Basic Memory MCP server is not connected (the start gate). The body is
+// { error: 'memory-offline', message: 'memory offline', output } with status 409.
+const MEMORY_OFFLINE_RC = 7;
+const START_TIMEOUT_MS = 45 * 1000; // the gate runs `claude mcp list` (CCDASH_MCP_TIMEOUT, default 20 s) before anything starts
+function memoryOffline(text) {
+  const output = String(text || '').replace(/^memory offline\n?/, '').trim();
+  return new HttpError(409, 'memory offline', { error: 'memory-offline', message: 'memory offline', output });
+}
+
 // ccd-session start <name> [prompt]: no-op when the session exists, never restarts claude.
 async function startSession({ runFile, name, prompt }) {
   let out;
   try {
-    ({ stdout: out } = await runFile('ccd-session', ['start', name, ...(prompt ? [prompt] : [])]));
+    ({ stdout: out } = await runFile('ccd-session', ['start', name, ...(prompt ? [prompt] : [])], { timeout: START_TIMEOUT_MS }));
   } catch (e) {
+    if (e.code === MEMORY_OFFLINE_RC) throw memoryOffline(e.stderr || e.stdout);
     const msg = (e.stderr || e.message).trim().split('\n')[0] || 'could not start session';
     const status = /no such project/.test(msg) ? 404 : /already used/.test(msg) ? 409 : 500;
     throw new HttpError(status, msg);
@@ -196,5 +206,5 @@ async function pullProject({ name, deps }) {
 }
 
 module.exports = {
-  pullProject, readProjectRecord, DEFAULT_PROJECTS_DIR, validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
+  pullProject, readProjectRecord, memoryOffline, MEMORY_OFFLINE_RC, DEFAULT_PROJECTS_DIR, validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
 };

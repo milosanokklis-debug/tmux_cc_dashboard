@@ -1,4 +1,7 @@
 #!/command/execlineb -P
 foreground { install -d -o ccd -g ccd -m 0750 /run/ccdash }
 foreground { install -d -o ccd -g ccd -m 0770 /run/ccdash/ops }
-install -d -o web -g ccd -m 0750 /run/ccdash-web
+foreground { install -d -o web -g ccd -m 0750 /run/ccdash-web }
+# Basic Memory registration as ccd; foreground ignores its exit status and the script always exits 0.
+foreground { s6-setuidgid ccd /usr/local/bin/ccd-memory-init }
+exit 0

@@ -41,7 +41,7 @@ tar_ctx() { (cd "$root" && git ls-files -co --exclude-standard -- . ':!dashboard
 
 if ! $D image inspect "$base" >/dev/null 2>&1; then
   set -a; . "$root/.env.example"; set +a
-  tar_ctx | $D build -t "$base" --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION" --build-arg "S6_OVERLAY_VERSION=$S6_OVERLAY_VERSION" - >/dev/null
+  tar_ctx | $D build -t "$base" --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION" --build-arg "S6_OVERLAY_VERSION=$S6_OVERLAY_VERSION" --build-arg "BASIC_MEMORY_VERSION=$BASIC_MEMORY_VERSION" --build-arg "KIT_REPO=$KIT_REPO" --build-arg "KIT_REF=$KIT_REF" - >/dev/null
 fi
 tar_ctx | $D build -f tests/Dockerfile.stack --build-arg "BASE=$base" -t "$CCDASH_TEST_IMAGE" - >/dev/null
 

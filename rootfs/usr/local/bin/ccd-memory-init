@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Registers the Basic Memory MCP server for ccd and makes sure project `main` exists and is the default.
+# Runs as ccd at container start (init-ccdash). Idempotent: a second run changes and adds nothing.
+# Never fails the boot: problems are logged and the exit status is 0.
+set -uo pipefail
+BM=${CCDASH_BM:-/opt/basic-memory/bin/basic-memory}
+export HOME=${CCDASH_MEMORY_HOME:-/home/ccd} # s6 may hand us root's HOME; CCDASH_MEMORY_HOME is for tests
+export BASIC_MEMORY_HOME=${BASIC_MEMORY_HOME:-$HOME/basic-memory}        # the notes
+export BASIC_MEMORY_CONFIG_DIR=${BASIC_MEMORY_CONFIG_DIR:-$HOME/.basic-memory} # config and index database
+log() { echo "ccd-memory-init: $*" >&2; }
+
+main() {
+  local list
+  mkdir -p "$BASIC_MEMORY_HOME" || { log "cannot create $BASIC_MEMORY_HOME"; return 1; }
+  if claude mcp list 2>&1 </dev/null | grep -Eiqw 'basic-memory'; then
+    log "basic-memory already registered"
+  else
+    # name first: -e takes several values, so it must not sit right before the name
+    claude mcp add --scope user basic-memory \
+      -e "BASIC_MEMORY_HOME=$BASIC_MEMORY_HOME" -e "BASIC_MEMORY_CONFIG_DIR=$BASIC_MEMORY_CONFIG_DIR" \
+      -- "$BM" mcp </dev/null || { log "claude mcp add failed"; return 1; }
+    log "registered basic-memory"
+  fi
+  list=$("$BM" project list --json 2>/dev/null </dev/null) || { log "project list failed"; return 1; }
+  if jq -e '.projects[]? | select(.name == "main" and .is_default == true)' >/dev/null 2>&1 <<<"$list"; then
+    return 0
+  elif jq -e '.projects[]? | select(.name == "main")' >/dev/null 2>&1 <<<"$list"; then
+    "$BM" project default main </dev/null || { log "project default failed"; return 1; }
+  else
+    "$BM" project add main "$BASIC_MEMORY_HOME" --default </dev/null || { log "project add failed"; return 1; }
+  fi
+  log "project main is the default"
+}
+
+main || log "memory setup incomplete; sessions will be refused until basic-memory is connected"
+exit 0

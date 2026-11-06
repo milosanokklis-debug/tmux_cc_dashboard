@@ -29,7 +29,7 @@ function stack(extraEnv = {}) {
     .replaceAll('/usr/local/lib/ccdash', path.join(ROOT, 'rootfs/usr/local/lib/ccdash')));
   const stateDir = path.join(home, '.ccdash', 'sessions');
   const env = {
-    ...process.env, HOME: home, CCDASH_WS: ws, CCDASH_TMUX: sock, CCDASH_STATE: stateDir,
+    ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_CLAUDE_MCP: 'connected', HOME: home, CCDASH_WS: ws, CCDASH_TMUX: sock, CCDASH_STATE: stateDir,
     FAKE_CLAUDE_SETTINGS: settings, FAKE_CLAUDE_FIXTURES: path.join(ROOT, 'tests/fixtures/2.1.317'),
     FAKE_CLAUDE_HOME: path.join(tmp, 'fake'), FAKE_CLAUDE_TIMEOUT: '5', ...extraEnv,
   };
