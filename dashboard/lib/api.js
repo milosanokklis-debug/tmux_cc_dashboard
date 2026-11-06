@@ -4,6 +4,7 @@
 const { HttpError, send, readJson } = require('./http');
 const { createTmux, readProcTable, runFile, runOp } = require('./tmux');
 const projects = require('./projects');
+const identity = require('./identity');
 const { buildTree } = require('./tree');
 const { createReconciler } = require('./state');
 const { createControls } = require('./controls');
@@ -17,6 +18,7 @@ function defaultServices() {
   return {
     workspace: '/workspace',
     agentsDir: '/home/ccd/.ccdash/agents',
+    projectsDir: projects.DEFAULT_PROJECTS_DIR,
     transcriptRoot: '/home/ccd/.claude',
     tmux,
     procTable: readProcTable,
@@ -53,7 +55,9 @@ function createApi(svc) {
     if (pathname === '/api/projects') {
       if (get) {
         const list = projects.listProjects({ ...svc, panes: await panes() });
-        return send(res, 200, { projects: list.map((p) => ({ name: p.name, session: p.session, state: p.state })) });
+        return send(res, 200, {
+          projects: list.map((p) => ({ name: p.name, session: p.session, state: p.state, repo: p.repo, head: p.head })),
+        });
       }
       if (req.method !== 'POST') return methodNotAllowed();
       const body = await readJson(req, MAX_ADD_BODY);
@@ -66,6 +70,18 @@ function createApi(svc) {
       try { name = decodeURIComponent(open[1]); } catch { throw new HttpError(400, 'invalid project name'); }
       const session = await projects.openProject({ workspace: svc.workspace, runFile: svc.runFile, name });
       return send(res, 200, { session });
+    }
+    const pull = /^\/api\/projects\/([^/]+)\/pull$/.exec(pathname);
+    if (pull) {
+      if (req.method !== 'POST') return methodNotAllowed();
+      let name;
+      try { name = decodeURIComponent(pull[1]); } catch { throw new HttpError(400, 'invalid project name'); }
+      return send(res, 200, await projects.pullProject({ name, deps: { ...svc, panes } }));
+    }
+    if (pathname === '/api/git-identity') {
+      if (get) return send(res, 200, await identity.getIdentity(svc));
+      if (req.method !== 'POST') return methodNotAllowed();
+      return send(res, 200, await identity.setIdentity(await readJson(req, 4 * 1024), svc));
     }
     if (pathname === '/api/tree') {
       if (!get) return methodNotAllowed();

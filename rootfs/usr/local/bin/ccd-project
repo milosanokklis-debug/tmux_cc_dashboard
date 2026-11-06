@@ -1,19 +1,71 @@
 #!/usr/bin/env bash
 set -euo pipefail
-usage() { echo "usage: ccd-project clone <owner/repo>" >&2; exit 2; }
-[ "${1:-}" = clone ] && [ $# -eq 2 ] || usage
+WS=${CCDASH_WS:-/workspace} # overridden only by the tests
+export GIT_TERMINAL_PROMPT=0
+usage() { echo "usage: ccd-project clone <owner/repo> | pull <project>" >&2; exit 2; }
+[ $# -eq 2 ] || usage
+case $1 in clone | pull) ;; *) usage ;; esac
+if [ "$1" = pull ]; then
+  proj=$2
+  if ! [[ $proj =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || [[ $proj == *..* ]]; then
+    echo "invalid project name" >&2; exit 2
+  fi
+  dir=$WS/$proj
+  if [ ! -e "$dir/.git" ]; then echo "$proj is not a git checkout" >&2; exit 3; fi
+  if ! status=$(git -C "$dir" status --porcelain 2>&1); then echo "$proj is not a git checkout" >&2; exit 3; fi
+  if [ -n "$status" ]; then echo "uncommitted changes in $proj; commit or stash first" >&2; exit 3; fi
+  origin=$(git -C "$dir" config --get remote.origin.url 2>/dev/null || true)
+  norm=${origin%/}; norm=${norm%.git}; norm=${norm%/}
+  if ! [[ ${norm,,} =~ ^https://github\.com/[a-z0-9][a-z0-9-]*/${proj,,}$ ]]; then
+    echo "$dir has a different origin" >&2; exit 3
+  fi
+  branch=$(git -C "$dir" symbolic-ref -q --short HEAD || true)
+  if [ -n "$branch" ]; then
+    remote=$(git -C "$dir" config --get "branch.$branch.remote" 2>/dev/null || true)
+    if [ -n "$remote" ] && [ "$remote" != origin ]; then
+      echo "$proj tracks remote $remote, not origin; resolve it in a shell" >&2; exit 3
+    fi
+  fi
+  old=$(git -C "$dir" rev-parse --verify -q HEAD || true) # empty for an unborn HEAD
+  if ! out=$(git -C "$dir" fetch --quiet origin 2>&1 < /dev/null); then
+    echo "could not reach the remote: $(printf '%s\n' "$out" | head -n 1)" >&2; exit 4
+  fi
+  if ! up=$(git -C "$dir" rev-parse --verify --quiet '@{u}' 2>/dev/null); then
+    if [ -z "$old" ]; then echo "nothing to pull yet; origin has no commits on this branch"; exit 0; fi
+    echo "$proj has no upstream branch; resolve it in a shell" >&2; exit 3
+  fi
+  [ -z "$old" ] || echo "old ${old:0:7}"
+  if [ -z "$old" ] || { [ "$up" != "$old" ] && git -C "$dir" merge-base --is-ancestor "$old" "$up"; }; then
+    git -C "$dir" merge --ff-only --quiet "$up" > /dev/null
+    echo "pulled"
+  elif [ "$up" = "$old" ]; then
+    echo "already up to date"
+  elif git -C "$dir" merge-base --is-ancestor "$up" "$old"; then
+    echo "ahead of origin; nothing to pull"
+  else
+    echo "$proj has diverged from origin; resolve it in a shell" >&2; exit 3
+  fi
+  head=$(git -C "$dir" rev-parse --verify -q HEAD || true)
+  [ -z "$head" ] || echo "head $head"
+  exit 0
+fi
 repo=$2
 if ! [[ $repo =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || [[ $repo == *..* ]] || [[ ${repo#*/} == .* ]]; then
   echo "invalid repo" >&2; exit 2
 fi
 name=${repo#*/}
-dest=/workspace/$name
+dest=$WS/$name
 if [ -d "$dest" ]; then
-  origin=$(git -C "$dest" remote get-url origin 2>/dev/null || true)
+  origin=$(git -C "$dest" config --get remote.origin.url 2>/dev/null || true)
   norm=${origin%.git}; norm=${norm%/}
   if [ "${norm,,}" = "$(printf 'https://github.com/%s' "$repo" | tr '[:upper:]' '[:lower:]')" ]; then
-    echo "already cloned"; exit 0
+    echo "already cloned"
+    head=$(git -C "$dest" rev-parse --verify -q HEAD || true)
+    [ -z "$head" ] || echo "head $head"
+    exit 0
   fi
   echo "$dest exists with a different origin" >&2; exit 3
 fi
 git clone -- "https://github.com/$repo.git" "$dest"
+head=$(git -C "$dest" rev-parse --verify -q HEAD || true)
+[ -z "$head" ] || echo "head $head"

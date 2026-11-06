@@ -1,7 +1,7 @@
 'use strict';
 // Notifications settings: Web Push subscribe / unsubscribe and which events to notify about.
 (function () {
-  const { api, notice } = window.ccdash;
+  const { api, h, notice } = window.ccdash;
   const $ = (id) => document.getElementById(id);
   const KEYS = ['approval', 'error', 'finished'];
   const STATE_TEXT = {
@@ -26,9 +26,8 @@
   }
 
   function showError(msg) {
-    const el = $('notif-error');
-    el.textContent = msg || '';
-    el.hidden = !msg;
+    // The live region stays rendered; it is empty (and collapsed by CSS :empty) when there is no message.
+    $('notif-error').textContent = msg || '';
   }
 
   function prefsFromUi() {
@@ -126,7 +125,7 @@
 
   // Once the state is known: Enable when it is shown, else the first toggle; otherwise stay on Close.
   function focusFirst() {
-    if (!dlg.open) return;
+    if (!dlg.open || document.activeElement !== $('notif-close')) return;
     const enable = $('notif-enable');
     if (!enable.hidden) enable.focus();
     else if (!$('notif-prefs').hidden) $('toggle-approval').focus();
@@ -137,6 +136,10 @@
   $('notif-open').addEventListener('click', () => {
     opener = $('notif-open');
     dlg.showModal();
+    gidStatus('');
+    gidField(gidName, $('gid-name-err'), '');
+    gidField(gidEmail, $('gid-email-err'), '');
+    gidLoad();
     load().then(focusFirst);
     $('notif-close').focus(); // until the state is known
   });
@@ -145,6 +148,96 @@
   $('notif-enable').addEventListener('click', enable);
   $('notif-disable').addEventListener('click', disable);
   for (const k of KEYS) $('toggle-' + k).addEventListener('change', (e) => savePrefs(e.target));
+
+  // ---- Git identity ----
+  const gidName = $('gid-name');
+  const gidEmail = $('gid-email');
+  let gidDirty = false;
+
+  // Field-error slots and the status line are always rendered; empty ones keep their reserved space or collapse via CSS.
+  function gidField(input, errEl, msg) {
+    errEl.textContent = msg || '';
+    if (msg) input.setAttribute('aria-invalid', 'true'); else input.removeAttribute('aria-invalid');
+  }
+
+  function gidStatus(msg, isError) {
+    const el = $('gid-status');
+    el.textContent = msg || '';
+    el.classList.toggle('is-error', !!isError);
+  }
+
+  function gidValidate() {
+    const name = gidName.value.trim();
+    const email = gidEmail.value.trim();
+    let nameErr = '';
+    let emailErr = '';
+    if (!name) nameErr = 'Enter a name.';
+    else if (name.length > 100) nameErr = 'Name must be 100 characters or fewer.';
+    else if (/[\u0000-\u001f\u007f]/.test(name)) nameErr = 'Name cannot contain control characters.';
+    if (!email) emailErr = 'Enter an email address.';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || /[\u0000-\u001f\u007f]/.test(email)) emailErr = 'Enter an email like name@example.com.';
+    gidField(gidName, $('gid-name-err'), nameErr);
+    gidField(gidEmail, $('gid-email-err'), emailErr);
+    return { name, email, ok: !nameErr && !emailErr, first: nameErr ? gidName : gidEmail };
+  }
+
+  async function gidLoad() {
+    if (gidDirty) return; // keep what the user is typing
+    try {
+      const r = await api('/api/git-identity');
+      if (!r.ok) throw new Error((r.data && r.data.error) || 'HTTP ' + r.status);
+      if (!gidDirty) {
+        gidName.value = (r.data && r.data.name) || '';
+        gidEmail.value = (r.data && r.data.email) || '';
+      }
+    } catch (e) {
+      if (e.message !== 'unauthorized') gidStatus('Could not load the git identity: ' + e.message, true);
+    }
+  }
+
+  $('gid-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const save = $('gid-save');
+    if (save.getAttribute('aria-busy') === 'true') return;
+    gidStatus('');
+    const v = gidValidate();
+    if (!v.ok) { v.first.focus(); return; }
+    save.setAttribute('aria-busy', 'true');
+    save.setAttribute('aria-disabled', 'true');
+    save.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), document.createTextNode('Saving…'));
+    try {
+      const r = await api('/api/git-identity', { method: 'POST', body: { name: v.name, email: v.email } });
+      const d = r.data || {};
+      if (!r.ok) {
+        const msg = d.error || 'Could not save (HTTP ' + r.status + ').';
+        if (r.status === 400) {
+          // Attach the server's refusal to the field it names, else show it as the status.
+          if (/email/i.test(msg)) { gidField(gidEmail, $('gid-email-err'), msg); gidEmail.focus(); }
+          else if (/name/i.test(msg)) { gidField(gidName, $('gid-name-err'), msg); gidName.focus(); }
+          else gidStatus(msg, true);
+        } else gidStatus(msg, true);
+        return;
+      }
+      if (typeof d.name === 'string') gidName.value = d.name;
+      if (typeof d.email === 'string') gidEmail.value = d.email;
+      gidDirty = false;
+      gidStatus(d.message || 'Git identity saved.', false);
+    } catch (e) {
+      if (e.message !== 'unauthorized') gidStatus('Network error: ' + e.message, true);
+    } finally {
+      save.removeAttribute('aria-busy');
+      save.removeAttribute('aria-disabled');
+      save.textContent = 'Save identity';
+    }
+  });
+  for (const input of [gidName, gidEmail]) {
+    input.addEventListener('input', () => {
+      gidDirty = true;
+      if (input.getAttribute('aria-invalid') === 'true') {
+        gidField(input, input === gidName ? $('gid-name-err') : $('gid-email-err'), '');
+      }
+    });
+  }
 
   // Register the worker early when the user already opted in, so pushes arrive even before the panel is opened.
   if (supported() && Notification.permission === 'granted') {

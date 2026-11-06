@@ -77,13 +77,19 @@ body.app .btn {
 }
 body.app .btn:hover:not(:disabled) { background: var(--surface-2); }
 body.app .btn:active:not(:disabled) { background: var(--line); }
-body.app .btn:disabled, body.app .btn[aria-disabled="true"] { opacity: .6; cursor: not-allowed; }
+/* Busy or disabled: dim the fill and edge only, so the label keeps full contrast. */
+body.app .btn:disabled, body.app .btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  background-image: linear-gradient(color-mix(in srgb, var(--surface) 50%, transparent), color-mix(in srgb, var(--surface) 50%, transparent));
+  border-color: color-mix(in srgb, var(--line-ctl) 50%, transparent);
+}
 body.app .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 body.app .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
 body.app .btn-primary:active:not(:disabled) { background: var(--accent-active); }
 body.app .btn-ghost { background: transparent; border-color: transparent; }
 body.app .btn-ghost:hover:not(:disabled) { background: var(--surface-2); border-color: var(--line-ctl); }
 body.app .btn-ghost:active:not(:disabled) { background: var(--line); border-color: var(--line-ctl); }
+body.app .btn .icon { flex: none; }
 
 /* Header */
 body.app .topbar {
@@ -376,6 +382,8 @@ body.app .appr-strip .btn { background: var(--surface); }
 .dialog .check input:disabled { opacity: .6; cursor: not-allowed; }
 .dialog .inline-error { color: var(--err); background: var(--err-bg); padding: .5rem .75rem; border-radius: 6px; margin: 0; overflow-wrap: anywhere; }
 .dialog [hidden] { display: none !important; }
+/* Let long labels wrap inside dialogs instead of overflowing at 320px. */
+body.app .dialog .btn { white-space: normal; }
 
 @media (max-width: 400px) {
   body.app .topbar { padding: .3rem .5rem; gap: .25rem; }
@@ -396,3 +404,32 @@ body.app .appr-strip .btn { background: var(--surface); }
 @media (prefers-reduced-motion: reduce) {
   body.app *, body.app *::before, body.app *::after, .dialog .spinner { animation: none !important; transition: none !important; }
 }
+
+/* ===== Pull and git identity ===== */
+body.app .card-meta { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; min-width: 0; }
+body.app .card-head { font: .8rem var(--mono); color: var(--muted); margin-right: auto; overflow-wrap: anywhere; }
+body.app .card-pull { flex: 0 0 auto; }
+body.app .card-pull .spinner { margin-right: .4rem; }
+body.app .card-results { flex: 1 1 100%; min-width: 0; display: grid; }
+body.app .card-result { margin: 0; min-width: 0; display: grid; gap: .4rem; }
+body.app .card-result-msg { margin: 0; padding: .5rem .75rem; border-radius: 6px; background: var(--info-bg); color: var(--info-fg); overflow-wrap: anywhere; }
+body.app .card-result.is-error .card-result-msg { background: var(--err-bg); color: var(--err); }
+body.app .card-result details { min-width: 0; }
+body.app .card-result summary { cursor: pointer; min-height: var(--ctl); display: flex; align-items: center; }
+body.app .card-result pre {
+  margin: 0; max-height: 14rem; overflow: auto; padding: 0; color: var(--text);
+  font: .8rem/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.dialog .settings-section { display: grid; gap: .75rem; }
+.dialog .settings-section + .settings-section { border-top: 1px solid var(--line); padding-top: 1rem; }
+.dialog .settings-section h3 { margin: 0; font-size: 1rem; }
+/* Field-error slots keep one line of height whether or not they hold a message, so the form does not jump. */
+.dialog .field-error { color: var(--err); font-size: .85rem; margin: 0; min-height: 1.5em; overflow-wrap: anywhere; }
+/* Live regions stay rendered (so they announce); when empty they collapse. */
+.dialog .inline-error:empty, .dialog .gid-status:empty { display: none; }
+.dialog .gid-status { margin: 0; overflow-wrap: anywhere; }
+.dialog .gid-status.is-error { color: var(--err); }
+/* Empty card regions stay rendered but take no space; the wrapper collapses too when both are empty. */
+body.app .card-result:empty { height: 0; }
+body.app .card-results:not(:has(.card-result:not(:empty))) { margin-top: -.6rem; height: 0; }
+@media (pointer: coarse) { body.app .card-pull, body.app .card-result summary { min-height: 44px; } .dialog input, .dialog .btn { min-height: 44px; } }

@@ -50,7 +50,7 @@ RUN useradd -m -s /bin/bash ccd \
  && install -d -o web -g ccd -m 2750 /var/lib/ccdash-git
 
 COPY rootfs/ /
-RUN chmod 0755 /usr/local/bin/ccd-session /usr/local/bin/ccd-project /usr/local/bin/ccd-ops \
+RUN chmod 0755 /usr/local/bin/ccd-session /usr/local/bin/ccd-project /usr/local/bin/ccd-onboard /usr/local/bin/ccd-ops \
       /usr/local/lib/ccdash/git-credential-ccdash /usr/local/lib/ccdash/hooks/agents.sh /usr/local/lib/ccdash/hooks/state.sh \
       /usr/local/lib/ccdash/hooks/permission.sh \
       /etc/s6-overlay/s6-rc.d/init-ccdash/up \

@@ -258,3 +258,31 @@ Each check reports one of `ok`, `mismatch` (warning, never an install failure), 
 - None from the Done-when list.
 - Additions: Close's Escape-first step, and Approve disabled for truncated input.
 - The stop() inode check cannot protect against libuv unlinking the socket on close.
+
+## Handoff 2 Phase D: re-onboarding with pull, and git identity
+
+### What was built
+- `ccd-project pull <project>` (`rootfs/usr/local/bin/ccd-project`; `clone` is unchanged). Workspace is `${CCDASH_WS:-/workspace}`. Exit codes: 2 bad name (`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`, no `..`), 3 refused (not a git checkout; dirty tree incl. untracked files `uncommitted changes in <proj>; commit or stash first`; no upstream; diverged `<proj> has diverged from origin; resolve it in a shell`), 4 `could not reach the remote: <first git line>` (checkout untouched). Fast-forward only. Output: `old <7>`, `new <7>`, `already up to date` | `pulled`, last line `head <full sha>`. `GIT_TERMINAL_PROMPT=0`.
+- `ccd-onboard <owner/repo>` (added to the Dockerfile chmod list): same name rule as `clone` (exit 2). If `$WS/<proj>/.git` exists: raw `remote.origin.url` must be `https://github.com/<repo>` (case-insensitive, `.git` and trailing `/` tolerated), else exit 3 `<dir> belongs to a different repo`; dirty tree exit 3; then `ccd-project pull`. Otherwise `ccd-project clone`. Then writes `${CCDASH_PROJECTS:-$HOME/.ccdash/projects}/<proj>.json` = `{repo, head (full sha), ts (unix s)}` merged into any existing keys (e.g. `packs`; a corrupt file is replaced), umask 027 (file 640, directory 750), temp file + mv. Last log line: `head <sha>`.
+- Dashboard (`dashboard/lib/projects.js`, `identity.js`, `api.js`; all behind session + Origin + X-CCDash, covered by the route lists in `api.test.js`):
+  - `POST /api/projects` now runs `ccd-onboard owner/repo`; exit 3 -> 409 with the last log line and `{log}`.
+  - `GET /api/projects` -> `projects[{name, session, state, repo, head}]`; `repo`/`head` (7 chars) come from the json (regular file only, 4 KB cap, fields validated, null on anything odd). `svc.projectsDir` defaults to `/home/ccd/.ccdash/projects`.
+  - `POST /api/projects/:proj/pull` -> 200 `{project, repo, head, before, changed, claude, message, log}`; 400 bad name, 404 no folder, 409 no onboarding record (`no onboarding record; add the project again`) or exit 3 (last log line), 502 `pull failed` (any other rc, incl. 4, or unparsable output), 504 timeout (5 min). Errors carry `{error, log}`. Messages: `pulled <repo> to <head>[; Claude was not restarted]` (the suffix only when a Claude is live in that project), `already up to date at <head>`. Never starts, restarts or prompts a session. A second concurrent pull of the same project shares the first one's result.
+  - `GET /api/git-identity` -> `{name, email}` (null when unset; `git config --global --get-regexp ^user\.(name|email)$` through ccd-ops, rc 1 = unset). `POST /api/git-identity {name, email}` -> `{ok, name, email, message: "git identity set to <name> <email>"}`; name trimmed, 1..100 chars, no control characters; email <= 254 chars, `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`; else 400. Two ops (`git config --global user.name|user.email <v>`) as ccd, argv without a shell; failure -> 502 `{log}`. A value ending in `;` is sent as `\;` because tmux would otherwise treat it as a command separator (checked on tmux 3.5a).
+- `bin/ccd`: `ccd pull <project>`; `ccd identity <name> <email>`; `ccd identity --from-host` (host `git config --global user.name/user.email`, error if either is unset, then set in the container as ccd). This is the helper setup.sh (Phase I) will call. `ccd clone` now runs `ccd-onboard`, so a record is written.
+
+### Review fixes
+- Empty repo (unborn HEAD): clone/pull succeed, no `head` line, the record has no `head` (API gives `head: null`, message `<repo> has no commits yet`).
+- `ccd-project pull` itself refuses an origin that is not `https://github.com/<owner>/<project>` (exit 3) and a branch whose `branch.<b>.remote` is not `origin` (exit 3). The dirty check lives only there. Output is `old`, then `pulled` | `already up to date` | `ahead of origin; nothing to pull`, then `head`.
+- The API refuses a record whose repo name differs from the project (409 `onboarding record does not match this project`).
+- Adding (POST /api/projects) a repo whose folder already exists still pulls it, so re-adding can answer 409 when the tree is dirty or diverged.
+- `POST /api/git-identity` writes are serialised; a failure on the second key names the key already written.
+
+### Findings
+- `git remote get-url` applies `url.*.insteadOf`; `ccd-onboard` reads `git config --get remote.origin.url` so the comparison sees the real origin (and the tests can use local bare repos).
+- Git strips trailing `;` (and similar) from the author name of a commit; `user.name` itself keeps it.
+- `bats tests/bats/fake-claude.bats` test 11 (hanging hook) fails inside the alpine bats image, also on a clean HEAD; unrelated to this phase.
+
+### Tests (CI job `test`)
+- `tests/bats/onboard.bats` (local bare repos with `insteadOf`, no network): clone writes json (640/750), re-add fast-forwards, `packs` kept, corrupt json replaced, dirty/untracked refused, other-origin folder, diverged, unreachable remote (exit 4, HEAD and files unchanged), bad names. `dashboard/test/phase-d.test.js`: routes, messages, validation, guard. `api.test.js` route lists include the new routes (401 without session, 403 without Origin/X-CCDash).
+- `tests/stack/phase-d.sh` (stack `ccdashtest-d`, port `CCDASH_TEST_PORT` default 7693, own volumes, removed at the end): Add, pull while the fake Claude keeps its pid and pane, dirty and diverged refused, unreachable remote -> 502 with HEAD unchanged, identity set via the API and used by ccd's `git commit`, hostile input refused. CI step `stack test (re-onboarding, pull, git identity)`. Locally: `CCDASH_DOCKER="sudo -n -u ccdash /usr/local/bin/ccdash-docker" CCDASH_TEST_PORT=7693 tests/stack/phase-d.sh` (use `CCDASH_IMAGE=<tag>` or remove `ccdash:ci` so the image is rebuilt).

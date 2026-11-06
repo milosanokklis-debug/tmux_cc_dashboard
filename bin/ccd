@@ -3,12 +3,25 @@ set -euo pipefail
 # $D may contain spaces (e.g. "sudo docker"); it is left unquoted on purpose.
 D=${CCDASH_DOCKER:-docker}
 run() { local t=-i; [ -t 0 ] && t=-it; $D exec $t -u ccd ccdash "$@"; }
-usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone <owner/repo> | login | passwd" >&2; exit 2; }
+usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone <owner/repo> | pull <project> | identity <name> <email> | identity --from-host | login | passwd" >&2; exit 2; }
 case "${1:-}" in
   ls) run ccd-session ls ;;
   attach) [ $# -eq 2 ] || usage; run ccd-session attach "$2" ;;
   wake) [ $# -eq 2 ] || usage; run ccd-session wake "$2" ;;
-  clone) [ $# -eq 2 ] || usage; run ccd-project clone "$2" ;;
+  clone) [ $# -eq 2 ] || usage; run ccd-onboard "$2" ;;
+  pull) [ $# -eq 2 ] || usage; run ccd-project pull "$2" ;;
+  identity)
+    if [ $# -eq 2 ] && [ "$2" = --from-host ]; then
+      name=$(git config --global user.name || true); email=$(git config --global user.email || true)
+      [ -n "$name" ] && [ -n "$email" ] || { echo "ccd: the host's git config --global needs user.name and user.email" >&2; exit 1; }
+    else
+      [ $# -eq 3 ] && [ "$2" != --from-host ] || usage
+      name=$2; email=$3
+    fi
+    run git config --global user.name "$name"
+    run git config --global user.email "$email"
+    echo "git identity set to $name $email"
+    ;;
   login) run claude ;;
   passwd) $D exec -it -u web ccdash node /opt/ccdash/dashboard/ccdash-passwd.js ;;
   *) usage ;;
