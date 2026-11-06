@@ -40,6 +40,15 @@ prompt is read with `read -ra`, so cues are plain words, not globs.
 | `/long` | A turn that blocks (prints `working...`), polling stdin for up to 120 s. A lone ESC prints `interrupted`, writes `interrupted` to `events.log`, fires Notification idle_prompt and no Stop, and returns to the prompt (hypothetical like `/esc`: real CLI behaviour is unverified until `ccd doctor --live`). Anything else typed or pasted meanwhile, including bracketed pastes and other escape sequences, is ignored, so a pasted `/exit` does not end it. |
 | `/status` | Runs `statusLine.command` from the settings with statusline.json on stdin, else prints a line derived from the fixture |
 
+Usage and transcripts (off by default):
+
+| Env | Effect |
+|---|---|
+| `FAKE_CLAUDE_RATE_LIMITS` | `none` removes `rate_limits` from the `/status` payload; `"<five_hour_pct> <seven_day_pct>"` sets the used percentages (the fixture has them at 23.5 and 41.2) |
+| `FAKE_CLAUDE_TRANSCRIPTS=<dir>` | Writes `<dir>/<cwd with / and . as ->/<sid>.jsonl` (Claude Code's projects layout) and puts that path in every payload's `transcript_path`. Each prompt appends a `user` line and an `assistant` line written twice (one line per content block, same `message.id` and usage), as the real CLI does. `/sub` also writes `<sid>/subagents/agent-<id>.jsonl`, gives SubagentStart/SubagentStop a fresh `agent_id` (`a` + 16 hex, also logged to `events.log` as `subagent <id>`) and SubagentStop its `agent_transcript_path` |
+| `FAKE_CLAUDE_USAGE` | `"input output cache_creation cache_read"` for the assistant lines (default `10 20 30 40`) |
+| `FAKE_CLAUDE_MODEL` | model name on assistant lines (default `claude-sonnet-5-5`) |
+
 ## Running the tests locally
 
 CI (`.github/workflows/test.yml`) runs: shellcheck on every shell script, `bats tests/bats`,

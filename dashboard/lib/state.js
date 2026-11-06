@@ -29,6 +29,7 @@ function parseRecord(name, text) {
   return {
     sid: name, state: o.state, event: clean(o.event, 40), ts,
     project: clean(o.project, 1000),
+    transcript: clean(o.transcript, 1000),
     pane: typeof o.pane === 'string' && /^%[0-9]+$/.test(o.pane) ? o.pane : null,
     tmuxPid: Number.isInteger(o.tmux_pid) && o.tmux_pid > 0 ? o.tmux_pid : null,
     tmuxStart: Number.isInteger(o.tmux_start) && o.tmux_start > 0 ? o.tmux_start : null,
@@ -72,7 +73,7 @@ function derive(records, { panes, table, serverPid = null, serverStart = null, n
       else if (otherServer(r) || !runsClaude(r.pane)) status = 'sleeping';
     }
     out.set(r.sid, {
-      sid: r.sid, pane: r.pane, status, outsideTmux, project: r.project ? path.basename(r.project) : '(unknown)', resumedFrom: r.resumedFrom,
+      sid: r.sid, pane: r.pane, transcript: r.transcript ?? null, status, outsideTmux, project: r.project ? path.basename(r.project) : '(unknown)', resumedFrom: r.resumedFrom,
       hidden: replaced.has(r.sid),
       idle: status === 'waiting' && r.waitingSince !== null && now - r.waitingSince * 1000 >= idleMs,
       quiet: status === 'working' && now - r.ts * 1000 >= quietMs,

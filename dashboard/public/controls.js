@@ -112,18 +112,34 @@
     return lines.slice(-n).join('\n');
   }
 
-  // ---------------------------------------------------------------- preview refresh (visible cards only)
+  // ---------------------------------------------------------------- previews (pushed over /events)
 
+  // The IntersectionObserver tracks which preview boxes are on screen. The set of their conversation ids is
+  // sent to the server as watch/unwatch; the server pushes {type:'preview'} when a pane's text changes.
+  // Nothing here makes a request.
+  const events = window.ccdash.events;
   const visible = new Map(); // element -> sid
-  const inflight = new Set();
-  let timer = null;
+  let syncTimer = null;
   const io = typeof IntersectionObserver === 'function' ? new IntersectionObserver((entries) => {
     for (const e of entries) {
       const sid = e.target.dataset.sid;
       if (e.isIntersecting) visible.set(e.target, sid); else visible.delete(e.target);
     }
-    syncTimer(true);
+    scheduleSync();
   }) : null;
+
+  function syncWatch() {
+    syncTimer = null;
+    const ids = new Set();
+    if (!document.hidden) for (const [el, sid] of visible) if (el.isConnected) ids.add(sid);
+    events.setWatched(ids);
+  }
+  // Debounced: a tree re-render releases and re-observes every box; the unchanged set then sends nothing.
+  function scheduleSync(now) {
+    clearTimeout(syncTimer);
+    if (now) syncWatch(); else syncTimer = setTimeout(syncWatch, 250);
+  }
+  document.addEventListener('visibilitychange', () => scheduleSync(true));
 
   function paint(el, text) {
     const stick = el.dataset.state !== 'ok' || el.scrollHeight - el.scrollTop - el.clientHeight < 8;
@@ -132,39 +148,14 @@
     if (stick) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
   }
 
-  async function fetchPreview(el, sid) {
-    if (inflight.has(sid)) return;
-    inflight.add(sid);
-    try {
-      const r = await api('/api/conversations/' + encodeURIComponent(sid) + '/preview');
-      if (!el.isConnected) return;
-      if (r.ok && r.data && typeof r.data.text === 'string') {
-        if (previewCache.get(sid) !== r.data.text || el.dataset.state !== 'ok') {
-          previewCache.set(sid, r.data.text);
-          paint(el, r.data.text);
-        }
-      } else if (el.dataset.state !== 'ok') {
-        el.textContent = 'Preview unavailable.';
-        el.dataset.state = 'none';
-      }
-    } catch { /* offline or signed out: keep the last preview */ } finally { inflight.delete(sid); }
-  }
-
-  function pump() {
-    if (document.hidden) return;
-    for (const [el, sid] of visible) {
-      if (!el.isConnected) { visible.delete(el); io && io.unobserve(el); continue; }
-      fetchPreview(el, sid);
+  events.on('preview', (msg) => {
+    if (typeof msg.id !== 'string' || typeof msg.text !== 'string') return;
+    const same = previewCache.get(msg.id) === msg.text;
+    previewCache.set(msg.id, msg.text);
+    for (const el of document.querySelectorAll('pre.preview[data-sid]')) {
+      if (el.dataset.sid === msg.id && (!same || el.dataset.state !== 'ok')) paint(el, msg.text);
     }
-  }
-
-  function syncTimer(immediate) {
-    if (visible.size && !document.hidden) {
-      if (!timer) timer = setInterval(pump, 3000);
-      if (immediate) pump();
-    } else if (timer) { clearInterval(timer); timer = null; }
-  }
-  document.addEventListener('visibilitychange', () => syncTimer(true));
+  });
 
   function previewBlock(c) {
     const pre = h('pre', {
@@ -175,9 +166,9 @@
     else {
       pre.textContent = 'Scroll to load preview';
       pre.dataset.state = 'loading';
-      if (!io) fetchPreview(pre, c.sid); // no observer: nothing else would ever load it
     }
     if (io) io.observe(pre);
+    else { visible.set(pre, c.sid); scheduleSync(); } // no observer: watch every box
     return pre;
   }
 
@@ -185,7 +176,7 @@
   function releasePreviews() {
     for (const el of visible.keys()) io && io.unobserve(el);
     visible.clear();
-    syncTimer(false);
+    scheduleSync();
   }
 
   // ---------------------------------------------------------------- prompt box

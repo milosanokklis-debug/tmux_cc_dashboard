@@ -5,7 +5,11 @@ const { HttpError, send, readJson } = require('./http');
 const { createTmux, readProcTable, runFile, runOp } = require('./tmux');
 const projects = require('./projects');
 const identity = require('./identity');
-const { buildTree } = require('./tree');
+const { buildTree, listConversations } = require('./tree');
+const { createReader, ReaderError } = require('./reader');
+const { createTokens, readTranscript, transcriptFiles } = require('./tokens');
+const usage = require('./usage');
+const { createUsageFallback } = require('./usage-fallback');
 const { createReconciler } = require('./state');
 const { createControls } = require('./controls');
 const { MAX_MESSAGE } = require('./broker');
@@ -15,7 +19,12 @@ const MAX_ADD_BODY = 64 * 1024; // prompt <= 4000 chars, up to 6 bytes each when
 
 function defaultServices() {
   const tmux = createTmux();
+  const reader = createReader();
   return {
+    reader,
+    tokens: createTokens({ reader }),
+    usageDir: usage.DEFAULT_DIR,
+    usageFallback: createUsageFallback({ tmux }),
     workspace: '/workspace',
     agentsDir: '/home/ccd/.ccdash/agents',
     projectsDir: projects.DEFAULT_PROJECTS_DIR,
@@ -35,6 +44,16 @@ function createApi(svc) {
   const controls = createControls(svc, { closeWaitSec: svc.closeWaitSec });
   const waking = new Set(); // sids with a wake running
 
+  // Transcripts to read: each conversation's own and its subagents', from the agent events
+  // (subagents) and the state snapshot (the conversation's transcript path).
+  const trackedFiles = () => transcriptFiles(listConversations(svc.agentsDir), svc.reconciler.snapshot());
+  // Reader failures become plain HTTP errors; the reader's own messages never carry a path.
+  const readerError = (e) => {
+    if (!(e instanceof ReaderError)) throw e;
+    if (e.code === 'not_found') throw new HttpError(404, 'transcript not found');
+    throw new HttpError(503, 'transcript reader unavailable');
+  };
+
   // Pane list, or 503: a denied or unreachable tmux must not look like "everything is gone".
   async function panes() {
     try {
@@ -49,7 +68,36 @@ function createApi(svc) {
   }
   const methodNotAllowed = () => { throw new HttpError(405, 'method not allowed'); };
 
-  return async function handleApi(req, res, pathname, searchParams, ctx = {}) {
+  // The same payloads /api/tree and /api/usage answer with; the /events hub reuses them.
+  async function treePayload(all = false) {
+    const now = svc.now();
+    const projectsTree = buildTree({
+      agentsDir: svc.agentsDir, transcriptRoot: svc.transcriptRoot, panes: await panes(), table: svc.procTable(),
+      now, all, states: svc.reconciler.snapshot(), tokens: svc.tokens ?? null,
+    });
+    svc.tokens?.refresh(trackedFiles()).catch(() => {}); // totals in the next tree; never delays this answer
+    for (const p of projectsTree) { // an approval card only while the conversation really is in needs_approval
+      for (const c of p.conversations) {
+        const a = c.status === 'needs_approval' ? svc.broker?.forSid(c.sid) : null;
+        if (a) c.approval = { id: a.id, tool: a.tool_name, input: a.tool_input, truncated: a.truncated, since: a.since };
+      }
+    }
+    return { now: Math.floor(now / 1000), projects: projectsTree }; // unix seconds
+  }
+  let lastPrune = -Infinity;
+  function usagePayload() {
+    if (Date.now() - lastPrune > 3600 * 1000) { lastPrune = Date.now(); usage.prune(svc.usageDir); } // hourly
+    const fb = svc.usageFallback;
+    const g = usage.gauges({ dir: svc.usageDir, now: Math.floor(svc.now() / 1000), fallback: fb ? fb.latest : null });
+    if (g.five_hour.status === 'unknown' && g.seven_day.status === 'unknown') fb?.refresh(); // off unless switched on
+    return { ...g, fallback_enabled: !!fb?.enabled() };
+  }
+  async function tokensPayload(conversation = null) {
+    await svc.tokens.refresh(trackedFiles());
+    return svc.tokens.views({ conversation });
+  }
+
+  async function handleApi(req, res, pathname, searchParams, ctx = {}) {
     const get = req.method === 'GET';
     if (pathname.startsWith('/api/push/')) return pushRoute(req, res, pathname, ctx.sessionKey);
     if (pathname === '/api/projects') {
@@ -85,18 +133,33 @@ function createApi(svc) {
     }
     if (pathname === '/api/tree') {
       if (!get) return methodNotAllowed();
-      const now = svc.now();
-      const projectsTree = buildTree({
-        agentsDir: svc.agentsDir, transcriptRoot: svc.transcriptRoot, panes: await panes(), table: svc.procTable(),
-        now, all: searchParams.get('all') === '1', states: svc.reconciler.snapshot(),
-      });
-      for (const p of projectsTree) { // an approval card only while the conversation really is in needs_approval
-        for (const c of p.conversations) {
-          const a = c.status === 'needs_approval' ? svc.broker?.forSid(c.sid) : null;
-          if (a) c.approval = { id: a.id, tool: a.tool_name, input: a.tool_input, truncated: a.truncated, since: a.since };
-        }
-      }
-      return send(res, 200, { now: Math.floor(now / 1000), projects: projectsTree }); // unix seconds
+      return send(res, 200, await treePayload(searchParams.get('all') === '1'));
+    }
+    if (pathname === '/api/usage') {
+      if (!get) return methodNotAllowed();
+      return send(res, 200, usagePayload());
+    }
+    if (pathname === '/api/tokens') {
+      if (!get) return methodNotAllowed();
+      const conversation = searchParams.get('conversation');
+      if (conversation !== null && !/^[A-Za-z0-9_-]{1,100}$/.test(conversation)) throw new HttpError(400, 'invalid conversation id');
+      return send(res, 200, await tokensPayload(conversation));
+    }
+    if (pathname === '/api/transcript') {
+      if (!get) return methodNotAllowed();
+      const conv = searchParams.get('conv');
+      const agent = searchParams.get('agent') || 'main';
+      const off = searchParams.get('offset');
+      if (!conv || !/^[A-Za-z0-9_-]{1,100}$/.test(conv)) throw new HttpError(400, 'invalid conversation id');
+      if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(agent)) throw new HttpError(400, 'invalid agent id');
+      if (off !== null && !/^[0-9]{1,15}$/.test(off)) throw new HttpError(400, 'invalid offset');
+      // the file comes from our own records, never from the request
+      const file = trackedFiles().find((f) => f.conv === conv && f.agent === agent);
+      if (!file) throw new HttpError(404, 'no such transcript');
+      try {
+        const view = await readTranscript(svc.reader, file.path, { offset: off === null ? null : Number(off) });
+        return send(res, 200, { conv, agent, agent_type: file.agent_type, ...view });
+      } catch (e) { return readerError(e); }
     }
     const decision = /^\/api\/approvals\/([^/]+)\/decision$/.exec(pathname);
     if (decision) {
@@ -121,7 +184,12 @@ function createApi(svc) {
       return send(res, 200, await controls[ctl[2]](ctl[1], req));
     }
     throw new HttpError(404, 'not found');
-  };
+  }
+  handleApi.treePayload = treePayload;
+  handleApi.usagePayload = usagePayload;
+  handleApi.tokensPayload = tokensPayload;
+  handleApi.preview = (sid) => controls.preview(sid, { fresh: false });
+  return handleApi;
 
   // Push routes: a subscription belongs to the session (cookie) that created it.
   async function pushRoute(req, res, pathname, sk) {

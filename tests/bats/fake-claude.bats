@@ -145,3 +145,44 @@ perm_settings() { # $1 = stdout of the PermissionRequest hook
   grep -qx 'permission deny' "$FAKE_CLAUDE_HOME/events.log"
   grep -qx 'permission-message: use rg instead' "$FAKE_CLAUDE_HOME/events.log"
 }
+
+@test "FAKE_CLAUDE_RATE_LIMITS drops or sets rate_limits in the /status payload" {
+  FAKE_CLAUDE_RATE_LIMITS=none run "$CLAUDE" <<<"/status"
+  [[ $output == *"Opus 5.5 null"* ]]
+  FAKE_CLAUDE_RATE_LIMITS="61 12" run "$CLAUDE" <<<"/status"
+  [[ $output == *"Opus 5.5 61"* ]]
+}
+
+@test "FAKE_CLAUDE_TRANSCRIPTS: a transcript per prompt (duplicate assistant lines) and a subagent transcript" {
+  export FAKE_CLAUDE_TRANSCRIPTS=$BATS_TEST_TMPDIR/projects FAKE_CLAUDE_USAGE="1 2 3 4"
+  : >"$M"
+  cd "$BATS_TEST_TMPDIR"
+  run "$CLAUDE" <<<$'hello\nrun /sub'
+  [ "$status" -eq 0 ]
+  main=$(ls "$FAKE_CLAUDE_TRANSCRIPTS"/*/*.jsonl)
+  [ "$(jq -s '[.[] | select(.type == "user")] | length' "$main")" = 2 ]
+  [ "$(jq -s '[.[] | select(.type == "assistant")] | length' "$main")" = 4 ]
+  [ "$(jq -s '[.[] | .message.id // empty] | unique | length' "$main")" = 2 ]
+  [ "$(jq -sr '[.[] | select(.type == "assistant")][0].message.usage | "\(.input_tokens) \(.output_tokens) \(.cache_creation_input_tokens) \(.cache_read_input_tokens)"' "$main")" = "1 2 3 4" ]
+  sub=$(ls "$FAKE_CLAUDE_TRANSCRIPTS"/*/*/subagents/agent-*.jsonl)
+  [ "$(jq -s 'length' "$sub")" = 3 ]
+  aid=$(sed 's/.*agent-\(.*\)\.jsonl/\1/' <<<"$sub")
+  grep -q "subagent $aid" "$FAKE_CLAUDE_HOME/events.log"
+}
+
+@test "FAKE_CLAUDE_TRANSCRIPTS: hook payloads carry the transcript and subagent paths" {
+  export FAKE_CLAUDE_TRANSCRIPTS=$BATS_TEST_TMPDIR/projects
+  cat >"$BATS_TEST_TMPDIR/dump.sh" <<'EOS'
+#!/usr/bin/env bash
+jq -c '{e: .hook_event_name, t: .transcript_path, a: .agent_id, p: .agent_transcript_path}' >>"$1"
+EOS
+  chmod +x "$BATS_TEST_TMPDIR/dump.sh"
+  jq -n --arg c "$BATS_TEST_TMPDIR/dump.sh $M" '{hooks: {SubagentStop: [{hooks: [{type: "command", command: $c}]}]}}' >"$FAKE_CLAUDE_SETTINGS"
+  : >"$M"
+  cd "$BATS_TEST_TMPDIR"
+  run "$CLAUDE" <<<"go /sub"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .t "$M")" = "$(ls "$FAKE_CLAUDE_TRANSCRIPTS"/*/*.jsonl)" ]
+  [ "$(jq -r .p "$M")" = "$(ls "$FAKE_CLAUDE_TRANSCRIPTS"/*/*/subagents/agent-*.jsonl)" ]
+  [[ $(jq -r .a "$M") =~ ^a[0-9a-f]{16}$ ]]
+}

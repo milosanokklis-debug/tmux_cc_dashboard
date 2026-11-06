@@ -264,8 +264,7 @@ body.app .conv-name { font: 500 .875rem/1.3 var(--mono); min-width: 0; overflow-
 body.app .agent-type { font-weight: 600; font-size: .875rem; flex: 1 1 6rem; min-width: 0; overflow-wrap: anywhere; }
 body.app .agent-task { color: var(--muted); font-size: .8125rem; margin: -.25rem 0 .1rem; overflow-wrap: anywhere; }
 body.app .agent-task:not(.is-open) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
-body.app .task-more { min-height: 1.75rem; margin: 0 0 .3rem -.5rem; padding: 0 .5rem; font-size: .8125rem; color: var(--info-fg); }
-@media (pointer: coarse) { body.app .task-more { min-height: var(--ctl); } }
+body.app .task-more { min-height: 44px; margin: 0 0 .3rem -.5rem; padding: 0 .5rem; font-size: .8125rem; color: var(--info-fg); }
 body.app .elapsed { flex: none; min-width: 4.4rem; text-align: right; color: var(--muted); font: .8125rem/1 var(--mono); font-variant-numeric: tabular-nums; }
 body.app .row .chip { flex: none; }
 body.app .flags { display: inline-flex; flex-wrap: wrap; gap: .25rem; }
@@ -321,7 +320,7 @@ body.app .prompt-bar { display: flex; flex-wrap: wrap; justify-content: space-be
 @media (pointer: coarse) { body.app .ctl-hint { display: none; } }
 body.app .appr-raw summary { cursor: pointer; font-size: .8125rem; font-weight: 600; display: list-item; list-style-position: inside; padding: .55rem 0; }
 body.app .appr-raw[open] summary { padding-top: .1rem; }
-body.app .tree-legend { font-size: .75rem; line-height: 1.4; }
+body.app .tree-legend { font-size: .8125rem; line-height: 1.4; }
 body.app .ctl-empty-why { flex: 1 1 8rem; align-self: center; }
 body.app .ctl-count { font-variant-numeric: tabular-nums; }
 body.app .ctl-count.is-over { color: var(--err); font-weight: 700; }
@@ -433,3 +432,76 @@ body.app .card-result pre {
 body.app .card-result:empty { height: 0; }
 body.app .card-results:not(:has(.card-result:not(:empty))) { margin-top: -.6rem; height: 0; }
 @media (pointer: coarse) { body.app .card-pull, body.app .card-result summary { min-height: 44px; } .dialog input, .dialog .btn { min-height: 44px; } }
+
+/* ===== Phase E: node meta, usage panel, transcript sheet ===== */
+body.app .meta-line { display: flex; flex-wrap: wrap; gap: .1rem .6rem; align-items: baseline; min-width: 0; padding-bottom: .15rem; font: .8125rem/1.4 var(--mono); color: var(--muted); }
+body.app .meta-model { overflow-wrap: anywhere; min-width: 0; }
+body.app .meta-tokens { display: inline-flex; flex-wrap: wrap; gap: .1rem .6rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+body.app .agent-open { min-height: 44px; padding: 0 .5rem; margin-left: -.5rem; font-weight: 600; text-decoration: underline; text-underline-offset: .2em; max-width: 100%; white-space: normal; text-align: left; }
+
+body.app .dialog.dialog-wide { width: min(46rem, calc(100% - 1.5rem)); }
+#usage-dialog h2 { font-size: 1.25rem; }
+#usage-dialog h3 { font-size: 1rem; font-weight: 600; }
+.dialog .usage-error { margin: 0; padding: .6rem .75rem; border-radius: 6px; background: var(--warn-bg); color: var(--warn-fg); }
+.dialog .usage-error .btn { margin-left: .5rem; }
+.dialog .gauges { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+.dialog .gauge { display: grid; gap: .4rem; padding: 0; }
+.dialog .gauge-head { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }
+.dialog .gauge-label { margin: 0; font-size: .95rem; font-weight: 600; }
+.dialog .gauge-value { font: 700 1.5rem/1.1 var(--mono); font-variant-numeric: tabular-nums; }
+.dialog .gauge[data-status="unknown"] .gauge-value { font-size: 1.1rem; color: var(--muted); font-weight: 600; }
+.dialog .gauge-bar { height: .75rem; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line-ctl); overflow: hidden; }
+.dialog .gauge-fill { display: block; height: 100%; width: 0; background: var(--ok-fg); border-radius: 999px; }
+.dialog .gauge[data-level="mid"] .gauge-fill { background: var(--warn-fg); }
+.dialog .gauge[data-level="high"] .gauge-fill { background: var(--err); }
+.dialog .gauge-reset, .dialog .gauge-note { margin: 0; font-size: .85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dialog .gauge-note { color: var(--warn-fg); background: var(--warn-bg); padding: .3rem .55rem; border-radius: 6px; }
+.dialog .gauge[data-status="unknown"] .gauge-note { color: var(--muted); background: transparent; padding: 0; }
+
+.dialog .seg { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: .35rem; }
+body.app .dialog .seg-btn { white-space: normal; min-height: 44px; }
+.dialog .seg-btn[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.dialog .tok-panel { display: grid; gap: .6rem; min-width: 0; }
+.dialog .tok-summary { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .6rem; font-variant-numeric: tabular-nums; }
+.dialog .tok-sum-fig { font: 700 1.25rem/1.2 var(--mono); }
+.dialog .price-label { font-size: .8125rem; font-weight: 600; }
+.dialog .tok-unpriced { font-size: .8125rem; color: var(--warn-fg); }
+.dialog .tok-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; max-width: 100%; }
+.dialog .tok-table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.dialog .tok-table th, .dialog .tok-table td { padding: .45rem .6rem; border-bottom: 1px solid var(--line); text-align: right; vertical-align: top; white-space: nowrap; }
+.dialog .tok-table thead th { background: var(--surface-2); font-weight: 600; vertical-align: bottom; }
+.dialog .tok-table tr:last-child > * { border-bottom: 0; }
+.dialog .tok-table tfoot th, .dialog .tok-table tfoot td { border-top: 2px solid var(--line-ctl); font-weight: 700; }
+.dialog .tok-table .label-col { text-align: left; position: sticky; left: 0; background: var(--surface); min-width: 7.5rem; max-width: 11rem; white-space: normal; overflow-wrap: anywhere; font-weight: 600; }
+.dialog .tok-table thead .label-col { background: var(--surface-2); }
+.dialog .tok-table .row-main, .dialog .tok-table .row-sub { display: block; }
+.dialog .tok-table .row-sub { font-weight: 400; color: var(--muted); font-size: .8125rem; }
+.dialog .tok-table .price-sub { display: block; font-weight: 400; color: var(--muted); font-size: .8125rem; white-space: normal; min-width: 8.5rem; margin-left: auto; }
+.dialog .tok-unavailable { margin: 0; padding: .6rem .75rem; border-radius: 6px; background: var(--warn-bg); color: var(--warn-fg); }
+
+/* Transcript sheet: a right-hand drawer on wide screens, a bottom sheet on phones. */
+body.app .dialog.sheet {
+  position: fixed; inset: 0 0 0 auto; margin: 0; width: min(38rem, 100%); max-width: 100%; height: 100dvh; max-height: 100dvh;
+  border-radius: 0; border-width: 0 0 0 1px; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; gap: .5rem;
+}
+body.app .dialog.sheet:not([open]) { display: none; }
+.dialog .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.dialog .sheet-head h2 { overflow-wrap: anywhere; min-width: 0; }
+.dialog .tx-status { margin: 0; font-size: .85rem; color: var(--muted); min-height: 1.3em; }
+.dialog .tx-wrap { position: relative; min-height: 0; display: grid; }
+.dialog .tx-log { overflow: auto; min-height: 0; display: grid; gap: .6rem; align-content: start; padding: .1rem; }
+.dialog .tx-jump { position: absolute; right: .5rem; bottom: .5rem; background: var(--accent); border-color: var(--accent); color: var(--accent-text); box-shadow: 0 2px 8px rgb(0 0 0 / .25); }
+.dialog .tx-entry { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .7rem; background: var(--bg); display: grid; gap: .35rem; min-width: 0; }
+.dialog .tx-assistant { border-left: 3px solid var(--accent); }
+.dialog .tx-head { display: flex; flex-wrap: wrap; gap: .1rem .6rem; align-items: baseline; }
+.dialog .tx-role { font-weight: 700; font-size: .85rem; }
+.dialog .tx-meta { font: .8125rem var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.dialog .tx-part { margin: 0; min-width: 0; }
+.dialog .tx-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dialog .tx-part pre { margin: .2rem 0 0; font: .78rem/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; background: var(--surface-2); padding: .4rem .5rem; border-radius: 6px; }
+.dialog .tx-tool-name { font: 600 .78rem var(--mono); color: var(--muted); }
+.dialog .tx-thinking summary { cursor: pointer; min-height: var(--ctl); display: flex; align-items: center; color: var(--muted); font-size: .85rem; }
+@media (max-width: 720px) {
+  body.app .dialog.sheet { inset: auto 0 0 0; width: 100%; height: 88dvh; max-height: 88dvh; border-width: 1px 0 0 0; border-radius: 12px 12px 0 0; }
+}
+@media (pointer: coarse) { .dialog .tx-jump, .dialog .tx-thinking summary { min-height: 44px; } }

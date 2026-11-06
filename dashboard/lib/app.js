@@ -13,6 +13,7 @@ const sec = require('./security');
 const { HttpError, send, readJson } = require('./http');
 const { createApi, defaultServices } = require('./api');
 const { createTerm } = require('./term');
+const { createEvents } = require('./events');
 const { createBroker } = require('./broker');
 const { createPush } = require('./push');
 
@@ -59,6 +60,11 @@ function createApp({
   const term = createTerm({
     wss, registry, tmuxSock: svc.tmux.sock, runFile: svc.runFile, spawnPty: svc.spawnPty,
     pingMs: svc.pingMs, cleanupMs: svc.cleanupMs,
+  });
+  const events = createEvents({
+    wss, registry, api: handleApi, reconciler: rec, log,
+    watchDir: svc.eventsDir || path.dirname(svc.agentsDir),
+    ...svc.eventsOpts,
   });
   const limiter = new LoginLimiter({ clock });
   const authFile = path.join(webDir, 'auth.json');
@@ -216,7 +222,7 @@ function createApp({
     });
   }
 
-  // The only WebSocket endpoint is /term/:proj; guardUpgrade checks session and Origin first.
+  // WebSocket endpoints are /events and /term/:proj; guardUpgrade checks session and Origin first.
   function onUpgrade(req, socket, head) {
     socket.on('error', () => {});
     refreshAuth();
@@ -227,6 +233,10 @@ function createApp({
     let query;
     try { const u = new URL(`http://localhost${req.url}`); pathname = u.pathname; query = u.searchParams; } catch {
       return sec.rejectUpgrade(socket, 400, 'Bad Request');
+    }
+    if (pathname === '/events') {
+      if (req.method !== 'GET') return sec.rejectUpgrade(socket, 404, 'Not Found');
+      return events.handleUpgrade(req, socket, head, { key: g.key }, (st, text) => sec.rejectUpgrade(socket, st, text));
     }
     const m = /^\/term\/([^/]+)$/.exec(pathname);
     if (!m || req.method !== 'GET') return sec.rejectUpgrade(socket, 404, 'Not Found');
@@ -247,15 +257,15 @@ function createApp({
     // the broker lives and dies with the server: closing it destroys held requests, so hooks fall through
     svc.broker.start();
     const closeServer = server.close.bind(server);
-    server.close = (cb) => { svc.broker.stop(); return closeServer(cb); };
-    server.on('close', () => svc.broker.stop());
+    server.close = (cb) => { svc.broker.stop(); events.close(); return closeServer(cb); };
+    server.on('close', () => { svc.broker.stop(); events.close(); });
     const timer = setInterval(tick, 30000);
     timer.unref();
     server.on('close', () => clearInterval(timer));
     return server;
   }
 
-  return { createServer, onUpgrade, sessions, registry, limiter, tick, refreshAuth, term, services: svc, broker: svc.broker };
+  return { createServer, onUpgrade, sessions, registry, limiter, tick, refreshAuth, term, events, services: svc, broker: svc.broker };
 }
 
 module.exports = { createApp };

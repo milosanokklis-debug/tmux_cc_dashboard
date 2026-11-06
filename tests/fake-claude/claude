@@ -38,11 +38,42 @@ if [ -n "$resume_id" ]; then # replay the old conversation's history, as the rea
   fi
 fi
 
+# Transcripts (off unless FAKE_CLAUDE_TRANSCRIPTS=<dir>): <dir>/<cwd with / and . as ->/<sid>.jsonl,
+# like Claude Code's projects/ layout. Payloads then carry that transcript_path, every prompt appends
+# a user line and an assistant line (written twice, as Claude does per content block; usage from
+# FAKE_CLAUDE_USAGE="input output cache_creation cache_read", default "10 20 30 40", model from
+# FAKE_CLAUDE_MODEL, default claude-sonnet-5-5), and /sub writes <sid>/subagents/agent-<id>.jsonl.
+tdir=${FAKE_CLAUDE_TRANSCRIPTS:-}
+tproj=
+tfile=
+if [ -n "$tdir" ]; then
+  tproj=$tdir/${PWD//[\/.]/-}
+  tfile=$tproj/$sid.jsonl
+  mkdir -p "$tproj/$sid/subagents"
+  : >"$tfile"
+fi
+now_iso() { date -u +%Y-%m-%dT%H:%M:%S.000Z; }
+# tline FILE ROLE ID TEXT -> one transcript line
+tline() {
+  local u in out cc cr
+  read -r in out cc cr <<<"${FAKE_CLAUDE_USAGE:-10 20 30 40}"
+  if [ "$2" = user ]; then
+    jq -nc --arg ts "$(now_iso)" --arg t "$4" --arg sid "$sid" '{type: "user", timestamp: $ts, sessionId: $sid, message: {role: "user", content: $t}}' >>"$1"
+  else
+    u=$(jq -nc --argjson i "$in" --argjson o "$out" --argjson c "$cc" --argjson r "$cr" '{input_tokens: $i, output_tokens: $o, cache_creation_input_tokens: $c, cache_read_input_tokens: $r}')
+    for _ in 1 2; do
+      jq -nc --arg ts "$(now_iso)" --arg id "$3" --arg t "$4" --argjson u "$u" --arg m "${FAKE_CLAUDE_MODEL:-claude-sonnet-5-5}" \
+        '{type: "assistant", timestamp: $ts, requestId: ("req_" + $id), message: {id: $id, model: $m, role: "assistant", content: [{type: "text", text: $t}], usage: $u}}' >>"$1"
+    done
+  fi
+}
+
 # payload NAME [JQ_FILTER] -> fixture JSON with session_id/cwd made real, then filter applied.
 payload() {
-  local f=$fixtures/$1.json
+  local f=$fixtures/$1.json tp='.'
   [ -f "$f" ] || { echo "fake-claude: missing fixture $f" >&2; return 1; }
-  jq -c --arg sid "$sid" --arg cwd "$PWD" ".session_id=\$sid | .cwd=\$cwd | ${2:-.}" "$f"
+  [ -n "$tfile" ] && tp='.transcript_path=env.FC_TFILE'
+  FC_TFILE=$tfile jq -c --arg sid "$sid" --arg cwd "$PWD" ".session_id=\$sid | .cwd=\$cwd | $tp | ${2:-.}" "$f"
 }
 
 # hooks EVENT MATCH_VALUE -> command strings of matching hooks, one per line.
@@ -99,15 +130,40 @@ permission() {
   esac
 }
 
+# FAKE_CLAUDE_RATE_LIMITS: "none" drops rate_limits from the /status payload (like an account whose
+# statusLine has none); "<five_hour_pct> <seven_day_pct>" sets the two used percentages.
 status() {
-  local cmd json
-  json=$(payload statusline) || return 0
+  local cmd json filt=.
+  case ${FAKE_CLAUDE_RATE_LIMITS:-} in
+    none) filt='del(.rate_limits)' ;;
+    [0-9]*" "[0-9]*) filt=".rate_limits.five_hour.used_percentage=${FAKE_CLAUDE_RATE_LIMITS% *} | .rate_limits.seven_day.used_percentage=${FAKE_CLAUDE_RATE_LIMITS#* }" ;;
+  esac
+  json=$(payload statusline "$filt") || return 0
   cmd=$(jq -r '.statusLine.command // empty' "$settings" 2>/dev/null)
   if [ -n "$cmd" ]; then
     printf '%s' "$json" | timeout "$tmo" bash -c "$cmd"
     echo
   else
-    jq -r '"\(.model.display_name) | 5h \(.rate_limits.five_hour.used_percentage)% | 7d \(.rate_limits.seven_day.used_percentage)%"' <<<"$json"
+    jq -r '"\(.model.display_name) | 5h \(.rate_limits.five_hour.used_percentage // "?")% | 7d \(.rate_limits.seven_day.used_percentage // "?")%"' <<<"$json"
+  fi
+}
+
+# /sub: SubagentStart then SubagentStop with a fresh agent id; with FAKE_CLAUDE_TRANSCRIPTS the
+# subagent also gets its own transcript (SubagentStop carries agent_transcript_path, as the real one).
+subagent() {
+  local aid sf=
+  aid=a$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  export FC_AID=$aid
+  event "subagent $aid"
+  fire SubagentStart SubagentStart .agent_type '.agent_id=env.FC_AID'
+  if [ -n "$tfile" ]; then
+    sf=$tproj/$sid/subagents/agent-$aid.jsonl
+    tline "$sf" user "" "subagent task $aid"
+    tline "$sf" assistant "msg_${aid}" "subagent reply"
+    export FC_ATP=$sf
+    fire SubagentStop SubagentStop .agent_type '.agent_id=env.FC_AID | .agent_transcript_path=env.FC_ATP'
+  else
+    fire SubagentStop SubagentStop .agent_type '.agent_id=env.FC_AID'
   fi
 }
 
@@ -160,13 +216,14 @@ while printf '> ' && IFS= read -r line; do
   pn=$((pn + 1))
   printf '%s' "$prompt" >"$fhome/prompts/$sid.$pn" # exact bytes
   printf '%s\n' "${prompt//$'\n'/\\n}" >>"$hist"   # history: one line, newlines as \n
+  if [ -n "$tfile" ]; then tline "$tfile" user "" "$prompt"; tline "$tfile" assistant "msg_${sid}_$pn" "ok"; fi
   fire UserPromptSubmit UserPromptSubmit .prompt ".prompt=\"$(jq -rn --arg l "$prompt" '$l|@json|.[1:-1]')\""
   stop=Stop esc=0
   for ((i = 0; i < ${#words[@]}; i++)); do
     case ${words[i]} in
       /tool) fire PostToolUse PostToolUse .tool_name ;;
       /perm) permission ;;
-      /sub) fire SubagentStart SubagentStart .agent_type; fire SubagentStop SubagentStop .agent_type ;;
+      /sub) subagent ;;
       /fail) stop=StopFailure ;;
       /notify)
         case ${words[i + 1]:-} in

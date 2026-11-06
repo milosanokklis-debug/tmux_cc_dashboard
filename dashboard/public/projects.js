@@ -1,7 +1,7 @@
 'use strict';
 // Project list screen and the "Add project" dialog.
 (function () {
-  const { api, h, poller, notice, chip } = window.ccdash;
+  const { api, h, notice, chip } = window.ccdash;
   const $ = (id) => document.getElementById(id);
 
   const STATES = {
@@ -76,6 +76,8 @@
   }
 
   async function load() {
+    lastLoad = Date.now();
+    clearTimeout(pending); pending = null; stale = false;
     try {
       const r = await api('/api/projects');
       if (!r.ok) throw new Error((r.data && r.data.error) || 'HTTP ' + r.status);
@@ -89,7 +91,28 @@
     }
   }
 
-  const poll = poller(load, 3000);
+  // No timer. The list loads when the screen opens, after an action here, when the tab becomes visible
+  // again, and when /events says conversations changed (a Claude start or exit changes a project's state).
+  // Pushes are throttled to one request per 2 s. A hidden tab marks the list stale and reloads on return.
+  const events = window.ccdash.events;
+  let active = false;
+  let stale = false;
+  const sigs = {};
+  let lastLoad = 0;
+  let pending = null;
+  let offs = [];
+
+  function onPush(kind, next) {
+    if (!active || sigs[kind] === next) return;
+    const first = sigs[kind] === undefined; // the snapshot sent on connect: the list was just loaded
+    sigs[kind] = next;
+    if (first) return;
+    if (document.hidden) { stale = true; return; }
+    if (pending) return;
+    pending = setTimeout(() => { pending = null; load(); }, Math.max(300, 2000 - (Date.now() - lastLoad)));
+  }
+  const treeSig = (msg) => JSON.stringify(((msg.tree && msg.tree.projects) || []).map((p) => [p.project, (p.conversations || []).map((c) => [c.sid, c.status])]));
+  document.addEventListener('visibilitychange', () => { if (active && !document.hidden && stale) load(); });
 
   async function openProject(name, button) {
     const starting = known.some((k) => k.name === name && k.state === 'none');
@@ -147,7 +170,7 @@
           c.meta.hidden = false;
           c.freshHead = { text: c.head.textContent, until: Date.now() + 10000 };
         }
-        poll.now();
+        if (active) load();
       }
     } catch (e) {
       if (e.message !== 'unauthorized') show('Network error: ' + e.message, null, true);
@@ -276,7 +299,7 @@
       clearDraft();
       closeDialog();
       if (warning) notice(String(warning), 'info');
-      poll.now();
+      if (active) load();
       window.ccdash.go(project);
     } catch (e) {
       if (e.message !== 'unauthorized') showError('Network error: ' + e.message);
@@ -298,9 +321,20 @@
   window.ccdash.projects = {
     start() {
       if (!loaded) $('projects-loading').hidden = false; // shown only when scripts run (see <noscript> in index.html)
-      poll.start();
+      active = true;
+      sigs.tree = sigs.state = undefined;
+      load();
+      offs = [
+        events.on('tree', (m) => onPush('tree', treeSig(m))),
+        events.on('state', (m) => onPush('state', JSON.stringify(m.states || {}))),
+      ];
     },
-    stop() { poll.stop(); },
+    stop() {
+      active = false;
+      clearTimeout(pending); pending = null;
+      for (const off of offs) off();
+      offs = [];
+    },
     focusProject(name) { const c = cards.get(name); (c ? c.button : $('add-open')).focus(); },
   };
 })();

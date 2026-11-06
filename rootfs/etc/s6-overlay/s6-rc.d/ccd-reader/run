@@ -1,0 +1,6 @@
+#!/bin/sh
+# Read-only transcript reader as ccd (transcripts are 0600 in a 0700 directory). Socket
+# /run/ccdash/reader.sock is 0660 ccd:ccd, so the dashboard (user web, group ccd) can connect.
+# s6 services start without the container environment; the defaults are all it needs.
+export HOME=/home/ccd
+exec s6-setuidgid ccd node /usr/local/lib/ccdash/reader.js

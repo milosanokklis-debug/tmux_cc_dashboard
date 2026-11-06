@@ -108,13 +108,26 @@ function readProcTable(procDir = '/proc') {
   return table;
 }
 
-// True when `rootPid` or one of its descendants is a process whose comm is `claude`.
-function hasClaude(table, rootPid) {
+// parent pid -> child pids. Built once per process table (a table is one /proc snapshot, shared by
+// every conversation of a reconciler tick) and cached on it; a table that changed size is re-indexed.
+const kidsCache = new WeakMap();
+const stats = { indexBuilds: 0 };
+function kidsOf(table) {
+  const hit = kidsCache.get(table);
+  if (hit && hit.size === table.size) return hit.kids;
   const kids = new Map();
   for (const [pid, p] of table) {
     if (!kids.has(p.ppid)) kids.set(p.ppid, []);
     kids.get(p.ppid).push(pid);
   }
+  stats.indexBuilds++;
+  kidsCache.set(table, { size: table.size, kids });
+  return kids;
+}
+
+// True when `rootPid` or one of its descendants is a process whose comm is `claude`.
+function hasClaude(table, rootPid) {
+  const kids = kidsOf(table);
   const seen = new Set();
   const todo = [rootPid];
   while (todo.length) {
@@ -195,4 +208,4 @@ function startOpsSweeper(dir = '/run/ccdash/ops', { everyMs = 10 * 60 * 1000, ..
   return timer;
 }
 
-module.exports = { runFile, createTmux, readProcTable, hasClaude, runOp, sweepOps, startOpsSweeper };
+module.exports = { runFile, createTmux, readProcTable, hasClaude, _stats: stats, runOp, sweepOps, startOpsSweeper };

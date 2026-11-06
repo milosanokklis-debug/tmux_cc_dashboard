@@ -32,5 +32,6 @@
     "StopFailure": [
       {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh error"}]}
     ]
-  }
+  },
+  "statusLine": {"type": "command", "command": "/usr/local/lib/ccdash/hooks/statusline.sh"}
 }
