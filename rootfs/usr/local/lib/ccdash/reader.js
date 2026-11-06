@@ -1,0 +1,140 @@
+#!/usr/bin/env node
+'use strict';
+// ccd-reader: a tiny read-only service that runs as ccd and lets the dashboard (user web, group
+// ccd) read Claude's transcripts, which are 0600 inside a 0700 projects/ directory.
+// Protocol: one JSON object per line over a unix socket, one JSON answer per line.
+//   {op:"stat", path}                        -> {ok, size, inode, mtimeMs}
+//   {op:"tail", path, bytes}                 -> {ok, data(base64), offset, size, inode}
+//   {op:"read", path, offset, length}        -> {ok, data(base64), offset, size, inode}
+// Every path is resolved with realpath and must be a regular file inside ROOT (compared with a
+// trailing separator, so projects-evil is not projects). Errors never repeat a path.
+// Standard library only. Env: CCDASH_READER_SOCK, CCDASH_READER_ROOT (overridable for tests).
+const fs = require('node:fs');
+const net = require('node:net');
+const path = require('node:path');
+
+const DEFAULT_ROOT = '/home/ccd/.claude/projects';
+const DEFAULT_SOCK = '/run/ccdash/reader.sock';
+const MAX_LENGTH = 1024 * 1024; // bytes per read/tail
+const MAX_REQUEST = 8 * 1024; // bytes per request line
+const MAX_CONNECTIONS = 32;
+const OPEN_FLAGS = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW;
+
+class ReadError extends Error {
+  constructor(code) { super(code); this.code = code; }
+}
+
+// Real path of `p` when it names an existing entry inside `root`; throws ReadError('not_found')
+// for everything else (relative, NUL, missing, outside, symlink escape), so a caller cannot
+// tell a file outside the root from one that does not exist.
+function resolveInside(root, p) {
+  if (typeof p !== 'string' || p.length === 0 || p.length > 4096 || p.includes('\0') || !path.isAbsolute(p)) {
+    throw new ReadError('bad_path');
+  }
+  let base;
+  let real;
+  try {
+    base = fs.realpathSync(root);
+    real = fs.realpathSync(p);
+  } catch { throw new ReadError('not_found'); }
+  if (!real.startsWith(base.endsWith(path.sep) ? base : base + path.sep)) throw new ReadError('not_found');
+  return real;
+}
+
+const int = (v, min, max, dflt) => {
+  if (v === undefined) return dflt;
+  if (!Number.isSafeInteger(v) || v < min || v > max) throw new ReadError('bad_args');
+  return v;
+};
+
+// Opens the resolved path without following a final symlink and without blocking; the
+// descriptor must be a regular file. Runs fn(fd, stat).
+function withFile(root, p, fn) {
+  const real = resolveInside(root, p);
+  let fd;
+  try {
+    try { fd = fs.openSync(real, OPEN_FLAGS); } catch { throw new ReadError('not_found'); }
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) throw new ReadError('not_regular');
+    return fn(fd, st);
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* closed */ } }
+  }
+}
+
+function readAt(fd, st, offset, length) {
+  const len = Math.max(0, Math.min(length, st.size - offset));
+  const buf = Buffer.alloc(len);
+  let got = 0;
+  while (got < len) {
+    const n = fs.readSync(fd, buf, got, len - got, offset + got);
+    if (n === 0) break;
+    got += n;
+  }
+  return { ok: true, data: buf.subarray(0, got).toString('base64'), offset, length: got, size: st.size, inode: st.ino };
+}
+
+// One request object -> one answer object. Never throws.
+function handle(root, req) {
+  try {
+    if (!req || typeof req !== 'object' || Array.isArray(req)) throw new ReadError('bad_request');
+    switch (req.op) {
+      case 'stat':
+        return withFile(root, req.path, (fd, st) => ({ ok: true, size: st.size, inode: st.ino, mtimeMs: st.mtimeMs }));
+      case 'tail':
+        return withFile(root, req.path, (fd, st) => {
+          const bytes = int(req.bytes, 0, MAX_LENGTH, 65536);
+          const offset = Math.max(0, st.size - bytes);
+          return readAt(fd, st, offset, bytes);
+        });
+      case 'read':
+        return withFile(root, req.path, (fd, st) => {
+          const offset = int(req.offset, 0, Number.MAX_SAFE_INTEGER, undefined);
+          if (offset === undefined) throw new ReadError('bad_args');
+          return readAt(fd, st, offset, int(req.length, 0, MAX_LENGTH, MAX_LENGTH));
+        });
+      default:
+        throw new ReadError('bad_op');
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof ReadError ? e.code : 'error' };
+  }
+}
+
+function serve({ sock = DEFAULT_SOCK, root = DEFAULT_ROOT, log = console.error } = {}) {
+  try { fs.unlinkSync(sock); } catch { /* none */ }
+  let open = 0;
+  const server = net.createServer((c) => {
+    if (open >= MAX_CONNECTIONS) { c.destroy(); return; }
+    open++;
+    c.on('close', () => { open--; });
+    c.on('error', () => {});
+    c.setTimeout(10000, () => c.destroy());
+    let buf = '';
+    c.on('data', (d) => {
+      buf += d.toString('utf8');
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        let req = null;
+        try { req = JSON.parse(line); } catch { /* answered as bad_request */ }
+        c.write(`${JSON.stringify(handle(root, req))}\n`);
+      }
+      if (buf.length > MAX_REQUEST) { c.end(`${JSON.stringify({ ok: false, error: 'too_large' })}\n`); }
+    });
+  });
+  const prev = process.umask(0o007); // the socket is created 0660
+  server.listen(sock, () => {
+    process.umask(prev);
+    try { fs.chmodSync(sock, 0o660); } catch (e) { log('reader: chmod failed:', e.message); }
+  });
+  server.on('error', (e) => { log('reader:', e.message); process.exit(1); });
+  return server;
+}
+
+module.exports = { handle, resolveInside, serve, MAX_LENGTH, DEFAULT_ROOT, DEFAULT_SOCK };
+
+if (require.main === module) {
+  serve({ sock: process.env.CCDASH_READER_SOCK || DEFAULT_SOCK, root: process.env.CCDASH_READER_ROOT || DEFAULT_ROOT });
+}

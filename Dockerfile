@@ -52,9 +52,9 @@ RUN useradd -m -s /bin/bash ccd \
 COPY rootfs/ /
 RUN chmod 0755 /usr/local/bin/ccd-session /usr/local/bin/ccd-project /usr/local/bin/ccd-onboard /usr/local/bin/ccd-ops \
       /usr/local/lib/ccdash/git-credential-ccdash /usr/local/lib/ccdash/hooks/agents.sh /usr/local/lib/ccdash/hooks/state.sh \
-      /usr/local/lib/ccdash/hooks/permission.sh /usr/local/lib/ccdash/hooks/statusline.sh \
+      /usr/local/lib/ccdash/hooks/permission.sh /usr/local/lib/ccdash/hooks/statusline.sh /usr/local/lib/ccdash/reader.js \
       /etc/s6-overlay/s6-rc.d/init-ccdash/up \
-      /etc/s6-overlay/s6-rc.d/tmux/run /etc/s6-overlay/s6-rc.d/dashboard/run \
+      /etc/s6-overlay/s6-rc.d/tmux/run /etc/s6-overlay/s6-rc.d/dashboard/run /etc/s6-overlay/s6-rc.d/ccd-reader/run \
  && git config --system credential.helper /usr/local/lib/ccdash/git-credential-ccdash \
  && git config --system credential.useHttpPath true
 
