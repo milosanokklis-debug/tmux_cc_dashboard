@@ -117,6 +117,23 @@
         </div>
       </form>
     </section>
+    <section class="settings-section" aria-labelledby="sess-h" data-testid="sessions">
+      <h3 id="sess-h">Signed-in devices</h3>
+      <p id="sess-hint" class="hint">Every browser that is signed in to this dashboard. Revoke one you do not recognise.</p>
+      <p id="sess-state" class="sess-state" role="status" data-testid="sessions-state"></p>
+      <p id="sess-error" class="inline-error" role="alert"></p>
+      <ul id="sess-list" class="sess-list" aria-labelledby="sess-h" data-testid="sessions-list" hidden></ul>
+      <div class="dialog-actions dialog-actions-start" id="sess-actions" hidden>
+        <button type="button" id="sess-all" class="btn btn-danger" aria-describedby="sess-hint" data-testid="logout-everywhere">Log out everywhere</button>
+      </div>
+      <div id="sess-confirm" class="sess-confirm" role="group" aria-labelledby="sess-confirm-t" hidden>
+        <p id="sess-confirm-t"><strong>Log out every device, including this one?</strong> Everyone will have to sign in again.</p>
+        <div class="dialog-actions dialog-actions-start">
+          <button type="button" id="sess-all-yes" class="btn btn-danger" data-testid="logout-everywhere-confirm">Yes, log out everywhere</button>
+          <button type="button" id="sess-all-no" class="btn">Cancel</button>
+        </div>
+      </div>
+    </section>
     <div class="dialog-actions">
       <button type="button" id="notif-close" class="btn">Close</button>
     </div>
@@ -195,6 +212,12 @@
         <label for="add-prompt">First prompt <span class="optional">(optional)</span></label>
         <textarea id="add-prompt" name="prompt" rows="4" maxlength="4000" aria-describedby="add-prompt-count"></textarea>
         <p id="add-prompt-count" class="hint counter">0 / 4000</p>
+      </div>
+      <div class="field trust-field" id="add-trust-field" role="group" aria-labelledby="add-trust-title" hidden>
+        <p id="add-trust-title" class="trust-title">This repo defines hooks</p>
+        <p id="add-trust-list" class="trust-list"></p>
+        <label class="check"><input id="add-trust" name="trustHooks" type="checkbox" aria-describedby="add-trust-hint add-trust-list"> I trust this repo’s hooks</label>
+        <p id="add-trust-hint" class="hint">Hooks are commands the repo makes Claude run on its own, with no approval prompt. Tick this only for a repo you wrote or have read, then choose Clone and open again.</p>
       </div>
     </fieldset>
     <div id="add-progress" class="progress" role="status" tabindex="-1" hidden><span class="spinner" aria-hidden="true"></span><span>Cloning… this can take a few minutes.</span></div>

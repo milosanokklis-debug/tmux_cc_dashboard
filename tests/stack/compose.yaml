@@ -17,6 +17,7 @@ services:
       CCDASH_CLOSE_WAIT: "3" # phase-c
       CCDASH_RECONCILE_MS: "500" # phase-c
       NODE_EXTRA_CA_CERTS: /etc/ccdash-test/push-ca.pem # phase-c
+      CCDASH_PUSH_HOSTS_EXTRA: localhost:8443 # phase-c (the fake push service)
     tmpfs:
       - /run:mode=0755,exec
       - /tmp:mode=1777

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const webpush = require('web-push');
 const { writeFileAtomic } = require('./authstore');
+const { proxyUrl } = require('./proxy');
 
 const MAX_SUBS = 20;
 const MAX_ENDPOINT = 2048;
@@ -33,17 +34,24 @@ function parsePrefs(p, base = defaultPrefs()) {
 
 const b64urlLen = (s) => Buffer.from(s, 'base64url').length;
 
-// The endpoint may be any https host, not only known push services (an allowlist would break
-// self-hosted and future vendors). The server therefore POSTs encrypted payloads to whatever URL a
-// logged-in user registers: a known SSRF-style exposure, accepted because only authenticated users
-// can subscribe, the body is opaque and the response is never returned to the caller.
-function parseSubscription(s) {
+// Only the browser vendors' push services are accepted: the server POSTs an encrypted body to the
+// subscription's URL, so an open list would be an SSRF primitive for any logged-in user. Always
+// enforced (egress on or off). Exact host match, https, default port. Chrome/Edge-on-FCM, Firefox
+// and Safari are covered; Edge's *.notify.windows.com is not (add it with CCDASH_PUSH_HOSTS_EXTRA,
+// and to the egress allowlist). CCDASH_PUSH_HOSTS_EXTRA (comma-separated host[:port]) is for test
+// stacks and unusual setups; each entry also has to be in the egress allowlist to be reachable.
+const PUSH_HOSTS = ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'web.push.apple.com'];
+const extraPushHosts = (env = process.env) => String(env.CCDASH_PUSH_HOSTS_EXTRA || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+
+function parseSubscription(s, extra = extraPushHosts()) {
   if (s === null || typeof s !== 'object' || Array.isArray(s)) throw new PushError('subscription must be an object');
   const { endpoint, keys } = s;
   if (typeof endpoint !== 'string' || endpoint.length > MAX_ENDPOINT) throw new PushError('bad endpoint');
   let u;
   try { u = new URL(endpoint); } catch { throw new PushError('bad endpoint'); }
   if (u.protocol !== 'https:' || u.username || u.password) throw new PushError('endpoint must be an https URL');
+  const known = PUSH_HOSTS.includes(u.hostname) && u.port === '';
+  if (!known && !extra.includes(u.host) && !extra.includes(u.hostname)) throw new PushError('endpoint host is not an allowed push service');
   if (keys === null || typeof keys !== 'object' || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string'
     || !B64URL.test(keys.p256dh) || !B64URL.test(keys.auth)
     || b64urlLen(keys.p256dh) !== 65 || b64urlLen(keys.auth) !== 16) throw new PushError('bad keys');
@@ -54,6 +62,7 @@ function parseSubscription(s) {
 function createPush({
   dir, subject = process.env.CCDASH_PUSH_SUBJECT || DEFAULT_SUBJECT, log = console.error,
   send = (sub, payload, opts) => webpush.sendNotification(sub, payload, opts), now = () => Date.now(),
+  proxy = proxyUrl(), pushHosts = extraPushHosts(),
 } = {}) {
   const file = path.join(dir, 'push.json');
   let vapid = null;
@@ -65,7 +74,7 @@ function createPush({
       vapid = { publicKey: d.vapid.publicKey, privateKey: d.vapid.privateKey };
       for (const x of Array.isArray(d.subscriptions) ? d.subscriptions : []) {
         try {
-          subs.push({ ...parseSubscription(x), sk: String(x.sk), prefs: parsePrefs(x.prefs), created: Number(x.created) || 0 });
+          subs.push({ ...parseSubscription(x, pushHosts), sk: String(x.sk), prefs: parsePrefs(x.prefs), created: Number(x.created) || 0 });
         } catch { /* drop an invalid entry */ }
       }
     }
@@ -88,7 +97,7 @@ function createPush({
   function notify(kind, project) {
     const payload = JSON.stringify({ project: String(project ?? '(unknown)').slice(0, 200), status: STATUS_OF[kind] });
     for (const s of subs.filter((x) => x.prefs[kind])) {
-      const opts = { TTL: 60, urgency: kind === 'approval' ? 'high' : 'normal', timeout: SEND_TIMEOUT_MS, vapidDetails: { subject, ...vapid } };
+      const opts = { TTL: 60, urgency: kind === 'approval' ? 'high' : 'normal', timeout: SEND_TIMEOUT_MS, vapidDetails: { subject, ...vapid }, ...(proxy ? { proxy } : {}) };
       Promise.resolve().then(() => send({ endpoint: s.endpoint, keys: s.keys }, payload, opts)).catch((e) => {
         const code = e?.statusCode;
         if (code === 404 || code === 410) drop((x) => x.endpoint === s.endpoint);
@@ -102,7 +111,7 @@ function createPush({
     count: () => subs.length,
     get: (sk) => subs.find((s) => s.sk === sk) ?? null,
     subscribe(sk, subscription, prefs) {
-      const sub = parseSubscription(subscription);
+      const sub = parseSubscription(subscription, pushHosts);
       const mine = subs.find((s) => s.sk === sk);
       const p = parsePrefs(prefs, mine?.prefs);
       const others = subs.filter((s) => s.sk !== sk && s.endpoint !== sub.endpoint).length;

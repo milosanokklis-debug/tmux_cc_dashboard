@@ -3,6 +3,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { setTimeout: sleep } = require('node:timers/promises');
 const { WebSocketServer } = require('ws');
 const authstore = require('./authstore');
@@ -16,6 +17,10 @@ const { createTerm } = require('./term');
 const { createEvents } = require('./events');
 const { createBroker } = require('./broker');
 const { createPush } = require('./push');
+const totp = require('./totp');
+const qr = require('./qr');
+
+const ENROLL_TTL_MS = 10 * 60 * 1000;
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const TYPES = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
@@ -41,8 +46,11 @@ function createApp({
   log = console.error,
   services = {},
   broker: brokerOpts = {}, // { sock (null = off), waitSec }
+  audit = () => {}, // audit(event, { ip, outcome, ... }); hook for the audit log (ids and outcomes only)
+  hashOptions, // argon2 options for recovery codes (tests use cheap ones)
 } = {}) {
   const svc = { ...defaultServices(), ...services };
+  svc.audit = audit;
   const rec = svc.reconciler;
   svc.broker ??= createBroker({ readRecord: rec.readOne, log, ...brokerOpts });
   rec.onTick?.((snapshot, startedAt) => svc.broker.sweep(snapshot, startedAt));
@@ -86,8 +94,10 @@ function createApp({
     }
     authBroken = false;
     authStamp = stamp;
+    const changed = auth && next && auth.generation !== next.generation;
     auth = next;
-    if (sessions && sessions.setGeneration(generationOf())) { registry.closeAll(); svc.push.clear(); }
+    if (changed) audit('auth.change', { outcome: 'ok' }); // password or TOTP changed by `ccd passwd`
+    if (sessions && sessions.setGeneration(generationOf())) { registry.closeAll(); svc.push.clear(); enrolling.clear(); }
   }
   refreshAuth();
   sessions = new SessionStore({ dir: webDir, clock, generation: generationOf() });
@@ -95,10 +105,22 @@ function createApp({
 
   function tick() {
     refreshAuth();
+    for (const [k, e] of enrolling) if (e.expires <= clock.now()) enrolling.delete(k);
     for (const key of sessions.sweep()) registry.closeSession(key);
-    registry.closeWhere((key) => !sessions.map.has(key));
     svc.push.prune((k) => sessions.map.has(k)); // also covers sessions dropped lazily on a failed validate
   }
+
+  // Limited sessions for "TOTP required, not enrolled": in memory only, may use nothing but /api/totp/enroll.
+  const enrolling = new Map(); // session key -> { expires, secret }
+  const enrollSession = (req) => {
+    const id = sec.sessionIdFromRequest(req);
+    if (!id) return null;
+    const key = sessions.keyOf(id);
+    const e = enrolling.get(key);
+    if (!e) return null;
+    if (e.expires <= clock.now()) { enrolling.delete(key); return null; }
+    return { key, e };
+  };
 
   const currentSession = (req) => {
     const id = sec.sessionIdFromRequest(req);
@@ -142,24 +164,62 @@ function createApp({
 
     const id = currentSession(req);
     if (!id) {
+      const enr = enrollSession(req);
+      if (enr) return enrollRoute(req, res, pathname, enr);
       if (isApi) return send(res, 401, { error: 'unauthorized' });
       return redirect(res, '/login');
     }
 
     if (pathname === '/logout' && req.method === 'POST') {
       const key = sessions.keyOf(id);
-      sessions.destroy(id);
-      registry.closeSession(key);
-      svc.push.removeSession(key);
+      revokeKey(key);
+      audit('logout', { ip: sec.clientIp(req), outcome: 'ok', session: sessions.publicId(key) });
       return send(res, 200, { ok: true }, undefined, { 'Set-Cookie': sec.clearCookie() });
     }
+    if (pathname === '/api/sessions' || pathname.startsWith('/api/sessions/')) return sessionsRoute(req, res, pathname, id);
     if (pathname === '/' && isRead) return send(res, 200, html('index.html'), 'text/html; charset=utf-8');
     if (pathname === '/sw.js' && isRead) {
       return send(res, 200, html('sw.js'), 'text/javascript; charset=utf-8', { 'Cache-Control': 'no-cache' });
     }
     if (pathname.startsWith('/assets/') && isRead) return serveAsset(res, pathname, true);
-    if (isApi) return handleApi(req, res, pathname, new URL(`http://localhost${req.url}`).searchParams, { sessionKey: sessions.keyOf(id) });
+    if (isApi) return handleApi(req, res, pathname, new URL(`http://localhost${req.url}`).searchParams, { sessionKey: sessions.keyOf(id), ip: sec.clientIp(req) });
     return send(res, 404, 'not found\n', 'text/plain; charset=utf-8');
+  }
+
+  // Ends one login session: the record, its sockets (terminals, /events) and its push subscription.
+  // Closing a terminal socket makes term.js kill the pty and its web-* tmux session (one per socket).
+  function revokeKey(key) {
+    sessions.destroyKey(key);
+    registry.closeSession(key);
+    svc.push.removeSession(key);
+  }
+
+  // GET /api/sessions, POST /api/sessions/revoke {id}, POST /api/sessions/revoke-all
+  async function sessionsRoute(req, res, pathname, id) {
+    const ip = sec.clientIp(req);
+    const mine = sessions.keyOf(id);
+    if (pathname === '/api/sessions') {
+      if (req.method !== 'GET') throw new HttpError(405, 'method not allowed');
+      return send(res, 200, { sessions: sessions.list(mine) });
+    }
+    if (req.method !== 'POST') throw new HttpError(405, 'method not allowed');
+    if (pathname === '/api/sessions/revoke-all') {
+      for (const k of [...sessions.map.keys()]) revokeKey(k);
+      audit('session.revoke_all', { ip, outcome: 'ok', session: sessions.publicId(mine) });
+      return send(res, 200, { ok: true }, undefined, { 'Set-Cookie': sec.clearCookie() });
+    }
+    if (pathname === '/api/sessions/revoke') {
+      const body = await readJson(req);
+      const key = sessions.keyFromPublic(body.id);
+      if (!key) {
+        audit('session.revoke', { ip, outcome: 'fail', reason: 'unknown' });
+        throw new HttpError(404, 'no such session');
+      }
+      revokeKey(key);
+      audit('session.revoke', { ip, outcome: 'ok', session: sessions.publicId(key) });
+      return send(res, 200, { ok: true, current: key === mine }, undefined, key === mine ? { 'Set-Cookie': sec.clearCookie() } : {});
+    }
+    throw new HttpError(404, 'not found');
   }
 
   function redirect(res, to) {
@@ -179,6 +239,38 @@ function createApp({
     }
   }
 
+  async function enrollRoute(req, res, pathname, { key, e }) {
+    if (pathname !== '/api/totp/enroll' || (req.method !== 'GET' && req.method !== 'POST')) {
+      return send(res, 403, { error: 'two-factor enrolment required' });
+    }
+    if (auth.totp) throw new HttpError(409, 'two-factor already enrolled');
+    const ip = sec.clientIp(req);
+    if (req.method === 'GET') {
+      e.secret ??= totp.generateSecret();
+      const uri = totp.otpauthUri({ secret: e.secret, account: auth.username });
+      return send(res, 200, { uri, qrSvg: qr.svg(uri) });
+    }
+    const { code } = await readJson(req);
+    if (!e.secret || typeof code !== 'string' || code.length > 20) throw new HttpError(400, 'invalid request');
+    const attempt = limiter.begin(ip);
+    if (attempt.locked) {
+      return send(res, 429, { error: 'Too many failed attempts. Try again later.' }, undefined,
+        { 'Retry-After': String(Math.ceil(attempt.retryAfterMs / 1000)) });
+    }
+    if (attempt.delayMs) await delay(attempt.delayMs);
+    const step = totp.verify(e.secret, code, clock.now());
+    attempt.finish(step !== null);
+    if (step === null || enrolling.get(key) !== e) {
+      audit('totp.enroll', { ip, outcome: 'fail' });
+      return send(res, 401, { error: 'Invalid code.' });
+    }
+    const recovery = await authstore.enableTotp({ dir: webDir, secret: e.secret, step, hashOptions });
+    enrolling.delete(key);
+    refreshAuth();
+    audit('totp.change', { ip, outcome: 'ok' });
+    return send(res, 200, { ok: true, recovery }, undefined, { 'Set-Cookie': sec.sessionCookie(sessions.create({ ip, ua: req.headers['user-agent'] })) });
+  }
+
   async function login(req, res) {
     const body = await readJson(req);
     const { username, password } = body;
@@ -196,17 +288,37 @@ function createApp({
     // password changed while argon2 ran, the login is discarded (no session).
     const creds = auth;
     const gen = sessions.generation;
-    const ok = await authstore.verifyLogin(creds, username, password);
+    const ip = sec.clientIp(req);
+    const pwOk = await authstore.verifyLogin(creds, username, password);
+    let ok = pwOk;
+    if (pwOk && creds.totp) {
+      const code = typeof body.code === 'string' ? body.code.trim() : '';
+      if (!code) { // password right, code still needed: not a failure
+        attempt.finish(true);
+        return send(res, 401, { totp: true, error: 'Enter your authentication code.' });
+      }
+      const step = code.length <= 32 ? totp.verify(creds.totp.secret, code, clock.now()) : null;
+      if (step !== null) ok = authstore.acceptStep(webDir, step);
+      else ok = code.length <= 32 && await authstore.useRecovery(webDir, code);
+    }
     attempt.finish(ok);
     if (!ok) {
-      log(`login failed from ${sec.clientIp(req)}`);
-      return send(res, 401, { error: 'Invalid username or password.' });
+      log(`login failed from ${ip}`);
+      audit('login', { ip, outcome: 'fail' });
+      return send(res, 401, { error: pwOk && creds.totp ? 'Invalid username, password or code.' : 'Invalid username or password.' });
     }
     refreshAuth();
     if (sessions.generation !== gen) {
       return send(res, 409, { error: 'Credentials changed. Try again.' });
     }
-    return send(res, 200, { ok: true }, undefined, { 'Set-Cookie': sec.sessionCookie(sessions.create()) });
+    if (authstore.totpRequired(creds) && !creds.totp) { // limited session until a second factor is enrolled
+      const eid = crypto.randomBytes(32).toString('base64url');
+      enrolling.set(sessions.keyOf(eid), { expires: clock.now() + ENROLL_TTL_MS, secret: null });
+      audit('login', { ip, outcome: 'enroll' });
+      return send(res, 200, { ok: true, enroll: true }, undefined, { 'Set-Cookie': sec.sessionCookie(eid) });
+    }
+    audit('login', { ip, outcome: 'ok' });
+    return send(res, 200, { ok: true }, undefined, { 'Set-Cookie': sec.sessionCookie(sessions.create({ ip, ua: req.headers['user-agent'] })) });
   }
 
   function onRequest(req, res) {
@@ -260,6 +372,10 @@ function createApp({
     server.close = (cb) => { svc.broker.stop(); events.close(); return closeServer(cb); };
     server.on('close', () => { svc.broker.stop(); events.close(); });
     const timer = setInterval(tick, 30000);
+    // backstop: sockets whose session vanished are closed within ~2 s
+    const sweeper = setInterval(() => registry.closeWhere((key) => !sessions.map.has(key)), svc.sweepMs || 2000);
+    sweeper.unref();
+    server.on('close', () => clearInterval(sweeper));
     timer.unref();
     server.on('close', () => clearInterval(timer));
     return server;

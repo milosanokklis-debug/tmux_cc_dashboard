@@ -2,6 +2,24 @@
 set -euo pipefail
 WS=${CCDASH_WS:-/workspace} # overridden only by the tests
 export GIT_TERMINAL_PROMPT=0
+# Hook trust (Phase F speed bump): a repo whose .claude/settings.json or settings.local.json defines hooks or
+# another code-running/credential setting (apiKeyHelper, env, mcpServers, ...), or that has .mcp.json, or whose
+# settings are symlinks or unparseable, is refused (exit 5, a `hooks: <name,name>` line) unless
+# CCDASH_TRUST_HOOKS=1 (ccd-onboard sets it from --trust-hooks or the project record). Only names are printed.
+settings_flags() { # settings_flags <json text>: comma-separated hook events and risky key names; empty when clean
+  jq -r 'def nonempty: . != null and . != false and . != "" and . != [] and . != {};
+    [ (if (.hooks | type) == "object" then (.hooks | keys | map(gsub("[^A-Za-z0-9_]"; "?"))[])
+       elif (.hooks | nonempty) then "(unrecognised hooks value)" else empty end),
+      (["apiKeyHelper","awsAuthRefresh","awsCredentialExport","otelHeadersHelper","env","enabledPlugins","extraKnownMarketplaces","mcpServers"][] as $k
+        | select(.[$k] | nonempty) | $k) ] | join(",")' <<< "$1" 2> /dev/null || echo "(unparseable settings)"
+}
+refuse_hooks() { # refuse_hooks <names...>: print the union and exit 5
+  local ev; ev=$(printf '%s\n' "$@" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
+  [ -n "$ev" ] || return 0
+  echo "this repo defines hooks or other trusted settings ($ev); onboard it with --trust-hooks (UI: \"I trust this repo's hooks\") if you trust it" >&2
+  echo "hooks: $ev"
+  exit 5
+}
 usage() { echo "usage: ccd-project clone <owner/repo> | pull <project>" >&2; exit 2; }
 [ $# -eq 2 ] || usage
 case $1 in clone | pull) ;; *) usage ;; esac
@@ -33,6 +51,17 @@ if [ "$1" = pull ]; then
   if ! up=$(git -C "$dir" rev-parse --verify --quiet '@{u}' 2>/dev/null); then
     if [ -z "$old" ]; then echo "nothing to pull yet; origin has no commits on this branch"; exit 0; fi
     echo "$proj has no upstream branch; resolve it in a shell" >&2; exit 3
+  fi
+  if [ "${CCDASH_TRUST_HOOKS:-}" != 1 ] && [ "$up" != "$old" ]; then # what the merge would bring in
+    ev=()
+    while read -r mode _ _ path; do # symlinks would make `git show` print the link target
+      case $path in
+        .mcp.json) ev+=(".mcp.json") ;;
+        *) if [ "$mode" = 120000 ]; then ev+=("(symlink)")
+           elif [ "$mode" != 040000 ]; then ev+=("$(settings_flags "$(git -C "$dir" show "$up:$path" 2> /dev/null)")"); fi ;;
+      esac
+    done < <(git -C "$dir" ls-tree "$up" .claude .claude/settings.json .claude/settings.local.json .mcp.json 2> /dev/null)
+    refuse_hooks "${ev[@]}"
   fi
   [ -z "$old" ] || echo "old ${old:0:7}"
   if [ -z "$old" ] || { [ "$up" != "$old" ] && git -C "$dir" merge-base --is-ancestor "$old" "$up"; }; then
@@ -67,5 +96,16 @@ if [ -d "$dest" ]; then
   echo "$dest exists with a different origin" >&2; exit 3
 fi
 git clone -- "https://github.com/$repo.git" "$dest"
+if [ "${CCDASH_TRUST_HOOKS:-}" != 1 ]; then # nothing has run in the clone yet; remove it (it did not exist before)
+  ev=()
+  [ ! -e "$dest/.mcp.json" ] && [ ! -L "$dest/.mcp.json" ] || ev+=(".mcp.json")
+  if [ -L "$dest/.claude" ]; then ev+=("(symlink)"); else
+    for f in settings.json settings.local.json; do
+      if [ -L "$dest/.claude/$f" ]; then ev+=("(symlink)")
+      elif [ -f "$dest/.claude/$f" ]; then ev+=("$(settings_flags "$(< "$dest/.claude/$f")")"); fi
+    done
+  fi
+  if [ -n "$(printf '%s' "${ev[@]}")" ]; then rm -rf "$dest"; refuse_hooks "${ev[@]}"; fi
+fi
 head=$(git -C "$dest" rev-parse --verify -q HEAD || true)
 [ -z "$head" ] || echo "head $head"

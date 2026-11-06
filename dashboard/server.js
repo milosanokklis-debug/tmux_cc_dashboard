@@ -2,7 +2,10 @@
 const { createApp } = require('./lib/app');
 const { startOpsSweeper } = require('./lib/tmux');
 
-const app = createApp();
+const { createAudit } = require('./lib/audit');
+
+const audit = createAudit();
+const app = createApp({ audit: audit.log });
 // Best effort: the hidden _ops session is also created on demand before each clone.
 app.services.tmux.ensureOps().catch((e) => console.error('could not create _ops yet:', e.message));
 app.services.reconciler.start(); // conversation status every CCDASH_RECONCILE_MS (5 s)

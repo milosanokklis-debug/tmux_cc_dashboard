@@ -246,3 +246,13 @@ test('pull: an empty repo (no head line) succeeds with head null; ahead of origi
   assert.strictEqual(j.message, 'ahead of origin at aaaaaaa; nothing to pull');
   assert.strictEqual(j.changed, false);
 });
+
+test('pull: new hooks upstream -> 409 repo-has-hooks with event names only', async (t) => {
+  const svc = setup();
+  withOp(svc, () => ({ rc: 5, log: 'this repo defines hooks (Stop)\nhooks: Stop,PostToolUse\n' }));
+  const s = await h.authed(svc);
+  t.after(s.stop);
+  const r = await post(s, '/api/projects/demo/pull', {});
+  assert.strictEqual(r.status, 409);
+  assert.deepStrictEqual(await r.json(), { error: 'repo-has-hooks', hooks: ['Stop', 'PostToolUse'] });
+});

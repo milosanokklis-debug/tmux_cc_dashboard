@@ -18,8 +18,37 @@
     <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
     <label for="password">Password</label>
     <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <div id="codebox" hidden>
+      <label for="code">Authentication code or recovery code</label>
+      <input id="code" name="code" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" aria-describedby="code-hint">
+      <p id="code-hint" class="hint">The 6-digit code from your authenticator app. If you lost the app, enter one of your recovery codes here instead.</p>
+    </div>
     <p id="error" role="alert"></p>
     <button type="submit">Sign in</button>
+  </form>
+  <form id="enroll" hidden novalidate aria-labelledby="enroll-h">
+    <h2 id="enroll-h">Set up two-factor sign-in</h2>
+    <div id="enroll-setup" class="stack">
+      <p>Two-factor sign-in is required. Scan this code with an authenticator app, then enter the 6-digit code it shows.</p>
+      <p id="qr-status" role="status">Loading your code…</p>
+      <div id="qr" role="img" aria-label="QR code for your authenticator app" hidden></div>
+      <details id="manual" hidden>
+        <summary>Cannot scan? Enter it by hand</summary>
+        <p>Copy this link into an authenticator app that accepts it, or read the secret from it.</p>
+        <textarea id="uri" readonly rows="3" spellcheck="false" aria-label="Authenticator setup link"></textarea>
+      </details>
+      <label for="ecode">6-digit code</label>
+      <input id="ecode" name="ecode" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="one-time-code" spellcheck="false" aria-describedby="eerror">
+      <p id="eerror" role="alert"></p>
+      <button type="submit" id="esubmit">Enable and sign in</button>
+    </div>
+    <div id="enroll-done" class="stack" hidden>
+      <p><strong>Save your recovery codes now.</strong> Each works once if you lose your authenticator app, and you can type one into the sign-in code field. They are not shown again.</p>
+      <div role="group" aria-labelledby="enroll-h"><pre id="recovery" tabindex="0"></pre></div>
+      <button type="button" id="copy" class="secondary">Copy codes</button>
+      <p id="copy-status" role="status"></p>
+      <button type="button" id="done">I saved them, continue</button>
+    </div>
   </form>
 </main>
 <script src="/assets/login.js" defer></script>

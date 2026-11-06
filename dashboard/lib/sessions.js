@@ -45,10 +45,13 @@ class SessionStore {
     return s.gen === this.generation && now - s.last < IDLE_MS && now - s.created < ABSOLUTE_MS;
   }
 
-  create() {
+  // meta: { ip, ua } of the login request; ua is truncated, never logged to the audit file.
+  create(meta = {}) {
     const id = crypto.randomBytes(32).toString('base64url');
     const now = this.clock.now();
-    this.map.set(hashId(id), { created: now, last: now, gen: this.generation });
+    this.map.set(hashId(id), {
+      created: now, last: now, gen: this.generation, ip: meta.ip ?? null, ua: String(meta.ua ?? '').slice(0, 200),
+    });
     this.persist();
     return id;
   }
@@ -68,10 +71,6 @@ class SessionStore {
     s.last = now;
     if (now - this.lastPersist > PERSIST_TOUCH_MS) this.persist();
     return true;
-  }
-
-  destroy(id) {
-    if (this.map.delete(hashId(id))) this.persist();
   }
 
   // Drops expired / stale-generation sessions; returns the removed session keys.
@@ -94,6 +93,26 @@ class SessionStore {
   }
 
   keyOf(id) { return hashId(id); }
+
+  // Opaque short id shown to the user; not the cookie value and not usable as one.
+  publicId(key) { return key.slice(0, 16); }
+
+  keyFromPublic(pid) {
+    if (typeof pid !== 'string' || !/^[0-9a-f]{16}$/.test(pid)) return null;
+    for (const k of this.map.keys()) if (k.startsWith(pid)) return k;
+    return null;
+  }
+
+  list(currentKey) {
+    const now = this.clock.now();
+    return [...this.map].filter(([, s]) => this.alive(s, now)).map(([k, s]) => ({
+      id: this.publicId(k), created: s.created, lastSeen: s.last, ip: s.ip ?? null, ua: s.ua ?? '', current: k === currentKey,
+    })).sort((a, b) => b.created - a.created);
+  }
+
+  destroyKey(key) {
+    if (this.map.delete(key)) this.persist();
+  }
 }
 
 module.exports = { SessionStore, IDLE_MS, ABSOLUTE_MS };

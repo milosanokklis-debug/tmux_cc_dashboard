@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# ccdash-egress-allow <host>...: let the ccdash container reach more hosts through the egress proxy
+# (compose.egress.yaml). Appends to /data/extra.txt in the proxy container's volume; the proxy re-reads
+# the file when it changes, so there is no reload and no restart. Used by `ccd doctor --live` for hosts it
+# saw denied; safe to run by hand. A host is `name`, `*.suffix` or `name:port` (no port = 443 and 80).
+# Env: CCDASH_DOCKER (e.g. "sudo -n -u ccdash /usr/local/bin/ccdash-docker"), CCDASH_EGRESS_CONTAINER
+# (default ccdash-egress).
+set -euo pipefail
+D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
+C=${CCDASH_EGRESS_CONTAINER:-ccdash-egress}
+[ $# -ge 1 ] || { echo "usage: ccdash-egress-allow <host>..." >&2; exit 2; }
+for h in "$@"; do
+  [[ $h =~ ^(\*\.)?[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$ ]] || { echo "invalid host: $h" >&2; exit 2; }
+done
+for h in "$@"; do
+  h=${h,,}
+  # $1 is the host, passed as an argument (never spliced into the script)
+  # shellcheck disable=SC2016 # $1 expands in the container's shell
+  $D exec "$C" sh -c 'grep -qxF -- "$1" /data/extra.txt 2>/dev/null || echo "$1" >> /data/extra.txt' _ "$h"
+  echo "allowed $h"
+done

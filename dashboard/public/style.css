@@ -11,7 +11,7 @@
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --ctl: 2.25rem;
   /* Terminal palette: read by terminal.js through getComputedStyle. */
-  --term-bg: #ffffff; --term-fg: #1b1f24; --term-sel: #6590d8; --term-sel-inactive: #858e9c; /* both >=3:1 against --term-bg and >=4.5:1 under --term-fg */
+  --qr-bg: #ffffff; --term-bg: #ffffff; --term-fg: #1b1f24; --term-sel: #6590d8; --term-sel-inactive: #858e9c; /* both >=3:1 against --term-bg and >=4.5:1 under --term-fg */
   --term-black: #24292f; --term-red: #b3261e; --term-green: #1a7f37; --term-yellow: #8a5a00;
   --term-blue: #0b5fc4; --term-magenta: #8250df; --term-cyan: #0a6b78; --term-white: #6e7781;
   --term-bright-black: #57606a; --term-bright-red: #cf222e; --term-bright-green: #116329; --term-bright-yellow: #6f4a00;
@@ -56,6 +56,19 @@ body.auth button:hover:not(:disabled) { background: var(--accent-hover); }
 body.auth button:active:not(:disabled) { background: var(--accent-active); }
 body.auth button:disabled { opacity: .6; cursor: not-allowed; }
 body.auth [role="alert"] { color: var(--err); min-height: 1.4em; margin: .25rem 0 0; }
+body.auth h2 { margin: 0 0 .75rem; font-size: 1.05rem; }
+body.auth .stack { display: grid; gap: .5rem; }
+body.auth .hint { color: var(--muted); font-size: .85rem; margin: 0; }
+body.auth #qr { justify-self: center; width: 12.5rem; height: 12.5rem; background: var(--qr-bg); padding: .5rem; border: 1px solid var(--line); border-radius: 8px; box-sizing: content-box; }
+body.auth #qr svg { display: block; width: 100%; height: 100%; }
+body.auth details { font-size: .9rem; }
+body.auth summary::marker { color: var(--muted); }
+body.auth summary { cursor: pointer; min-height: var(--ctl); display: flex; align-items: center; }
+body.auth textarea { font: .8rem/1.4 var(--mono); width: 100%; box-sizing: border-box; color: var(--text); background: var(--bg); border: 1px solid var(--line-ctl); border-radius: 6px; padding: .5rem; overflow-wrap: anywhere; }
+body.auth pre#recovery { margin: 0; padding: .6rem .75rem; background: var(--surface-2); border-radius: 6px; font: 1rem/1.7 var(--mono); user-select: all; overflow-wrap: anywhere; white-space: pre-wrap; }
+body.auth button.secondary { background: transparent; color: var(--text); border-color: var(--line-ctl); }
+body.auth button.secondary:hover:not(:disabled) { background: var(--surface-2); }
+body.auth [hidden] { display: none !important; }
 .noscript { margin: 0 0 .75rem; padding: .5rem .75rem; border-radius: 6px; background: var(--err-bg); color: var(--err); }
 
 /* ===== Signed-in dashboard (body.app) ===== */
@@ -432,7 +445,7 @@ body.app .card-result pre {
 /* Empty card regions stay rendered but take no space; the wrapper collapses too when both are empty. */
 body.app .card-result:empty { height: 0; }
 body.app .card-results:not(:has(.card-result:not(:empty))) { margin-top: -.6rem; height: 0; }
-@media (pointer: coarse) { body.app .agent-open, body.app .task-more { min-height: 44px; } .dialog textarea, body.app .prompt-input { font-size: 1rem; } body.app .card-pull, body.app .card-result summary { min-height: 44px; } .dialog input, .dialog .btn { min-height: 44px; } }
+@media (pointer: coarse) { body.app .agent-open, body.app .task-more { min-height: 44px; } .dialog textarea, body.app .prompt-input { font-size: 1rem; } body.app .card-pull, body.app .card-result summary { min-height: 44px; } .dialog input, .dialog .btn, .dialog .tx-jump, .dialog .tx-thinking summary { min-height: 44px; } }
 
 /* ===== Phase E: node meta, usage panel, transcript sheet ===== */
 body.app .meta-line { display: flex; flex-wrap: wrap; gap: .1rem .6rem; align-items: baseline; min-width: 0; padding-bottom: .15rem; font: .8125rem/1.4 var(--mono); color: var(--muted); }
@@ -504,4 +517,34 @@ body.app .dialog.sheet:not([open]) { display: none; }
 @media (max-width: 720px) {
   body.app .dialog.sheet { inset: auto 0 0 0; width: 100%; height: 88dvh; max-height: 88dvh; border-width: 1px 0 0 0; border-radius: 12px 12px 0 0; }
 }
-@media (pointer: coarse) { .dialog .tx-jump, .dialog .tx-thinking summary { min-height: 44px; } }
+
+/* ===== Signed-in devices (settings) ===== */
+.dialog .sess-state { margin: 0; color: var(--muted); }
+.dialog .sess-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.dialog .sess-row { display: grid; gap: .45rem; padding: .6rem .75rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); min-width: 0; }
+.dialog .sess-row[data-current="true"] { border-color: var(--accent); }
+.dialog .sess-head { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; min-width: 0; }
+.dialog .sess-ua { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.dialog .sess-ua-full { margin: 0; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+.dialog .sess-badge { flex: none; }
+.dialog .sess-meta { margin: 0; display: flex; flex-wrap: wrap; gap: .1rem 1.1rem; font-size: .85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dialog .sess-meta > div { display: flex; gap: .35rem; }
+.dialog .sess-meta dt { font-weight: 600; }
+.dialog .sess-meta dd { margin: 0; overflow-wrap: anywhere; }
+.dialog .sess-ip { font-family: var(--mono); }
+.dialog .sess-revoke { justify-self: start; min-height: 44px; }
+.dialog .sess-confirm { display: grid; gap: .6rem; padding: .6rem .75rem; border: 1px solid var(--err); border-radius: 8px; background: var(--err-bg); }
+.dialog .sess-confirm p { margin: 0; }
+.dialog #sess-all, .dialog .sess-confirm .btn { min-height: 44px; }
+@media (min-width: 560px) {
+  .dialog .sess-row { grid-template-columns: 1fr auto; align-items: center; }
+  .dialog .sess-head, .dialog .sess-ua-full, .dialog .sess-meta { grid-column: 1; }
+  .dialog .sess-revoke { grid-column: 2; grid-row: 1 / span 3; }
+}
+
+/* "I trust this repo's hooks": shown only after a repo-has-hooks refusal. */
+.dialog .trust-field { padding: .6rem .75rem; border: 1px solid var(--warn-fg); border-radius: 8px; background: var(--warn-bg); color: var(--warn-fg); gap: .25rem; }
+.dialog .trust-field p { margin: 0; }
+.dialog .trust-field .trust-title { font-weight: 700; }
+.dialog .trust-field .trust-list { font-family: var(--mono); font-size: .85rem; overflow-wrap: anywhere; }
+.dialog .trust-field .hint { color: inherit; }

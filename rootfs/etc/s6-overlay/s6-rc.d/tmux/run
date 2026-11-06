@@ -17,6 +17,14 @@ if [ -r /run/s6/container_environment/CCDASH_STATUSLINE_CMD ]; then
   CCDASH_STATUSLINE_CMD=$(cat /run/s6/container_environment/CCDASH_STATUSLINE_CMD)
   export CCDASH_STATUSLINE_CMD
 fi
+# Egress proxy settings (compose.egress.yaml): everything Claude and the git/npm/pip/curl it runs
+# starts from this tmux server, so these have to be here too.
+for v in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
+  if [ -r "/run/s6/container_environment/$v" ]; then
+    val=$(cat "/run/s6/container_environment/$v")
+    export "$v=$val"
+  fi
+done
 (
   i=0
   while [ "$i" -lt 300 ]; do

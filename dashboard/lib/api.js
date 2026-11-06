@@ -13,6 +13,7 @@ const { createUsageFallback } = require('./usage-fallback');
 const { createReconciler } = require('./state');
 const { createControls } = require('./controls');
 const { MAX_MESSAGE } = require('./broker');
+const github = require('./github');
 const { PushError, defaultPrefs } = require('./push');
 
 const MAX_ADD_BODY = 64 * 1024; // prompt <= 4000 chars, up to 6 bytes each when \u-escaped
@@ -38,6 +39,8 @@ function defaultServices() {
     now: () => Date.now(),
   };
 }
+
+const shortSid = (sid) => (/^[0-9a-f-]{36}$/.test(sid) ? sid.slice(0, 8) : undefined);
 
 function createApi(svc) {
   let tmuxDown = false; // logged once per outage
@@ -95,6 +98,21 @@ function createApi(svc) {
     return svc.tokens.views({ conversation });
   }
 
+  // Runs fn and audits it (ids and outcomes only: never prompt text, tool input or tokens).
+  const audit = (event, ctx, fields, outcome, reason) => {
+    try { svc.audit?.(event, { ip: ctx.ip, ...fields, outcome, ...(reason ? { reason } : {}) }); } catch { /* auditing never breaks a request */ }
+  };
+  async function audited(event, ctx, fields, fn) {
+    try {
+      const r = await fn();
+      audit(event, ctx, fields, 'ok');
+      return r;
+    } catch (e) {
+      audit(event, ctx, fields, 'fail', e.status ? String(e.status) : 'error');
+      throw e;
+    }
+  }
+
   async function handleApi(req, res, pathname, searchParams, ctx = {}) {
     const get = req.method === 'GET';
     if (pathname.startsWith('/api/push/')) return pushRoute(req, res, pathname, ctx.sessionKey);
@@ -107,7 +125,10 @@ function createApi(svc) {
       }
       if (req.method !== 'POST') return methodNotAllowed();
       const body = await readJson(req, MAX_ADD_BODY);
-      return send(res, 200, await projects.addProject(body, svc));
+      let project;
+      try { project = projects.normalizeRepo(body.repo).repo; } catch { /* addProject reports it */ }
+      const deps = { ...svc, saveToken: (a) => { (svc.saveToken || github.saveToken)(a); audit('token.saved', ctx, { project: a.owner }, 'ok'); } };
+      return send(res, 200, await audited('onboard', ctx, { project }, () => projects.addProject(body, deps)));
     }
     const open = /^\/api\/projects\/([^/]+)\/open$/.exec(pathname);
     if (open) {
@@ -122,12 +143,12 @@ function createApi(svc) {
       if (req.method !== 'POST') return methodNotAllowed();
       let name;
       try { name = decodeURIComponent(pull[1]); } catch { throw new HttpError(400, 'invalid project name'); }
-      return send(res, 200, await projects.pullProject({ name, deps: { ...svc, panes } }));
+      return send(res, 200, await audited('pull', ctx, { project: name }, () => projects.pullProject({ name, deps: { ...svc, panes } })));
     }
     if (pathname === '/api/git-identity') {
       if (get) return send(res, 200, await identity.getIdentity(svc));
       if (req.method !== 'POST') return methodNotAllowed();
-      return send(res, 200, await identity.setIdentity(await readJson(req, 4 * 1024), svc));
+      return send(res, 200, await audited('identity.change', ctx, {}, async () => identity.setIdentity(await readJson(req, 4 * 1024), svc)));
     }
     if (pathname === '/api/tree') {
       if (!get) return methodNotAllowed();
@@ -168,17 +189,25 @@ function createApi(svc) {
       if (message !== undefined && (typeof message !== 'string' || message.length > MAX_MESSAGE)) {
         throw new HttpError(400, `message must be text of at most ${MAX_MESSAGE} characters`);
       }
-      if (!svc.broker?.decide(decision[1], { behavior, message })) throw new HttpError(404, 'no such pending request');
+      const ev = behavior === 'allow' ? 'approve' : 'deny';
+      if (!svc.broker?.decide(decision[1], { behavior, message })) {
+        audit(ev, ctx, { request: decision[1] }, 'fail', '404');
+        throw new HttpError(404, 'no such pending request');
+      }
+      audit(ev, ctx, { request: decision[1] }, 'ok');
       return send(res, 200, { ok: true });
     }
     const wake = /^\/api\/conversations\/([^/]+)\/wake$/.exec(pathname);
     if (wake) {
       if (req.method !== 'POST') return methodNotAllowed();
-      return send(res, 200, await wakeConversation(wake[1]));
+      return send(res, 200, await audited('wake', ctx, { sid: shortSid(wake[1]) }, () => wakeConversation(wake[1])));
     }
     const ctl = /^\/api\/conversations\/([^/]+)\/(prompt|interrupt|close|preview)$/.exec(pathname);
     if (ctl) {
       if (req.method !== (ctl[2] === 'preview' ? 'GET' : 'POST')) return methodNotAllowed();
+      if (ctl[2] === 'interrupt' || ctl[2] === 'close') {
+        return send(res, 200, await audited(ctl[2], ctx, { sid: shortSid(ctl[1]) }, () => controls[ctl[2]](ctl[1], req)));
+      }
       return send(res, 200, await controls[ctl[2]](ctl[1], req));
     }
     throw new HttpError(404, 'not found');

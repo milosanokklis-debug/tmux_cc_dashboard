@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const https = require('node:https');
 const { execFile, execFileSync } = require('node:child_process');
+process.env.CCDASH_PUSH_HOSTS_EXTRA = 'push.example.com,127.0.0.1'; // stand-ins; the real list is the three vendor hosts
 const { createPush, parseSubscription } = require('../lib/push');
 const authstore = require('../lib/authstore');
 const { createBroker } = require('../lib/broker');
@@ -64,6 +65,20 @@ test('subscription validation', () => {
     null,
   ];
   for (const b of bad) assert.throws(() => parseSubscription(b), /./);
+});
+
+test('endpoint host: only the vendor push services (exact host, https, default port) unless extended', () => {
+  const k = makeSub().sub.keys;
+  const sub = (endpoint) => ({ endpoint, keys: k });
+  for (const e of ['https://fcm.googleapis.com/fcm/send/abc', 'https://updates.push.services.mozilla.com/wpush/v2/abc', 'https://web.push.apple.com/abc']) {
+    assert.ok(parseSubscription(sub(e), []), e);
+  }
+  for (const e of ['https://evil.example/x', 'https://fcm.googleapis.com.evil.example/x', 'https://evilfcm.googleapis.com/x',
+    'https://fcm.googleapis.com:8443/x', 'https://127.0.0.1/x', 'https://169.254.169.254/latest', 'https://localhost/x', 'https://sub.web.push.apple.com/x']) {
+    assert.throws(() => parseSubscription(sub(e), []), /allowed push service/, e);
+  }
+  assert.ok(parseSubscription(sub('https://standin:8443/x'), ['standin:8443']));
+  assert.throws(() => parseSubscription(sub('https://standin:9/x'), ['standin:8443']), /allowed push service/);
 });
 
 test('max 20 subscriptions; same endpoint replaced; one per session', () => {

@@ -44,5 +44,7 @@ jobs:
         run: tests/stack/phase-d.sh
       - name: stack test (reader service, gauges, tokens, load, headless Chromium)
         run: tests/stack/phase-e.sh
+      - name: stack test (egress allowlist proxy, internal network, push and git through it)
+        run: tests/stack/egress.sh
       - name: build test image
         run: docker build -f tests/Dockerfile.fake-claude -t ccdash-fake-claude:ci .

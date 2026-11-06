@@ -149,7 +149,7 @@
       if (log) {
         kids.push(h('details', {}, [
           h('summary', { text: 'Show log' }),
-          h('pre', { tabindex: '0', 'aria-label': 'Pull log for ' + name, text: String(log) }),
+          h('div', { role: 'group', 'aria-label': 'Pull log for ' + name }, [h('pre', { tabindex: '0', text: String(log) })]),
         ]));
       }
       // Failures go to the alert region, results to the polite status region; the other one is cleared.
@@ -160,7 +160,9 @@
     try {
       const r = await api('/api/projects/' + encodeURIComponent(name) + '/pull', { method: 'POST', body: {} });
       const d = r.data || {};
-      if (!r.ok) {
+      if (!r.ok && r.status === 409 && d.error === 'repo-has-hooks') {
+        show('The new commits define hooks (' + (d.hooks || []).join(', ') + '); nothing was pulled. Use Add project with "I trust this repo’s hooks" if you trust it.', null, true);
+      } else if (!r.ok) {
         show(d.error || 'Pull failed (HTTP ' + r.status + ').', d.log, true);
       } else {
         show(d.message || 'Pulled ' + name + '.', null, false);
@@ -230,6 +232,15 @@
     $('add-progress').hidden = true;
   }
 
+  // The repo defines hooks: say which events, and show the "I trust" box (needed to try again).
+  function hooksRefused(d) {
+    const list = (d.hooks || []).join(', ') || 'unknown events';
+    showError('This repo defines hooks (' + list + '). Nothing was kept. Tick the "I trust this repo’s hooks" box above and add it again if you trust it.');
+    $('add-trust-list').textContent = 'Hook events: ' + list + '.';
+    $('add-trust-field').hidden = false;
+    $('add-trust').focus();
+  }
+
   function updateCounter() {
     $('add-prompt-count').textContent = $('add-prompt').value.length + ' / 4000';
   }
@@ -260,6 +271,8 @@
   function closeDialog() {
     if (busy) return;
     $('add-token').value = '';
+    $('add-trust').checked = false;
+    $('add-trust-field').hidden = true;
     saveDraft();
     resetFeedback();
     if (dlg.open) dlg.close();
@@ -284,11 +297,13 @@
     const prompt = $('add-prompt').value;
     if (token) body.token = token;
     if (prompt.trim()) body.prompt = prompt;
+    if (!$('add-trust-field').hidden && $('add-trust').checked) body.trustHooks = true;
     setBusy(true);
     try {
       const r = await api('/api/projects', { method: 'POST', body });
       if (!r.ok) {
         const d = r.data || {};
+        if (r.status === 409 && d.error === 'repo-has-hooks') { hooksRefused(d); return; }
         showError(d.error || 'Could not add project (HTTP ' + r.status + ').', d.log);
         if (r.status === 400 && /repo|owner/i.test(d.error || '')) markRepoInvalid(true);
         return;
@@ -312,6 +327,8 @@
   $('add-cancel').addEventListener('click', closeDialog);
   $('add-prompt').addEventListener('input', () => { updateCounter(); saveDraft(); });
   $('add-repo').addEventListener('input', () => {
+    $('add-trust').checked = false; // trust is for the repo that was refused, not for whatever is typed next
+    $('add-trust-field').hidden = true;
     if ($('add-repo').getAttribute('aria-invalid') === 'true') resetFeedback();
     saveDraft();
   });

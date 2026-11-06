@@ -86,7 +86,10 @@ async function setCredentials({ dir = webDir(), username, password, hashOptions 
   const hash = await argon2.hash(password, { type: argon2.argon2id, ...hashOptions });
   const generation = crypto.randomBytes(16).toString('hex');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileAtomic(path.join(dir, 'auth.json'), JSON.stringify({ username, hash, generation }));
+  // a password change keeps the second factor and the "TOTP required" flag
+  let prev = null;
+  try { prev = readAuth(dir); } catch { /* unusable old file: start clean */ }
+  writeFileAtomic(path.join(dir, 'auth.json'), JSON.stringify({ ...prev, username, hash, generation }));
   fs.rmSync(path.join(dir, 'sessions.json'), { force: true });
   return generation;
 }
@@ -105,7 +108,87 @@ async function verifyLogin(auth, username, password) {
   return userOk && passOk;
 }
 
+const RECOVERY_COUNT = 10;
+const normRecovery = (c) => String(c).toLowerCase().replace(/[^a-z0-9]/g, '');
+
+function newRecoveryCodes() {
+  return Array.from({ length: RECOVERY_COUNT }, () => {
+    const h = crypto.randomBytes(5).toString('hex');
+    return `${h.slice(0, 5)}-${h.slice(5)}`;
+  });
+}
+
+function mutate(dir, fn) {
+  const a = readAuth(dir);
+  if (!a) throw new Error('no credentials: run ccd passwd first');
+  fn(a);
+  writeFileAtomic(path.join(dir, 'auth.json'), JSON.stringify(a));
+  return a;
+}
+
+// Stores the TOTP secret and 10 fresh recovery codes (returned once, stored as argon2id hashes).
+// `rotate` also changes the generation, which ends every session (CLI use).
+async function enableTotp({ dir = webDir(), secret, step, rotate = false, hashOptions = {} }) {
+  const codes = newRecoveryCodes();
+  const recovery = await Promise.all(codes.map((c) => argon2.hash(normRecovery(c), { type: argon2.argon2id, ...hashOptions })));
+  mutate(dir, (a) => {
+    a.totp = { secret, lastStep: step ?? 0 };
+    a.recovery = recovery;
+    if (rotate) { a.generation = crypto.randomBytes(16).toString('hex'); }
+  });
+  if (rotate) fs.rmSync(path.join(dir, 'sessions.json'), { force: true });
+  return codes;
+}
+
+function disableTotp({ dir = webDir() } = {}) {
+  mutate(dir, (a) => {
+    delete a.totp;
+    delete a.recovery;
+    a.generation = crypto.randomBytes(16).toString('hex');
+  });
+  fs.rmSync(path.join(dir, 'sessions.json'), { force: true });
+}
+
+// A matched step is accepted only if it is newer than lastStep; lastStep is persisted before returning.
+function acceptStep(dir, step) {
+  let ok = false;
+  mutate(dir, (a) => {
+    if (a.totp && Number.isInteger(step) && step > a.totp.lastStep) { a.totp.lastStep = step; ok = true; }
+  });
+  return ok;
+}
+
+// Single-use: the matching hash is removed and the file rewritten before resolving true.
+async function useRecovery(dir, code) {
+  const a = readAuth(dir);
+  const norm = normRecovery(code);
+  if (!a?.recovery?.length || norm.length !== 10) return false;
+  let idx = -1;
+  for (let i = 0; i < a.recovery.length; i++) {
+    let m = false;
+    try { m = await argon2.verify(a.recovery[i], norm); } catch { m = false; }
+    if (m && idx < 0) idx = i;
+  }
+  if (idx < 0) return false;
+  const hash = a.recovery[idx];
+  let ok = false;
+  mutate(dir, (b) => { // re-read: a concurrent use must not succeed twice
+    const j = (b.recovery || []).indexOf(hash);
+    if (j >= 0) { b.recovery.splice(j, 1); ok = true; }
+  });
+  return ok;
+}
+
+// "TOTP required but not enrolled": file flag or CCDASH_TOTP_REQUIRED=1.
+const totpRequired = (a) => !!(a && (a.totpRequired === true || process.env.CCDASH_TOTP_REQUIRED === '1'));
+
+function setTotpRequired({ dir = webDir(), required }) {
+  mutate(dir, (a) => { if (required) a.totpRequired = true; else delete a.totpRequired; });
+}
+
 module.exports = {
+  enableTotp, disableTotp, acceptStep, useRecovery, totpRequired, setTotpRequired,
+
   MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH,
   webDir, checkPasswordRule, checkUsernameRule, readAuth, setCredentials, verifyLogin,
   writeFileAtomic,

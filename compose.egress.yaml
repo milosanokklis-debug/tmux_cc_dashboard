@@ -1,0 +1,46 @@
+# Egress allowlist (Phase F). An OVERRIDE for compose.yaml, not a standalone file:
+#   docker compose -f compose.yaml -f compose.egress.yaml up -d
+# (setup.sh / Phase I turns it on that way; see NOTES.md, "Phase F: egress").
+# ccdash moves to an `internal: true` network with no route out. The only way out is the `egress`
+# proxy (egress/proxy.js), which allows the hosts in egress/allowlist.txt plus the extras and logs
+# `DENY host:port` for the rest. The same container forwards 127.0.0.1:7690 to ccdash:7690, because
+# a published port on an internal-only container is silently dropped (verified in Phase A).
+# Extra hosts: EGRESS_EXTRA_HOSTS (comma separated, in .env) or `host/ccdash-egress-allow <host>`.
+services:
+  ccdash:
+    ports: !reset []
+    networks: !override [internal]
+    environment:
+      HTTP_PROXY: http://egress:3128
+      HTTPS_PROXY: http://egress:3128
+      NO_PROXY: localhost,127.0.0.1,::1,egress
+      http_proxy: http://egress:3128
+      https_proxy: http://egress:3128
+      no_proxy: localhost,127.0.0.1,::1,egress
+      CCDASH_PUSH_HOSTS_EXTRA: ${CCDASH_PUSH_HOSTS_EXTRA:-}
+  egress:
+    build:
+      context: ./egress
+    image: ccdash-egress:1
+    container_name: ccdash-egress
+    restart: unless-stopped
+    read_only: true
+    environment:
+      EGRESS_EXTRA_HOSTS: ${EGRESS_EXTRA_HOSTS:-}
+      EGRESS_FORWARD: 7690=ccdash:7690
+    volumes:
+      - egress-data:/data
+    ports:
+      - "127.0.0.1:7690:7690"
+    networks: [internal, outside]
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 256m
+networks:
+  internal:
+    internal: true
+  outside: {}
+volumes:
+  egress-data:
