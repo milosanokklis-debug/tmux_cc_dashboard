@@ -22,8 +22,6 @@ cd tmux_cc_dashboard
 sudo ./setup.sh
 ```
 
-`setup.sh` ships with the next release step (Phase I). Until then, install by hand with compose: copy `.env.example` to `.env`, then run `docker compose up -d`. To build the image locally, add `-f compose.yaml -f compose.build.yaml` to the command.
-
 setup.sh does the whole install. It asks no questions. You can run it again safely. It logs to /var/log/ccdash-setup.log.
 
 It does these steps:
@@ -52,6 +50,10 @@ sudo ./setup.sh --uninstall --purge
 - `--no-selftest` skips the live self-test.
 - `--uninstall` removes the stack and keeps the volumes.
 - `--uninstall --purge` also deletes the volumes.
+
+To use Cloudflare Access instead of TOTP, export `CLOUDFLARE_API_TOKEN` (and `CLOUDFLARE_ACCESS_EMAIL` if your host git config has no email) and keep it through sudo: `sudo --preserve-env=CLOUDFLARE_API_TOKEN ./setup.sh`. If a step fails, setup prints the exact command to run again; finished steps are skipped.
+
+To install by hand instead, copy `.env.example` to `.env` and run `docker compose up -d`. To build the image locally, add `-f compose.yaml -f compose.build.yaml`.
 
 The dashboard listens on 127.0.0.1:7690 on the host. Reach it through your tunnel hostname, or over SSH:
 
