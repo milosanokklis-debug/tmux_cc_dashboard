@@ -77,7 +77,12 @@ function createControls(svc, {
       need(rec, ['waiting'], 'waiting');
       const text = checkText(body.text);
       return exclusive(sid, async () => {
-        await pasteAndEnter(sid, rec.pane, text);
+        // The conversation may have turned needs_approval since the check above: Enter would answer the dialog.
+        await svc.reconciler.tick();
+        const cur = svc.reconciler.get(sid);
+        if (!cur) throw new HttpError(404, 'no such conversation');
+        need(cur, ['waiting'], 'waiting');
+        await pasteAndEnter(sid, cur.pane, text);
         return { ok: true };
       });
     },

@@ -66,7 +66,6 @@ chmod 0644 "$tmp"/*.pem "$tmp"/*.yaml "$tmp/standin.js"; chmod -R a+rX "$tmp/egr
 
 compose() { (cd / && $D compose -p "$P" -f "$tmp/base.yaml" -f "$tmp/egress.yaml" -f "$tmp/test.yaml" "$@"); }
 ccd() { compose exec -T -u ccd ccdash "$@"; }
-tm() { ccd tmux -S /run/ccdash/tmux.sock "$@"; }
 cleanup() { [ -n "${KEEP:-}" ] || compose down -v --remove-orphans >/dev/null 2>&1 || true; rm -rf "$tmp"; }
 trap cleanup EXIT
 ok() { echo "PASS $*"; }

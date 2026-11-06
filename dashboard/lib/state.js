@@ -93,7 +93,7 @@ const seconds = (v, dflt) => (/^[0-9]+$/.test(v ?? '') && Number(v) > 0 ? Number
 
 // deps: { stateDir, tmux, procTable (function), now, idleSec, quietSec, intervalMs, log }
 function createReconciler({
-  stateDir = process.env.CCDASH_STATE_DIR || '/home/ccd/.ccdash/sessions',
+  stateDir = '/home/ccd/.ccdash/sessions',
   tmux, procTable = readProcTable, now = () => Date.now(),
   idleSec = seconds(process.env.CCDASH_IDLE_FLAG, 7200),
   quietSec = seconds(process.env.CCDASH_QUIET_AFTER, 900),

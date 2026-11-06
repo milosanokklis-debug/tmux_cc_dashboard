@@ -7,7 +7,7 @@ exec 2>/dev/null
 if ! command -v jq >/dev/null 2>&1; then cat >/dev/null; exit 0; fi
 in=$(cat) || exit 0
 here=${BASH_SOURCE[0]%/*}
-state=${CCDASH_STATE_HOOK:-$here/state.sh}
+state=$here/state.sh
 [ -x "$state" ] || state=/usr/local/lib/ccdash/hooks/state.sh
 "$state" needs_approval <<<"$in" || true
 wait=${CCDASH_APPROVAL_WAIT:-120}

@@ -132,6 +132,7 @@ async function enableTotp({ dir = webDir(), secret, step, rotate = false, hashOp
   const codes = newRecoveryCodes();
   const recovery = await Promise.all(codes.map((c) => argon2.hash(normRecovery(c), { type: argon2.argon2id, ...hashOptions })));
   mutate(dir, (a) => {
+    if (a.totp && !rotate) throw Object.assign(new Error('two-factor already enrolled'), { status: 409 });
     a.totp = { secret, lastStep: step ?? 0 };
     a.recovery = recovery;
     if (rotate) { a.generation = crypto.randomBytes(16).toString('hex'); }
