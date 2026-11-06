@@ -16,3 +16,13 @@ test('ccdash-passwd applyPassword rejects mismatch, short password, empty userna
   await assert.rejects(applyPassword({ ...ok, username: '  ' }), /username/);
   assert.deepStrictEqual(fs.readdirSync(dir), []);
 });
+
+test('ccdash-passwd --stdin takes the first line as the password and rejects a short one', async () => {
+  const { passwordFromStdin } = require('../ccdash-passwd');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-pw-'));
+  await assert.rejects(passwordFromStdin({ username: 'dave', input: 'short\n', dir, hashOptions: FAST }), /at least 14/);
+  await passwordFromStdin({ username: 'dave', input: `${'x'.repeat(24)}\r\nignored\n`, dir, hashOptions: FAST });
+  const auth = authstore.readAuth(dir);
+  assert.strictEqual(auth.username, 'dave');
+  assert.ok(await authstore.verifyLogin(auth, 'dave', 'x'.repeat(24)));
+});
