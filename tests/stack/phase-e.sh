@@ -122,6 +122,16 @@ until_ok 15 "a statusline reading without rate_limits was recorded" reading_writ
 until_ok 10 "both windows are unknown (nothing estimated)" unknown_both
 fake_unset FAKE_CLAUDE_RATE_LIMITS
 req POST "/api/conversations/$(sid_of nolimits)/close"
+# The dashboard runs as web and cannot delete in the 0750 ccd usage dir: it must still read it fine,
+# and the 7-day prune is the statusline script's job (ccd side, once a day).
+web() { compose exec -T -u web ccdash "$@"; }
+eq "web user can read the usage dir" "$(web sh -c 'ls /home/ccd/.ccdash/usage/*.json >/dev/null 2>&1 && echo yes')" yes
+if web sh -c 'rm -f /home/ccd/.ccdash/usage/*.json' 2>/dev/null; then bad "web user could delete usage readings"; else ok "web user cannot delete usage readings"; fi
+ccd sh -c 'echo "{\"ts\":1}" > /home/ccd/.ccdash/usage/old-prune.json; touch -d "10 days ago" /home/ccd/.ccdash/usage/old-prune.json; rm -f /home/ccd/.ccdash/.pruned'
+ccd sh -c 'echo "{}" | /usr/local/lib/ccdash/hooks/statusline.sh' >/dev/null
+old_gone() { ! ccd test -e /home/ccd/.ccdash/usage/old-prune.json; }
+until_ok 5 "statusline.sh pruned the 10-day-old reading ccd-side" old_gone
+if api "$url/api/usage" | jq -e '.five_hour.status' >/dev/null; then ok "/api/usage still answers"; else bad "/api/usage failed"; fi
 
 echo "== subagent"
 start_conv subp
