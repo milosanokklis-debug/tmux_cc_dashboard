@@ -557,18 +557,19 @@ body.app .chip-mem-ok { background: var(--ok-bg); color: var(--ok-fg); }
 body.app .chip-mem-warn { background: var(--warn-bg); color: var(--warn-fg); }
 body.app .chip-nokit { background: var(--idle-bg); color: var(--idle-fg); }
 body.app .card-packs { flex: 1 1 100%; min-width: 0; }
-body.app .card-packs[hidden] { display: none; }
 body.app .card-packs summary { cursor: pointer; min-height: var(--ctl); display: flex; align-items: center; font-size: .875rem; color: var(--muted); }
+/* flex on the summary drops the native marker, so draw a chevron that turns when the details open. */
+body.app .card-packs summary::before { content: "▸"; flex: none; width: 1em; margin-right: .3rem; display: inline-block; }
+body.app .card-packs[open] summary::before { transform: rotate(90deg); }
+@media (prefers-reduced-motion: no-preference) { body.app .card-packs summary::before { transition: transform .15s ease; } }
 body.app .packs-body { display: grid; gap: .5rem; padding-bottom: .25rem; }
 body.app .packs-fields { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 0; }
 body.app .packs-fields legend { padding: 0; font-size: .8125rem; font-weight: 600; margin-bottom: .25rem; overflow-wrap: anywhere; }
 .packs-core { margin: 0; font-size: .875rem; color: var(--muted); }
-.packs-core::before { content: "✓ "; }
 body.app .card-apply, body.app .card-retry { justify-self: start; }
-body.app .card-apply[disabled] { opacity: .6; cursor: not-allowed; }
 body.app .card-apply .spinner { margin-right: .4rem; }
 body.app .card-result-title { margin: 0; font-weight: 700; font-size: 1rem; color: var(--err); }
-body.app .card.is-memory-offline { border-color: var(--err); border-width: 2px; }
+body.app .card.is-memory-offline { border-color: var(--err); box-shadow: inset 0 0 0 1px var(--err); }
 .dialog .packs-field { border: 0; margin: 0; padding: 0; min-width: 0; }
 .dialog .packs-field legend { padding: 0; margin-bottom: .25rem; font-weight: 600; }
 @media (pointer: coarse) { body.app .card-packs summary, body.app .card-retry, body.app .card-apply { min-height: 44px; } }
