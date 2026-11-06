@@ -239,3 +239,36 @@ test('the fake claude\'s transcripts (duplicate lines, a subagent file) add up t
   const t = tokens.forNode(sid);
   assert.deepEqual([t.input, t.output, t.cache_creation, t.cache_read, t.messages], [3, 6, 9, 12, 3]);
 });
+
+test('readTranscript skips one oversized line instead of stalling on it', async () => {
+  const e = env();
+  const good = user(T0 + 5, 'after the big one');
+  fs.writeFileSync(e.main, `${user(T0, 'first')}\n${'x'.repeat(600 * 1024)}\n${good}\n`);
+  // follow mode from the start of the oversized line: every call moves forward
+  const start = Buffer.byteLength(`${user(T0, 'first')}\n`);
+  let off = start;
+  let sawGood = false;
+  for (let i = 0; i < 6 && off < fs.statSync(e.main).size; i++) {
+    const r = await readTranscript(e.reader, e.main, { offset: off });
+    assert.ok(r.next_offset > off, 'next_offset must advance');
+    if (i === 0) assert.ok(r.truncated);
+    sawGood ||= r.entries.some((x) => x.parts[0].text === 'after the big one');
+    off = r.next_offset;
+  }
+  assert.ok(sawGood);
+  // tail mode inside the oversized line: resumes at the end of the file
+  fs.writeFileSync(e.main, `${user(T0, 'first')}\n${'x'.repeat(600 * 1024)}`);
+  const t = await readTranscript(e.reader, e.main);
+  assert.equal(t.next_offset, fs.statSync(e.main).size);
+  assert.ok(t.truncated);
+});
+
+test('an oversized unterminated line is dropped from the carry; later lines still count', async () => {
+  const e = env();
+  fs.writeFileSync(e.main, `${'x'.repeat(9 * 1024 * 1024)}`);
+  await e.tokens.refresh(e.files);
+  assert.equal(e.tokens._files.get(e.main).carry.length, 0);
+  fs.appendFileSync(e.main, `yyy\n${asst('m1', T0 + 1, [1, 2, 3, 4])}\n`);
+  await e.tokens.refresh(e.files);
+  assert.equal(e.tokens.forNode('S1').output, 2);
+});

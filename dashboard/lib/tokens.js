@@ -11,6 +11,7 @@ const BUCKET = 300; // seconds; divides the 5-hour window, so a window is 60 buc
 const WINDOW = 5 * 3600;
 const MAX_CHUNK = 1024 * 1024;
 const MAX_FILES = 2000;
+const MAX_CARRY = 8 * 1024 * 1024; // a partial line longer than this is dropped
 const MAX_IDS = 20000; // message ids remembered per file for de-duplication
 const MAX_BYTES_PER_SYNC = 32 * 1024 * 1024; // one sync of one file; the rest follows on the next
 const FIELDS = ['input', 'output', 'cache_creation', 'cache_read'];
@@ -28,8 +29,8 @@ const PRICES = [
   [/haiku/i, { input: 1, output: 5 }],
 ];
 
-function priceOf(model, table = PRICES) {
-  const hit = table.find(([re]) => re.test(model));
+function priceOf(model) {
+  const hit = PRICES.find(([re]) => re.test(model));
   if (!hit) return null;
   const p = hit[1];
   return { input: p.input, output: p.output, cache_creation: p.cache_creation ?? p.input * 1.25, cache_read: p.cache_read ?? p.input * 0.1 };
@@ -47,10 +48,10 @@ function usageOf(u) {
 }
 
 function newState(meta) {
-  return { meta, inode: null, offset: 0, carry: Buffer.alloc(0), ids: new Map(), agg: new Map(), size: 0, error: null, synced: false, lastSeen: 0, model: null };
+  return { meta, inode: null, offset: 0, carry: Buffer.alloc(0), ids: new Map(), agg: new Map(), skipping: false, error: null, synced: false, lastSeen: 0, model: null };
 }
 function resetState(st) {
-  st.offset = 0; st.carry = Buffer.alloc(0); st.ids = new Map(); st.agg = new Map(); st.synced = false;
+  st.offset = 0; st.carry = Buffer.alloc(0); st.ids = new Map(); st.agg = new Map(); st.synced = false; st.skipping = false;
 }
 
 function addUsage(st, key, u, sign) {
@@ -87,19 +88,27 @@ function consumeLine(st, line) {
 }
 
 function consume(st, data) {
+  if (st.skipping) { // inside an oversized line: drop bytes up to its newline
+    const i = data.indexOf(10);
+    if (i < 0) return;
+    st.skipping = false;
+    data = data.subarray(i + 1);
+  }
   const buf = st.carry.length ? Buffer.concat([st.carry, data]) : data;
   const nl = buf.lastIndexOf(10);
-  if (nl < 0) { st.carry = Buffer.from(buf); return; }
+  if (nl < 0) {
+    if (buf.length > MAX_CARRY) { st.carry = Buffer.alloc(0); st.skipping = true; } else st.carry = Buffer.from(buf);
+    return;
+  }
   for (const line of buf.subarray(0, nl).toString('utf8').split('\n')) if (line) consumeLine(st, line);
   st.carry = Buffer.from(buf.subarray(nl + 1));
 }
 
-// deps: { reader, now (ms), prices, minIntervalMs }
-function createTokens({ reader, now = () => Date.now(), prices = PRICES, minIntervalMs = 2000, log = () => {} } = {}) {
+// deps: { reader, now (ms), minIntervalMs }
+function createTokens({ reader, now = () => Date.now(), minIntervalMs = 2000, log = () => {} } = {}) {
   const files = new Map(); // transcript path -> state
   let lastRefresh = -Infinity;
   let inflight = null;
-  let version = 0;
 
   async function sync(file) {
     let st = files.get(file.path);
@@ -121,12 +130,10 @@ function createTokens({ reader, now = () => Date.now(), prices = PRICES, minInte
         if (st.inode !== null && (res.inode !== st.inode || res.size < st.offset)) {
           resetState(st); // rewritten or truncated: start over from byte 0
           st.inode = res.inode;
-          version++;
           continue;
         }
         st.inode = res.inode;
-        st.size = res.size;
-        if (res.data.length) { consume(st, res.data); st.offset += res.data.length; budget -= res.data.length; version++; }
+        if (res.data.length) { consume(st, res.data); st.offset += res.data.length; budget -= res.data.length; }
         if (st.offset >= res.size || !res.data.length) break;
       }
       st.error = null;
@@ -151,7 +158,7 @@ function createTokens({ reader, now = () => Date.now(), prices = PRICES, minInte
   }
 
   const costOf = (model, e) => {
-    const p = priceOf(model, prices);
+    const p = priceOf(model);
     if (!p) return null;
     return (e.input * p.input + e.output * p.output + e.cache_creation * p.cache_creation + e.cache_read * p.cache_read) / 1e6;
   };
@@ -230,8 +237,7 @@ function createTokens({ reader, now = () => Date.now(), prices = PRICES, minInte
   }
 
   return {
-    refresh, views, forNode, modelOf, version: () => version,
-    _files: files, _sync: sync,
+    refresh, views, forNode, modelOf, _files: files,
   };
 }
 
@@ -283,15 +289,21 @@ async function readTranscript(reader, file, { offset = null } = {}) {
   }
   let data = res.data;
   let start = res.offset;
+  let skipped = false;
   if (offset === null || reset) { // a tail starts mid-line unless it begins at byte 0
     if (start > 0) {
       const nl = data.indexOf(10);
-      if (nl < 0) data = data.subarray(data.length);
+      if (nl < 0) { start += data.length; data = data.subarray(data.length); skipped = true; } // one oversized line: skip it
       else { data = data.subarray(nl + 1); start += nl + 1; }
     }
   }
   const nl = data.lastIndexOf(10);
   const complete = nl < 0 ? data.subarray(0, 0) : data.subarray(0, nl + 1);
+  // A full window with no newline, short of the end of the file, is one oversized line: skip past
+  // it instead of stalling on it.
+  if (!skipped && nl < 0 && data.length >= VIEW_MAX_BYTES && start + data.length < res.size) {
+    start += data.length; skipped = true;
+  }
   const entries = [];
   for (const line of complete.toString('utf8').split('\n')) {
     if (!line) continue;
@@ -300,7 +312,7 @@ async function readTranscript(reader, file, { offset = null } = {}) {
   }
   return {
     size: res.size, inode: res.inode, offset: start, next_offset: start + complete.length, reset,
-    truncated: entries.length > VIEW_MAX_ENTRIES,
+    truncated: skipped || entries.length > VIEW_MAX_ENTRIES,
     entries: entries.slice(-VIEW_MAX_ENTRIES),
   };
 }
@@ -328,4 +340,4 @@ function subagentPath(main, sid, agentId) {
   return path.join(path.dirname(main), sid, 'subagents', `agent-${agentId.replace(/^agent-/, '')}.jsonl`);
 }
 
-module.exports = { createTokens, readTranscript, transcriptFiles, subagentPath, priceOf, PRICE_NOTE, WINDOW, BUCKET };
+module.exports = { createTokens, readTranscript, transcriptFiles, subagentPath, PRICE_NOTE };
