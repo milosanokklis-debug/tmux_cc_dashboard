@@ -102,7 +102,7 @@ function createApi(svc) {
     try { j = r && JSON.parse(r.buf.toString('utf8')); } catch { j = null; }
     const warn = Array.isArray(j?.mismatches) ? j.mismatches : [];
     const str = (v) => (typeof v === 'string' ? v.slice(0, 300) : '');
-    return { ts: str(j?.ts), warnings: warn.slice(0, 50).map((m) => ({ check: str(m?.check), detail: str(m?.detail) })) };
+    return { warnings: warn.slice(0, 50).map((m) => ({ check: str(m?.check), detail: str(m?.detail) })) };
   }
   async function tokensPayload(conversation = null) {
     await svc.tokens.refresh(trackedFiles());

@@ -7,7 +7,7 @@
 # are removed on exit.
 # Env (all optional; the tests set them): CCDASH_WS, CCDASH_TMUX, CCDASH_FIXTURES (2.1.317 payload fixtures),
 # CCDASH_DOCTOR_WAIT (seconds per wait, 60), CCDASH_DOCTOR_ESC_WAIT (75: idle_prompt fires after ~60 s),
-# CCDASH_DOCTOR_HOOK_TIMEOUT (5), CCDASH_DOCTOR_SETTLE (3), CCDASH_DOCTOR_DIALOG_RE (in-REPL dialog text),
+# CCDASH_DOCTOR_HOOK_TIMEOUT (5), CCDASH_DOCTOR_SETTLE (3),
 # CCDASH_USAGE_DIR, CCDASH_STATE, CCDASH_FALLBACK_FLAG, CCDASH_CLAUDE_HOME.
 set -uo pipefail
 WS=${CCDASH_WS:-/workspace}
@@ -17,7 +17,7 @@ W=${CCDASH_DOCTOR_WAIT:-60}
 ESC_W=${CCDASH_DOCTOR_ESC_WAIT:-75}
 HT=${CCDASH_DOCTOR_HOOK_TIMEOUT:-5}
 SETTLE=${CCDASH_DOCTOR_SETTLE:-3}
-DIALOG_RE=${CCDASH_DOCTOR_DIALOG_RE:-Do you want to|Allow this|fall-through: asking user}
+DIALOG_RE='Do you want to|Allow this|fall-through: asking user' # the REPL's own permission dialog
 USAGE_DIR=${CCDASH_USAGE_DIR:-$HOME/.ccdash/usage}
 STATE_DIR=${CCDASH_STATE:-$HOME/.ccdash/sessions}
 FLAG=${CCDASH_FALLBACK_FLAG:-$HOME/.ccdash/usage-fallback.enabled}
@@ -39,11 +39,14 @@ T=$(mktemp -d) || exit 1
 EV=$T/events.jsonl
 : >"$EV"
 sid=
-# shellcheck disable=SC2317 # runs from the EXIT trap
+# shellcheck disable=SC2317,SC2329 # runs from the EXIT trap
 cleanup() {
   t kill-session -t "=$S" 2>/dev/null
   rm -rf "${DIR:?}" "${T:?}"
   rm -rf "${CHOME:?}/projects/${DIR//[\/._]/-}" # Claude's per-project transcript dir
+  # the subagent's Basic Memory note (best effort: the subagent is asked to delete it too)
+  rm -f "${BASIC_MEMORY_HOME:-$HOME/basic-memory}/selftest/doctor-$$.md" 2>/dev/null
+  rmdir "${BASIC_MEMORY_HOME:-$HOME/basic-memory}/selftest" 2>/dev/null
   # state and usage records of the scratch conversations (the first and the resumed one)
   local f s
   for f in "$STATE_DIR"/*.json; do
@@ -173,7 +176,7 @@ s0=$(ev_count Stop); i0=$(ev_count Notification)
 send "Run this exact shell command with the Bash tool and nothing else: sleep 120 . /long"
 sleep "$SETTLE"
 key Escape
-# shellcheck disable=SC2317 # called through until_
+# shellcheck disable=SC2317,SC2329 # called through until_
 esc_hit() { more_than Stop "$s0" || more_than Notification "$i0"; }
 if WAIT_S=$ESC_W until_ esc_hit; then
   d=
@@ -209,16 +212,18 @@ else res memory_subagent_noprompt pass "a subagent read and wrote memory with no
 
 # rate_limits: the status line payload, or the statusline hook's own usage record
 rl=
+clear=0 # the status line payload itself was captured and has no rate_limits (a missing usage record proves nothing)
 for f in "$T/statusline.json" "$USAGE_DIR/$sid.json"; do
   [ -s "$f" ] || continue
   if jq -e '(.rate_limits.five_hour.used_percentage // .rate_limits.seven_day.used_percentage) | type == "number"' "$f" >/dev/null 2>&1; then rl=yes; break; fi
   rl=no
+  [ "$f" != "$T/statusline.json" ] || clear=1
 done
 case $rl in
   yes) res rate_limits pass "status line payload carries rate_limits" ;;
   no)
     fb=
-    if mkdir -p "$(dirname "$FLAG")" && : >"$FLAG"; then fb="; /usage fallback turned on"; fi
+    if [ "$clear" = 1 ] && mkdir -p "$(dirname "$FLAG")" && : >"$FLAG"; then fb="; /usage fallback turned on"; fi
     res rate_limits warn "status line payload has no rate_limits (plan without them?)$fb" ;;
   *) res rate_limits skip "no status line payload was captured" ;;
 esac
@@ -250,8 +255,7 @@ n=$(ev_count SessionStart)
 launch --resume "$sid"
 if WAIT_S=$W until_ more_than SessionStart "$n"; then
   nsid=$(jq -r 'select(.hook_event_name == "SessionStart") | .session_id' "$EV" | tail -n1)
-  if [ "$nsid" = "$sid" ]; then res resume_keeps_id pass "--resume kept the session id"
-  else res resume_keeps_id pass "--resume gave a new session id (the card is chained through CCDASH_RESUMED_FROM)"; fi
+  res resume_keeps_id pass "--resume $([ "$nsid" = "$sid" ] && echo kept the session id || echo gave a new session id, the card is chained through CCDASH_RESUMED_FROM)"
   send "/exit"; sleep 1
 else res resume_keeps_id warn "no SessionStart after claude --resume $sid"; fi
 exit 0

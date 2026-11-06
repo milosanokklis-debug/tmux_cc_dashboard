@@ -105,11 +105,14 @@ is_root() { [ "$(id -u)" -eq 0 ]; }
 chown_if_root() { is_root || return 0; chown "$@"; }
 pw_field() { getent passwd "$1" 2>/dev/null | cut -d: -f"$2"; } # pw_field user N
 have_user() { getent passwd "$1" >/dev/null 2>&1; }
+# pubdir <dir>...: create missing directories (and parents) as 0755 whatever the umask (the global umask 077 would make
+# them 0700); existing ones are left as they are
+pubdir() { local d; for d in "$@"; do [ -d "$d" ] || (umask 022 && install -d -m 0755 "$d") || return 1; done; }
 same_file() { [ -f "$2" ] && cmp -s "$1" "$2"; }
 # put <src> <dst> <mode> [owner:group]: copy only when different; return 0 if it changed something
 put() {
   same_file "$1" "$2" && [ "$(stat -c %a "$2")" = "$3" ] && return 1
-  mkdir -p "$(dirname "$2")" || die "cannot create $(dirname "$2")"
+  pubdir "$(dirname "$2")" || die "cannot create $(dirname "$2")"
   install -m "$3" "$1" "$2" || die "cannot write $2"
   [ -z "${4:-}" ] || chown_if_root "$4" "$2"
   say "wrote $2"
@@ -135,6 +138,18 @@ wait_for() { # wait_for <seconds> <description> <command...>
     sleep 1
   done
   say "$what: ready"
+}
+# apt_repo <keyring> <key-url> <list-file> <line>: fetch the signing key and write the source line; returns 0 if the list changed
+apt_repo() {
+  local key=$1 url=$2 list=$3 line=$4
+  if [ ! -s "$key" ]; then
+    pubdir "$(dirname "$key")"
+    curl -fsSL --max-time 60 -o "$TMP/apt-key" "$url" || die "cannot download $url"
+    install -m 0644 "$TMP/apt-key" "$key"
+  fi
+  [ ! -f "$list" ] || [ "$(cat "$list")" != "$line" ] || return 1
+  pubdir "$(dirname "$list")"
+  printf '%s\n' "$line" >"$TMP/apt-list" && install -m 0644 "$TMP/apt-list" "$list"
 }
 apt_install() { apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold "$@" || die "apt-get install $* failed"; }
 pkg_installed() { dpkg -s "$1" 2>/dev/null | grep -q '^Status: install ok installed'; }
@@ -166,6 +181,16 @@ uninstall() {
     fi
   else
     say "no compose project found"
+    if [ "$PURGE" -eq 1 ]; then
+      local vols
+      vols=$("${DOCKER[@]}" volume ls -q --filter 'name=^ccdash_' 2>/dev/null) || vols=""
+      if [ -n "$vols" ]; then
+        # shellcheck disable=SC2086 # one argument per volume name
+        if "${DOCKER[@]}" volume rm $vols >/dev/null; then say "removed volumes: ${vols//$'\n'/ }"; else warn "could not remove some ccdash_* volumes"; fi
+      else
+        say "no ccdash_* volumes found (or Docker is not reachable); nothing removed"
+      fi
+    fi
   fi
   if [ -f "$CF_UNIT" ]; then
     systemctl disable --now cloudflared-ccdash.service || warn "could not stop cloudflared-ccdash"
@@ -180,7 +205,7 @@ uninstall() {
     local h
     h=$(pw_field "${INVOKER:-nobody}" 6)
     [ -z "$h" ] || rm -f "$h/ccdash-login.txt"
-    say "purged volumes, install directory and the login file"
+    say "purged the install directory and the login file (volumes: see above)"
   else
     say "kept the volumes (ccdash-home, ccdash-workspace, ccdash-web, ccdash-git), $INSTALL_DIR and ~/ccdash-login.txt"
   fi
@@ -195,7 +220,6 @@ preflight() {
   [[ $INVOKER =~ ^[a-z_][a-z0-9_-]*$ ]] || die "unsupported user name: $INVOKER"
   have_user "$INVOKER" || die "user $INVOKER does not exist"
   local id="" ver=""
-  # shellcheck disable=SC1091
   # shellcheck disable=SC1091
   [ -r "$R/etc/os-release" ] && id=$(. "$R/etc/os-release" && echo "${ID:-}") && ver=$(. "$R/etc/os-release" && echo "${VERSION_ID:-}")
   { [ "$id" = debian ] && { [ "$ver" = 12 ] || [ "$ver" = 13 ]; }; } || die "needs Debian 12 or 13 (found ${id:-unknown} ${ver:-})"
@@ -230,34 +254,14 @@ packages() {
     apt_install "${need[@]}"
   fi
   # Docker Engine (Docker's apt repo)
-  local keyring=$R/etc/apt/keyrings/docker.asc dlist=$R/etc/apt/sources.list.d/docker.list line
-  if [ ! -s "$keyring" ]; then
-    mkdir -p "$(dirname "$keyring")"
-    curl -fsSL --max-time 60 -o "$TMP/docker.asc" https://download.docker.com/linux/debian/gpg || die "cannot download Docker's apt key"
-    install -m 0644 "$TMP/docker.asc" "$keyring"
-  fi
-  line="deb [arch=$arch signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $codename stable"
-  if [ ! -f "$dlist" ] || [ "$(cat "$dlist")" != "$line" ]; then
-    mkdir -p "$(dirname "$dlist")"
-    printf '%s\n' "$line" >"$TMP/docker.list" && install -m 0644 "$TMP/docker.list" "$dlist"
-    updated=0
-  fi
+  local line="deb [arch=$arch signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $codename stable"
+  apt_repo "$R/etc/apt/keyrings/docker.asc" https://download.docker.com/linux/debian/gpg "$R/etc/apt/sources.list.d/docker.list" "$line" && updated=0
   need=()
   for p in docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-ce-rootless-extras; do pkg_installed "$p" || need+=("$p"); done
   if [ "$NO_CLOUDFLARE" -eq 0 ]; then
-    local ckey=$R/usr/share/keyrings/cloudflare-main.gpg clist=$R/etc/apt/sources.list.d/cloudflared.list
     # "any main": the codename-specific line has no candidate on Debian 13 (NOTES.md, Phase A check 4)
-    local cline="deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main"
-    if [ ! -s "$ckey" ]; then
-      mkdir -p "$(dirname "$ckey")"
-      curl -fsSL --max-time 60 -o "$TMP/cf.gpg" https://pkg.cloudflare.com/cloudflare-main.gpg || die "cannot download Cloudflare's apt key"
-      install -m 0644 "$TMP/cf.gpg" "$ckey"
-    fi
-    if [ ! -f "$clist" ] || [ "$(cat "$clist")" != "$cline" ]; then
-      mkdir -p "$(dirname "$clist")"
-      printf '%s\n' "$cline" >"$TMP/cf.list" && install -m 0644 "$TMP/cf.list" "$clist"
-      updated=0
-    fi
+    apt_repo "$R/usr/share/keyrings/cloudflare-main.gpg" https://pkg.cloudflare.com/cloudflare-main.gpg "$R/etc/apt/sources.list.d/cloudflared.list" \
+      "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" && updated=0
     pkg_installed cloudflared || need+=(cloudflared)
   fi
   if [ "${#need[@]}" -gt 0 ]; then
@@ -289,7 +293,7 @@ ccdash_user() {
   printf '%s ALL=(ccdash) NOPASSWD: /usr/local/bin/ccdash-docker\n' "$INVOKER" >"$TMP/sudoers" || die "mktemp write failed"
   if ! same_file "$TMP/sudoers" "$SUDOERS"; then
     visudo -cf "$TMP/sudoers" >/dev/null || die "the generated sudoers rule did not validate"
-    mkdir -p "$(dirname "$SUDOERS")"
+    pubdir "$(dirname "$SUDOERS")"
     install -m 0440 "$TMP/sudoers" "$SUDOERS" || die "cannot write $SUDOERS"
     chown_if_root root:root "$SUDOERS"
     say "wrote $SUDOERS"
@@ -301,9 +305,8 @@ ccdash_user() {
 # Installed by setup.sh. Runs ccd against the rootless Docker of the ccdash user.
 CCDASH_DOCKER=\${CCDASH_DOCKER:-sudo -n -u ccdash /usr/local/bin/ccdash-docker}
 export CCDASH_DOCKER
-exec /usr/local/lib/ccdash/ccd "\$@"
+exec $LIB_DIR/ccd "\$@"
 EOF
-  sed -i "s|exec /usr/local/lib/ccdash/ccd|exec $LIB_DIR/ccd|" "$TMP/ccd-wrapper"
   put "$TMP/ccd-wrapper" "$BIN_DIR/ccd" 755 root:root || true
   rt=$R/run/user/$uid
   [ -e "$rt/bus" ] || systemctl start "user@$uid.service" || warn "could not start user@$uid.service"
@@ -320,7 +323,7 @@ EOF
 
 ORIGIN=""
 TOTP_REQUIRED=1
-[ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ "$NO_CLOUDFLARE" -eq 1 ] || TOTP_REQUIRED=0 # Access replaces TOTP only with a tunnel
+# TOTP stays required until access_app has confirmed an Access app (it then sets 0 and the stack is started again)
 write_env_and_start() {
   step "4/12 Configuration, image, stack"
   local f e files=(compose.yaml compose.egress.yaml compose.build.yaml)
@@ -343,7 +346,7 @@ write_env_and_start() {
   local k v
   for k in CCDASH_VERSION CLAUDE_CODE_VERSION S6_OVERLAY_VERSION BASIC_MEMORY_VERSION KIT_REPO KIT_REF; do
     v=$(get_env "$SRC/.env.example" "$k")
-    if [ -n "$v" ]; then set_env "$e" "$k" "$v" || true; fi
+    if [ -n "$v" ] && [ -z "$(get_env "$e" "$k")" ]; then set_env "$e" "$k" "$v" || true; fi # never override a pinned value
   done
   start_stack
 }
@@ -368,7 +371,8 @@ start_stack() {
 LOGIN_FILE=""
 login() {
   step "5/12 Dashboard login"
-  local home pw t
+  local home pw t own=()
+  is_root && own=(-o "$INVOKER")
   home=$(pw_field "$INVOKER" 6)
   [ -n "$home" ] || die "no home directory for $INVOKER"
   LOGIN_FILE=$home/ccdash-login.txt
@@ -379,8 +383,7 @@ login() {
   pw=$(set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)
   [ "${#pw}" -eq 24 ] || die "could not generate a password"
   t=$(mktemp "$home/.ccdash-login.XXXXXX") || die "cannot create a file in $home"
-  chmod 600 "$t"
-  chown_if_root "$INVOKER:" "$t"
+  install -m 600 "${own[@]}" /dev/null "$t" || die "cannot create $t"
   printf 'ccdash dashboard login\nUsername: %s\nPassword: %s\n' "$INVOKER" "$pw" >"$t"
   if ! printf '%s\n' "$pw" | dexec -i -u web ccdash node /opt/ccdash/dashboard/ccdash-passwd.js --stdin "$INVOKER" >/dev/null; then
     rm -f "$t"
@@ -436,6 +439,14 @@ cf_api() { # cf_api METHOD PATH [body-file]
   [ -z "${3:-}" ] || data=(--data "@$3")
   curl -fsS --max-time 30 -X "$1" -H "@$hdr" -H 'Content-Type: application/json' "${data[@]}" "https://api.cloudflare.com/client/v4$2"
 }
+stop_login() { kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
+cf_route_dns() { # idempotent: an existing record for the host is success
+  local out
+  if out=$(cf_as tunnel route dns ccdash "$CF_HOST" 2>&1); then [ -z "$out" ] || say "$out"; return 0; fi
+  if grep -qi 'already exists' <<<"$out"; then say "DNS record for $CF_HOST already exists"; return 0; fi
+  say "$out"
+  die "cloudflared tunnel route dns ccdash $CF_HOST failed"
+}
 cf_login() {
   local cert=$CF_HOME/.cloudflared/cert.pem out=$TMP/cflogin.out timeout=${CCDASH_SETUP_CF_LOGIN_TIMEOUT:-600} pid i=0 shown=0 url
   [ ! -s "$cert" ] || { say "cloudflared is already logged in"; return 0; }
@@ -450,14 +461,12 @@ cf_login() {
     fi
     i=$((i + 1))
     if [ "$i" -gt "$timeout" ]; then
-      kill "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
+      stop_login "$pid"
       die "no cloudflared login within ${timeout}s (cert.pem never appeared)"
     fi
     sleep 1
   done
-  kill "$pid" 2>/dev/null
-  wait "$pid" 2>/dev/null
+  stop_login "$pid"
   say "cloudflared login done"
 }
 
@@ -477,7 +486,7 @@ cloudflare_tunnel() {
   step "8/12 Cloudflare tunnel"
   have_user cloudflared || useradd --system --home-dir /var/lib/cloudflared --create-home --shell /usr/sbin/nologin cloudflared \
     || die "cannot create the cloudflared system user"
-  mkdir -p "$CF_HOME" "$(dirname "$CF_CONF")"
+  pubdir "$CF_HOME" "$(dirname "$CF_CONF")"
   chown_if_root cloudflared: "$CF_HOME"
   chmod 750 "$CF_HOME"
   cf_login
@@ -532,10 +541,10 @@ CF_CHANGED=0
 
 cloudflare_publish() { # DNS route and service start: after Access exists when a token is set
   if ! systemctl is-enabled --quiet cloudflared-ccdash.service 2>/dev/null || ! systemctl is-active --quiet cloudflared-ccdash.service 2>/dev/null; then
-    cf_as tunnel route dns ccdash "$CF_HOST" || die "cloudflared tunnel route dns ccdash $CF_HOST failed"
+    cf_route_dns
     systemctl enable --now cloudflared-ccdash.service || die "cannot start cloudflared-ccdash.service"
   elif [ "$CF_CHANGED" -eq 1 ]; then
-    cf_as tunnel route dns ccdash "$CF_HOST" || die "cloudflared tunnel route dns ccdash $CF_HOST failed"
+    cf_route_dns
     systemctl restart cloudflared-ccdash.service || die "cannot restart cloudflared-ccdash.service"
   fi
   ORIGIN=https://$CF_HOST
@@ -548,7 +557,7 @@ access_app() {
     return 0
   fi
   if [ "$NO_CLOUDFLARE" -eq 1 ]; then
-    say "no tunnel, so no Access app; TOTP is not required"
+    say "no tunnel, so no Access app; TOTP stays required"
     return 0
   fi
   local acct email apps body
@@ -562,7 +571,7 @@ access_app() {
     TOTP_REQUIRED=1
     return 1
   fi
-  apps=$(cf_api GET "/accounts/$acct/access/apps") || apps=""
+  apps=$(cf_api GET "/accounts/$acct/access/apps") || die "cannot list the Cloudflare Access apps (token needs Access: Apps and Policies edit); not creating one blind, which could duplicate it. TOTP stays required"
   if jq -e --arg d "$CF_HOST" '.result[]? | select(.domain == $d)' >/dev/null 2>&1 <<<"$apps"; then
     say "Access app for $CF_HOST already exists"
     TOTP_REQUIRED=0
@@ -620,7 +629,6 @@ summary() {
 main() {
   if [ "$UNINSTALL" -eq 1 ]; then
     CURRENT="uninstall"
-    [ -n "$INVOKER" ] || INVOKER=""
     if ! is_root && [ "${CCDASH_SETUP_ALLOW_NONROOT:-0}" != 1 ]; then die "run with sudo: sudo ./setup.sh --uninstall"; fi
     uninstall
     exit 0

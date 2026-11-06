@@ -160,3 +160,68 @@ run_setup() { run timeout 120 "$ROOT/setup.sh" "$@" </dev/null; }
   run shellcheck "$ROOT/setup.sh" "$ROOT/tests/fixtures/setup-fake"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
+
+@test "directories setup creates are 0755 and config.yml is 640 despite umask 077" {
+  run_setup --hostname ccdash.example.com
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  for d in usr/local/lib/ccdash etc/cloudflared etc/sudoers.d etc/apt/keyrings etc/apt/sources.list.d; do
+    [ "$(stat -c %a "$FAKE_ROOT/$d")" = 755 ] || { echo "$d is $(stat -c %a "$FAKE_ROOT/$d")"; false; }
+  done
+  [ "$(stat -c %a "$FAKE_ROOT/usr/local/lib/ccdash/ccd")" = 755 ]
+  [ "$(stat -c %a "$FAKE_ROOT/etc/cloudflared/config.yml")" = 640 ]
+  [ "$(stat -c %a "$FAKE_ROOT/etc/systemd/system/cloudflared-ccdash.service")" = 644 ]
+  [ "$(stat -c %a "$FAKE_ROOT/home/ccdash/ccdash/.env")" = 600 ]
+  grep -qF "exec $FAKE_ROOT/usr/local/lib/ccdash/ccd" "$FAKE_ROOT/usr/local/bin/ccd"
+}
+
+@test "with a token, TOTP is required until the Access app is confirmed; a failed Access GET aborts without a POST" {
+  CLOUDFLARE_ACCESS_EMAIL=me@example.com CLOUDFLARE_API_TOKEN=tok run_setup --hostname ccdash.example.com
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(head -1 "$FAKE_STATE/totp.history")" = CCDASH_TOTP_REQUIRED=1 ] # the first start has TOTP on
+  [ "$(tail -1 "$FAKE_STATE/totp.history")" = CCDASH_TOTP_REQUIRED= ]   # off only once the Access app exists
+  grep -qx 'CCDASH_TOTP_REQUIRED=' "$FAKE_ROOT/home/ccdash/ccdash/.env"
+  rm -rf "$FAKE_STATE" "$FAKE_ROOT/home"; mkdir -p "$FAKE_STATE" "$FAKE_ROOT/home/tester"
+  FAKE_CURL_FAIL=access-list CLOUDFLARE_ACCESS_EMAIL=me@example.com CLOUDFLARE_API_TOKEN=tok run_setup --hostname ccdash.example.com
+  [ "$status" -eq 1 ]
+  [[ $output == *"cannot list the Cloudflare Access apps"* ]]
+  [ ! -e "$FAKE_STATE/access-app.json" ]
+  grep -qx 'CCDASH_TOTP_REQUIRED=1' "$FAKE_ROOT/home/ccdash/ccdash/.env"
+}
+
+@test "--no-cloudflare with a token says TOTP stays required" {
+  CLOUDFLARE_API_TOKEN=tok run_setup --no-cloudflare
+  [ "$status" -eq 0 ]
+  [[ $output == *"TOTP stays required"* ]]
+  grep -qx 'CCDASH_TOTP_REQUIRED=1' "$FAKE_ROOT/home/ccdash/ccdash/.env"
+}
+
+@test "route dns: an existing record is success (rerun after a partial failure); another error fails" {
+  FAKE_ROUTE=exists run_setup --hostname ccdash.example.com
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ $output == *"already exists"* ]]
+  grep -qx 'systemctl enable --now cloudflared-ccdash.service' <(calls)
+  rm -rf "$FAKE_STATE" "$FAKE_ROOT/home"; mkdir -p "$FAKE_STATE" "$FAKE_ROOT/home/tester"
+  FAKE_ROUTE=fail run_setup --hostname ccdash.example.com
+  [ "$status" -eq 1 ]
+  [[ $output == *"route dns ccdash ccdash.example.com failed"* ]]
+}
+
+@test "a rerun keeps pinned versions already in .env" {
+  run_setup --no-cloudflare
+  e=$FAKE_ROOT/home/ccdash/ccdash/.env
+  sed -i 's/^CCDASH_VERSION=.*/CCDASH_VERSION=pinned-by-owner/' "$e"
+  run_setup --no-cloudflare
+  [ "$status" -eq 0 ]
+  grep -qx 'CCDASH_VERSION=pinned-by-owner' "$e"
+}
+
+@test "--purge without an .env removes the ccdash_* volumes explicitly" {
+  printf 'ccdash_ccdash-home\nccdash_ccdash-git\n' >"$FAKE_STATE/vols"
+  run_setup --uninstall --purge
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -qx 'docker volume rm ccdash_ccdash-home ccdash_ccdash-git' <(calls)
+  : >"$FAKE_STATE/vols"; : >"$FAKE_STATE/calls.log"
+  run_setup --uninstall --purge
+  [[ $output == *"nothing removed"* ]]
+  ! grep -q 'volume rm' <(calls)
+}

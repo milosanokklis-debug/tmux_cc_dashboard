@@ -79,18 +79,35 @@ st() { jq -r --arg c "$1" '.checks[] | select(.check == $c) | .status' "$CCDASH_
   [ -e "$HOME/.ccdash/usage-fallback.enabled" ]
 }
 
-@test "egress: a denied host is appended through the allow helper; clean log passes" {
+@test "egress: only expected hosts are allowed; others are warnings; a clean log passes" {
   export STUB_EGRESS=1 STUB_LOG=$TD/log
-  printf 'ALLOW api.anthropic.com:443\nDENY statsig.example.com:443\nDENY odd.example.com:8080\n' >"$TD/log"
+  printf 'ALLOW api.anthropic.com:443\nDENY statsig.com:443\nDENY odd.example.com:8080\nDENY *.evil.com:443\nDENY github.com:80\n' >"$TD/log"
   run "$ROOT/bin/ccd" doctor --live
   [ "$status" -eq 0 ]
   [ "$(st egress_hosts)" = warn ]
-  [ "$(cat "$TD/allowed")" = "odd.example.com:8080 statsig.example.com" ]
+  [ "$(cat "$TD/allowed")" = "github.com statsig.com" ]
+  d=$(jq -r '.checks[] | select(.check == "egress_hosts") | .detail' "$CCDASH_SELFTEST_FILE")
+  [[ $d == *"wanted): *.evil.com odd.example.com:8080;"* ]] || { echo "$d"; false; }
   printf 'ALLOW api.anthropic.com:443\n' >"$TD/log"
   rm "$TD/allowed"
   run "$ROOT/bin/ccd" doctor --live
   [ "$(st egress_hosts)" = pass ]
   [ ! -e "$TD/allowed" ]
+}
+
+@test "malformed ccd-doctor output is discarded with a warning and the exit status stays 0" {
+  cat >"$TD/docker2" <<'STUB'
+#!/bin/bash
+case $1 in
+  exec) case " $* " in *" ccd-doctor "*) printf '{"check":"a","status":"pass","detail":"ok"}\n{broken\n{"x":\n' ;; *) cat >/dev/null ;; esac ;;
+  *) exit 1 ;;
+esac
+STUB
+  chmod +x "$TD/docker2"
+  CCDASH_DOCKER=$TD/docker2 run "$ROOT/bin/ccd" doctor --live
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(st a)" = pass ]
+  [[ $(jq -r '.checks[] | select(.check == "doctor_output") | .detail' "$CCDASH_SELFTEST_FILE") == "2 malformed"* ]]
 }
 
 @test "gVisor: enabled only when runsc runs; a failing runsc stays on runc with a warning" {
@@ -104,6 +121,10 @@ st() { jq -r --arg c "$1" '.checks[] | select(.check == $c) | .status' "$CCDASH_
   [ "$(st gvisor)" = pass ]
   grep -qx CCDASH_RUNTIME=runsc "$TD/env"
   grep -qx A=1 "$TD/env"
+  # the .env is rewritten in place: owner and mode survive (a tmp+mv would reset them)
+  chmod 640 "$TD/env"; ino=$(stat -c %i "$TD/env")
+  run "$ROOT/bin/ccd" doctor --live
+  [ "$(stat -c '%a %i' "$TD/env")" = "640 $ino" ]
   [ "$(jq -r '.gvisor | has("slowdown")' "$CCDASH_SELFTEST_FILE")" = true ]
 }
 

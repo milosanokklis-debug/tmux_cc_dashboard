@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # One stand-in for every external command setup.sh runs. Symlink it under the command's name in a directory that
 # comes first in PATH. State lives in $FAKE_STATE; every call is appended to $FAKE_STATE/calls.log.
-# Env: FAKE_STATE, FAKE_ROOT (CCDASH_SETUP_ROOT), FAKE_INVOKER, FAKE_FAIL (command name that exits 1).
+# Env: FAKE_STATE, FAKE_ROOT (CCDASH_SETUP_ROOT), FAKE_INVOKER, FAKE_FAIL (command name that exits 1),
+# FAKE_ROUTE (exists|fail: what `cloudflared tunnel route dns` answers), $FAKE_STATE/vols (names `docker volume ls` prints).
 set -u
 name=$(basename "$0")
 S=${FAKE_STATE:?}
@@ -63,6 +64,7 @@ case $name in
           cp "$data" "$S/access-app.json"
           jq -c '{result: [{domain: .domain}]}' "$data" >"$S/access-list.json"
           echo '{"success":true}'
+        elif [ "${FAKE_CURL_FAIL:-}" = access-list ]; then exit 22
         else cat "$S/access-list.json" 2>/dev/null || echo '{"result":[]}'; fi ;;
       *) echo "fake curl: unexpected $url" >&2; exit 1 ;;
     esac ;;
@@ -71,11 +73,13 @@ case $name in
       info) [ -e "$S/rootless" ] ;;
       ps) ;;
       image) [ -e "$S/image" ] ;;
+      volume) [ "$2" != ls ] || cat "$S/vols" 2>/dev/null ;;
       compose)
         for a in "$@"; do case $a in pull | up | down) verb=$a ;; esac; done
         case ${verb:-} in
           pull) : >"$S/image" ;;
-          up) cp "$(printf '%s\n' "$@" | grep -A1 -x -- --env-file | tail -1)" "$S/up.env" ;;
+          up) cp "$(printf '%s\n' "$@" | grep -A1 -x -- --env-file | tail -1)" "$S/up.env"
+              grep '^CCDASH_TOTP_REQUIRED=' "$S/up.env" >>"$S/totp.history" ;;
           down) mkdir -p "$S/volumes"; : >"$S/down" ;;
         esac ;;
       exec)
@@ -102,7 +106,11 @@ case $name in
         exec sleep 300 ;; # the real one never exits
       "tunnel list") if [ -e "$S/tunnel" ]; then echo '[{"id":"uuid-1","name":"ccdash","deleted_at":null}]'; else echo '[]'; fi ;;
       "tunnel create") : >"$S/tunnel"; mkdir -p "$HOME/.cloudflared"; echo '{}' >"$HOME/.cloudflared/uuid-1.json" ;;
-      "tunnel route") ;;
+      "tunnel route")
+        case "${FAKE_ROUTE:-}" in
+          exists) echo "Failed to add route: code: 1003, reason: Failed to create record $4: An A, AAAA, or CNAME record with that host already exists." >&2; exit 1 ;;
+          fail) echo "Failed to add route: code: 9109, reason: Valid user session required" >&2; exit 1 ;;
+        esac ;;
     esac ;;
   ccd) ;;
   *) echo "fake: no behaviour for $name" >&2; exit 1 ;;
