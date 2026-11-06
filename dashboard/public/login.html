@@ -38,14 +38,15 @@
         <textarea id="uri" readonly rows="3" spellcheck="false" aria-label="Authenticator setup link"></textarea>
       </details>
       <label for="ecode">6-digit code</label>
-      <input id="ecode" name="ecode" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="one-time-code" spellcheck="false" aria-describedby="eerror">
+      <input id="ecode" name="ecode" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="8" autocomplete="one-time-code" spellcheck="false" aria-describedby="eerror">
       <p id="eerror" role="alert"></p>
       <button type="submit" id="esubmit">Enable and sign in</button>
     </div>
     <div id="enroll-done" class="stack" hidden>
       <p><strong>Save your recovery codes now.</strong> Each works once if you lose your authenticator app, and you can type one into the sign-in code field. They are not shown again.</p>
-      <div role="group" aria-labelledby="enroll-h"><pre id="recovery" tabindex="0"></pre></div>
+      <pre id="recovery" tabindex="0" aria-label="Recovery codes"></pre>
       <button type="button" id="copy" class="secondary">Copy codes</button>
+      <button type="button" id="download" class="secondary">Download codes</button>
       <p id="copy-status" role="status"></p>
       <button type="button" id="done">I saved them, continue</button>
     </div>

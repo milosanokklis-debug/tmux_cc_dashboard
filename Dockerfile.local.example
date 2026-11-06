@@ -1,0 +1,23 @@
+# Your own toolchain on top of the published image. Copy to Dockerfile.local, edit, then add a
+# compose.local.yaml next to compose.yaml:
+#   services:
+#     ccdash:
+#       build:
+#         context: .
+#         dockerfile: Dockerfile.local
+#         args:
+#           CCDASH_VERSION: ${CCDASH_VERSION}
+# and run:
+#   docker compose -f compose.yaml -f compose.local.yaml up -d --build
+# (compose.yaml supplies the image name, so the local build is tagged and run under it).
+ARG CCDASH_VERSION=0.1.0
+FROM ghcr.io/milosanokklis-debug/ccdash:${CCDASH_VERSION}
+
+# The base image has no USER line: it runs as root (s6-overlay /init) and s6 drops privileges per
+# service (dashboard as web, tmux and Claude as ccd). So install as root and stay root at the end;
+# do NOT add a USER line, or /init cannot start.
+USER root
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3-venv python3-pip \
+ && rm -rf /var/lib/apt/lists/*

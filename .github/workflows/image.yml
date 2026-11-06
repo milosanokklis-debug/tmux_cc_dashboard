@@ -1,0 +1,104 @@
+name: image
+# Tag v0.1.0 publishes ghcr.io/milosanokklis-debug/ccdash:0.1.0 and :latest (multi-arch).
+# The tag keeps its "v" in git; the image tag drops it, because compose uses CCDASH_VERSION=0.1.0.
+# Every run first builds one leg per architecture with a smoke test (no push); publish needs both legs to pass.
+# Tags with a '-' (v1.0.0-rc1) are not published.
+on:
+  push:
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+  pull_request:
+    paths:
+      - Dockerfile
+      - rootfs/**
+      - dashboard/**
+      - egress/**
+      - .env.example
+      - .github/workflows/image.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  IMAGE: ghcr.io/milosanokklis-debug/ccdash
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pinned versions
+        run: |
+          set -eu
+          grep -E '^(CLAUDE_CODE_VERSION|S6_OVERLAY_VERSION)=' .env.example >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: true
+          tags: ccdash:smoke
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
+            S6_OVERLAY_VERSION=${{ env.S6_OVERLAY_VERSION }}
+      - name: Smoke test (arch, tools)
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -eu
+          docker run --rm --platform "$PLATFORM" --entrypoint sh ccdash:smoke -c \
+            'uname -m; node --version; claude --version'
+      # Does the dashboard come up and answer /healthz (also under QEMU for arm64)?
+      - name: Smoke test (/healthz)
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -eu
+          docker run -d --name smoke --platform "$PLATFORM" --read-only \
+            --tmpfs /run:mode=0755,exec --tmpfs /tmp:mode=1777 ccdash:smoke >/dev/null
+          ok=0
+          for _ in $(seq 1 60); do
+            if docker exec smoke curl -sf http://127.0.0.1:7690/healthz >/dev/null 2>&1; then ok=1; break; fi
+            sleep 5
+          done
+          if [ "$ok" != 1 ]; then docker logs smoke || true; exit 1; fi
+          echo "healthz ok on $PLATFORM"
+          docker rm -f smoke >/dev/null
+
+  publish:
+    needs: dry-run
+    # pre-release tags such as v1.0.0-rc1 match the glob but are not published
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pinned versions and compute the version
+        run: |
+          set -eu
+          grep -E '^(CLAUDE_CODE_VERSION|S6_OVERLAY_VERSION)=' .env.example >> "$GITHUB_ENV"
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.VERSION }}
+            ${{ env.IMAGE }}:latest
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
+            S6_OVERLAY_VERSION=${{ env.S6_OVERLAY_VERSION }}

@@ -27,6 +27,8 @@ jobs:
           node-version: 22
       - name: dashboard tests
         run: cd dashboard && npm ci && npm test
+      - name: docs check
+        run: tests/docs-check.sh
       - name: replay fixtures
         run: tests/replay-fixtures.sh
       - name: build main image
@@ -44,6 +46,8 @@ jobs:
         run: tests/stack/phase-d.sh
       - name: stack test (reader service, gauges, tokens, load, headless Chromium)
         run: tests/stack/phase-e.sh
+      - name: stack test (backup, volume delete, restore)
+        run: tests/stack/phase-g.sh
       - name: stack test (egress allowlist proxy, internal network, push and git through it)
         run: tests/stack/egress.sh
       - name: build test image
