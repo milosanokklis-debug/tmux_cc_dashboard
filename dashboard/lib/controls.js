@@ -24,9 +24,9 @@ function createControls(svc, {
   const busy = new Set(); // sids with a prompt or close in flight
   const previews = new Map(); // sid -> { t, text }
 
-  async function lookup(sid) {
+  async function lookup(sid, fresh = true) {
     if (!/^[0-9a-f-]{36}$/.test(sid)) throw new HttpError(400, 'invalid conversation id');
-    await svc.reconciler.tick();
+    if (fresh) await svc.reconciler.tick(); // fresh = false: the last snapshot (the /events hub previews often)
     const rec = svc.reconciler.get(sid);
     if (!rec) throw new HttpError(404, 'no such conversation');
     if (rec.hidden) throw new HttpError(409, 'this conversation was already woken');
@@ -125,8 +125,8 @@ function createControls(svc, {
       });
     },
 
-    async preview(sid) {
-      const rec = await lookup(sid);
+    async preview(sid, { fresh = true } = {}) {
+      const rec = await lookup(sid, fresh);
       if (rec.status === 'sleeping' || rec.status === 'ended') throw new HttpError(409, `conversation is ${rec.status}`);
       const now = svc.now();
       const hit = previews.get(sid);

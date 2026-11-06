@@ -309,4 +309,21 @@ Each check reports one of `ok`, `mismatch` (warning, never an install failure), 
 
 ### Tests
 - `dashboard/test/phase-e-{reader,usage,fallback,tokens,api,proctable}.test.js`, `tests/bats/statusline.bats`, new cases in `state.bats` and `fake-claude.bats`.
-- Not done in this part: the ccd-reader service has not been run inside the built image (CI builds it, no stack test exercises it yet); `/events` WebSocket, IntersectionObserver previews and the CPU/RSS target are later parts of Phase E.
+- Not done in this part: the ccd-reader service has not been run inside the built image (CI builds it, no stack test exercises it yet); IntersectionObserver previews in the browser and the CPU/RSS target are later parts of Phase E (the `/events` server side is below).
+
+## Handoff 2 Phase E (backend part 2): the `/events` WebSocket
+
+`dashboard/lib/events.js`, wired in `app.js`. Upgrade at `/events` (GET) goes through the same `guardUpgrade` as `/term`: allowed Origin (else 403) and a valid session cookie (else 401), before the handshake; max 32 clients (503); sockets are in the `SocketRegistry`, so logout, expiry and password change close them. Ping every 30 s, a client that does not pong is terminated.
+
+Triggers: `fs.watch(recursive)` on `~/.ccdash/` (`CCDASH_EVENTS_WATCH` overrides; if the directory is missing it retries every 5 s), debounced 100 ms (`CCDASH_EVENTS_DEBOUNCE_MS`), plus the reconciler tick (`CCDASH_RECONCILE_MS`, default 5000) as backstop. Each pass rebuilds the payloads and sends a type only when its fingerprint changed (clock-only keys `now`, `elapsed`, `countdown` are ignored). Nothing is computed while no client is connected. A new client first gets the last message of every type, then follows.
+
+Server -> client (JSON text, one object per frame):
+- `{type:'tree', tree:{now, projects:[...]}}`: exactly the body of `GET /api/tree` (without `?all=1`; "all time" still needs the HTTP call). Contains token totals, approvals, `elapsed`; `elapsed` is not re-pushed for clock alone, the browser keeps its own ticker.
+- `{type:'state', states:{<sid>:{status, idle, quiet}}}`: reconciler status of every non-hidden conversation.
+- `{type:'usage', usage:{...}}`: body of `GET /api/usage`.
+- `{type:'tokens', tokens:{...}}`: body of `GET /api/tokens` (no `conversation` filter).
+- `{type:'preview', id:<sid>, text}`: last lines of the pane, only for watched ids, only when the text changed, at most once per second per card per connection (`CCDASH_EVENTS_PREVIEW_MS`).
+
+Client -> server: `{type:'watch', ids:[sid,...]}` (at most 50 per connection; ids that are not a UUID are ignored; the first preview follows at once) and `{type:'unwatch', ids:[...]}`. Anything else is ignored. Not covered by `/events`: `/api/projects` (still polled), "all time" tree, transcript view.
+
+Tests: `dashboard/test/phase-e-events.test.js`.

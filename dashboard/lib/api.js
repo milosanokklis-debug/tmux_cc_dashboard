@@ -68,7 +68,34 @@ function createApi(svc) {
   }
   const methodNotAllowed = () => { throw new HttpError(405, 'method not allowed'); };
 
-  return async function handleApi(req, res, pathname, searchParams, ctx = {}) {
+  // The same payloads /api/tree and /api/usage answer with; the /events hub reuses them.
+  async function treePayload(all = false) {
+    const now = svc.now();
+    const projectsTree = buildTree({
+      agentsDir: svc.agentsDir, transcriptRoot: svc.transcriptRoot, panes: await panes(), table: svc.procTable(),
+      now, all, states: svc.reconciler.snapshot(), tokens: svc.tokens ?? null,
+    });
+    svc.tokens?.refresh(trackedFiles()).catch(() => {}); // totals in the next tree; never delays this answer
+    for (const p of projectsTree) { // an approval card only while the conversation really is in needs_approval
+      for (const c of p.conversations) {
+        const a = c.status === 'needs_approval' ? svc.broker?.forSid(c.sid) : null;
+        if (a) c.approval = { id: a.id, tool: a.tool_name, input: a.tool_input, truncated: a.truncated, since: a.since };
+      }
+    }
+    return { now: Math.floor(now / 1000), projects: projectsTree }; // unix seconds
+  }
+  function usagePayload() {
+    const fb = svc.usageFallback;
+    const g = usage.gauges({ dir: svc.usageDir, now: Math.floor(svc.now() / 1000), fallback: fb ? fb.latest : null });
+    if (g.five_hour.status === 'unknown' && g.seven_day.status === 'unknown') fb?.refresh(); // off unless switched on
+    return { ...g, fallback_enabled: !!fb?.enabled() };
+  }
+  async function tokensPayload() {
+    await svc.tokens.refresh(trackedFiles());
+    return svc.tokens.views({ conversation: null });
+  }
+
+  async function handleApi(req, res, pathname, searchParams, ctx = {}) {
     const get = req.method === 'GET';
     if (pathname.startsWith('/api/push/')) return pushRoute(req, res, pathname, ctx.sessionKey);
     if (pathname === '/api/projects') {
@@ -104,26 +131,11 @@ function createApi(svc) {
     }
     if (pathname === '/api/tree') {
       if (!get) return methodNotAllowed();
-      const now = svc.now();
-      const projectsTree = buildTree({
-        agentsDir: svc.agentsDir, transcriptRoot: svc.transcriptRoot, panes: await panes(), table: svc.procTable(),
-        now, all: searchParams.get('all') === '1', states: svc.reconciler.snapshot(), tokens: svc.tokens ?? null,
-      });
-      svc.tokens?.refresh(trackedFiles()).catch(() => {}); // totals in the next tree; never delays this answer
-      for (const p of projectsTree) { // an approval card only while the conversation really is in needs_approval
-        for (const c of p.conversations) {
-          const a = c.status === 'needs_approval' ? svc.broker?.forSid(c.sid) : null;
-          if (a) c.approval = { id: a.id, tool: a.tool_name, input: a.tool_input, truncated: a.truncated, since: a.since };
-        }
-      }
-      return send(res, 200, { now: Math.floor(now / 1000), projects: projectsTree }); // unix seconds
+      return send(res, 200, await treePayload(searchParams.get('all') === '1'));
     }
     if (pathname === '/api/usage') {
       if (!get) return methodNotAllowed();
-      const fb = svc.usageFallback;
-      const g = usage.gauges({ dir: svc.usageDir, now: Math.floor(svc.now() / 1000), fallback: fb ? fb.latest : null });
-      if (g.five_hour.status === 'unknown' && g.seven_day.status === 'unknown') fb?.refresh(); // off unless switched on
-      return send(res, 200, { ...g, fallback_enabled: !!fb?.enabled() });
+      return send(res, 200, usagePayload());
     }
     if (pathname === '/api/tokens') {
       if (!get) return methodNotAllowed();
@@ -171,7 +183,12 @@ function createApi(svc) {
       return send(res, 200, await controls[ctl[2]](ctl[1], req));
     }
     throw new HttpError(404, 'not found');
-  };
+  }
+  handleApi.treePayload = treePayload;
+  handleApi.usagePayload = usagePayload;
+  handleApi.tokensPayload = tokensPayload;
+  handleApi.preview = (sid) => controls.preview(sid, { fresh: false });
+  return handleApi;
 
   // Push routes: a subscription belongs to the session (cookie) that created it.
   async function pushRoute(req, res, pathname, sk) {
