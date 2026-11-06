@@ -14,7 +14,6 @@ function fakeClock(start = 1_700_000_000_000) {
   return { t: start, now() { return this.t; }, advance(ms) { this.t += ms; } };
 }
 
-const audits = [];
 async function start({ withAuth = true, clock = fakeClock(), delays = [], authJson, services, broker = { sock: null }, audit } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-test-'));
   if (authJson !== undefined) fs.writeFileSync(path.join(dir, 'auth.json'), authJson);
@@ -28,7 +27,7 @@ async function start({ withAuth = true, clock = fakeClock(), delays = [], authJs
     services,
     broker,
     hashOptions: FAST,
-    audit: audit || ((e, f) => { audits.push([e, f]); }),
+    audit: audit || (() => {}),
   });
   const server = app.createServer();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));

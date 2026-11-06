@@ -21,7 +21,7 @@ function clean(fields) {
   return out;
 }
 
-function createAudit({ dir = '/var/lib/ccdash-web', maxBytes = 10 * 1024 * 1024, keep = 5, clock = Date } = {}) {
+function createAudit({ dir = '/var/lib/ccdash-web', maxBytes = 10 * 1024 * 1024, keep = 5 } = {}) {
   const file = path.join(dir, 'audit.log');
 
   function rotate() {
@@ -30,13 +30,11 @@ function createAudit({ dir = '/var/lib/ccdash-web', maxBytes = 10 * 1024 * 1024,
       const to = `${file}.${i}`;
       try { fs.renameSync(from, to); } catch { /* absent */ }
     }
-    // keep=1 would keep only the current file: start it afresh
-    if (keep <= 1) try { fs.rmSync(file, { force: true }); } catch { /* ignore */ }
   }
 
   function log(event, fields) {
     try {
-      const line = `${JSON.stringify({ ts: new Date(clock.now()).toISOString(), event: String(event), ...clean(fields) })}\n`;
+      const line = `${JSON.stringify({ ts: new Date().toISOString(), event: String(event), ...clean(fields) })}\n`;
       let size = 0;
       try { size = fs.statSync(file).size; } catch { /* new file */ }
       if (size > 0 && size + Buffer.byteLength(line) > maxBytes) rotate();
@@ -49,4 +47,4 @@ function createAudit({ dir = '/var/lib/ccdash-web', maxBytes = 10 * 1024 * 1024,
   return { log, file };
 }
 
-module.exports = { createAudit, clean, FIELDS };
+module.exports = { createAudit };

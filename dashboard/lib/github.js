@@ -13,7 +13,7 @@ function validateToken(token) {
 }
 
 // Node's global fetch ignores HTTPS_PROXY; with egress on, go through the proxy.
-function defaultFetch(proxy = proxyUrl()) { return proxy ? (url, opts) => fetchViaProxy(url, opts, proxy) : fetch; }
+function defaultFetch() { const proxy = proxyUrl(); return proxy ? (url, opts) => fetchViaProxy(url, opts, proxy) : fetch; }
 
 // GET /repos/{owner}/{repo} with the token; anything but 200 refuses before any clone.
 // Returns { canPush } (false only when GitHub says permissions.push === false).

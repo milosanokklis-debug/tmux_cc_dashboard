@@ -37,11 +37,11 @@ async function applyPassword({ username, password, repeat, dir, hashOptions }) {
 
 // `--totp`: new secret, URI + QR, one valid code from the user, then store and print recovery codes once.
 // `askCode()` and `out()` are injectable for tests.
-async function enrollTotp({ dir, askCode, out = console.log, now = Date.now, hashOptions, issuer = 'ccdash' }) {
+async function enrollTotp({ dir, askCode, out = console.log, now = Date.now, hashOptions }) {
   const auth = authstore.readAuth(dir);
   if (!auth) throw new Error('set a password first (ccd passwd)');
   const secret = totp.generateSecret();
-  const uri = totp.otpauthUri({ secret, account: auth.username, issuer });
+  const uri = totp.otpauthUri({ secret, account: auth.username });
   out(`Scan this QR code with your authenticator app:\n\n${qr.terminal(uri)}\n\n${uri}\n`);
   const step = totp.verify(secret, await askCode('Enter the current 6-digit code: '), now());
   if (step === null) throw new Error('that code is not valid; nothing was changed');

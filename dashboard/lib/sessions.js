@@ -73,10 +73,6 @@ class SessionStore {
     return true;
   }
 
-  destroy(id) {
-    if (this.map.delete(hashId(id))) this.persist();
-  }
-
   // Drops expired / stale-generation sessions; returns the removed session keys.
   sweep() {
     const now = this.clock.now();

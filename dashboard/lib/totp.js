@@ -37,11 +37,11 @@ function base32Decode(str) {
 const generateSecret = () => base32Encode(crypto.randomBytes(20));
 
 // code for a given step counter; `secret` is base32 text or a Buffer.
-function hotp(secret, counter, digits = DIGITS, algo = 'sha1') {
+function hotp(secret, counter, digits = DIGITS) {
   const key = Buffer.isBuffer(secret) ? secret : base32Decode(secret);
   const msg = Buffer.alloc(8);
   msg.writeBigUInt64BE(BigInt(counter));
-  const h = crypto.createHmac(algo, key).update(msg).digest();
+  const h = crypto.createHmac('sha1', key).update(msg).digest();
   const o = h[h.length - 1] & 15;
   const n = h.readUInt32BE(o) & 0x7fffffff;
   return String(n % 10 ** digits).padStart(digits, '0');
@@ -67,4 +67,4 @@ function otpauthUri({ secret, account, issuer = 'ccdash' }) {
   return `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=${DIGITS}&period=${STEP_SECONDS}`;
 }
 
-module.exports = { base32Encode, base32Decode, generateSecret, hotp, verify, stepAt, otpauthUri, STEP_SECONDS };
+module.exports = { base32Encode, base32Decode, generateSecret, hotp, verify, stepAt, otpauthUri };

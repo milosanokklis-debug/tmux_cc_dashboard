@@ -89,11 +89,7 @@ async function setCredentials({ dir = webDir(), username, password, hashOptions 
   // a password change keeps the second factor and the "TOTP required" flag
   let prev = null;
   try { prev = readAuth(dir); } catch { /* unusable old file: start clean */ }
-  const keep = {};
-  if (prev?.totp) keep.totp = prev.totp;
-  if (prev?.recovery) keep.recovery = prev.recovery;
-  if (prev?.totpRequired) keep.totpRequired = true;
-  writeFileAtomic(path.join(dir, 'auth.json'), JSON.stringify({ username, hash, generation, ...keep }));
+  writeFileAtomic(path.join(dir, 'auth.json'), JSON.stringify({ ...prev, username, hash, generation }));
   fs.rmSync(path.join(dir, 'sessions.json'), { force: true });
   return generation;
 }
@@ -191,7 +187,7 @@ function setTotpRequired({ dir = webDir(), required }) {
 }
 
 module.exports = {
-  RECOVERY_COUNT, enableTotp, disableTotp, acceptStep, useRecovery, totpRequired, setTotpRequired,
+  enableTotp, disableTotp, acceptStep, useRecovery, totpRequired, setTotpRequired,
 
   MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH,
   webDir, checkPasswordRule, checkUsernameRule, readAuth, setCredentials, verifyLogin,

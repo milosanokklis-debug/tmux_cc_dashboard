@@ -161,4 +161,4 @@ function createPush({
   };
 }
 
-module.exports = { createPush, PushError, parseSubscription, defaultPrefs, PUSH_HOSTS };
+module.exports = { createPush, PushError, parseSubscription, defaultPrefs };

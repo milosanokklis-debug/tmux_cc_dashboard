@@ -41,4 +41,4 @@ function fetchViaProxy(url, { headers = {}, method = 'GET', body, signal } = {},
   });
 }
 
-module.exports = { proxyUrl, fetchViaProxy, ConnectAgent };
+module.exports = { proxyUrl, fetchViaProxy };
