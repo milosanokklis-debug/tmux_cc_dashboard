@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { createReader } = require('../lib/reader');
 const { createTokens, readTranscript, transcriptFiles, subagentPath, PRICE_NOTE } = require('../lib/tokens');
 
@@ -214,4 +215,27 @@ test('readTranscript: tail, then follow by next_offset, complete lines only, bou
   assert.ok(big.offset > 0 && big.entries.length <= 200);
   assert.match(big.entries.at(-1).parts[0].text, /^line 4999 /);
   assert.ok(big.truncated);
+});
+
+test('the fake claude\'s transcripts (duplicate lines, a subagent file) add up to the manual sum', { skip: spawnSync('jq', ['--version']).status !== 0 && 'needs jq' }, async () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-fake-')));
+  const projects = path.join(tmp, 'projects');
+  const r = spawnSync(path.join(__dirname, '..', '..', 'tests', 'fake-claude', 'claude'), [], {
+    input: 'one\ntwo /sub\n', cwd: tmp, encoding: 'utf8',
+    env: { ...process.env, FAKE_CLAUDE_TRANSCRIPTS: projects, FAKE_CLAUDE_USAGE: '1 2 3 4', FAKE_CLAUDE_HOME: path.join(tmp, 'fh'), FAKE_CLAUDE_SETTINGS: '/nonexistent', FAKE_CLAUDE_FIXTURES: path.join(__dirname, '..', '..', 'tests', 'fixtures', '2.1.317') },
+  });
+  assert.equal(r.status, 0);
+  const dir = path.join(projects, fs.readdirSync(projects)[0]);
+  const main = path.join(dir, fs.readdirSync(dir).find((f) => f.endsWith('.jsonl')));
+  const sid = path.basename(main, '.jsonl');
+  const subDir = path.join(dir, sid, 'subagents');
+  const sub = path.join(subDir, fs.readdirSync(subDir)[0]);
+  const tokens = createTokens({ reader: createReader({ dir: projects }), minIntervalMs: 0 });
+  await tokens.refresh(transcriptFiles(
+    [{ sid, project: 'fake', subs: [{ agent_id: path.basename(sub, '.jsonl').slice(6), agent_type: 'x', transcript: null }] }],
+    new Map([[sid, { transcript: main }]]),
+  ));
+  // 2 prompts + 1 subagent message, 4 assistant lines in the main file but 2 messages
+  const t = tokens.forNode(sid);
+  assert.deepEqual([t.input, t.output, t.cache_creation, t.cache_read, t.messages], [3, 6, 9, 12, 3]);
 });
