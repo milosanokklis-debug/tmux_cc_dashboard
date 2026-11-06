@@ -433,3 +433,72 @@ body.app .card-result pre {
 body.app .card-result:empty { height: 0; }
 body.app .card-results:not(:has(.card-result:not(:empty))) { margin-top: -.6rem; height: 0; }
 @media (pointer: coarse) { body.app .card-pull, body.app .card-result summary { min-height: 44px; } .dialog input, .dialog .btn { min-height: 44px; } }
+
+/* ===== Phase E: node meta, usage panel, transcript sheet ===== */
+body.app .meta-line { display: flex; flex-wrap: wrap; gap: .1rem .6rem; align-items: baseline; min-width: 0; padding-bottom: .15rem; font: .75rem/1.4 var(--mono); color: var(--muted); }
+body.app .meta-model { overflow-wrap: anywhere; min-width: 0; }
+body.app .meta-tokens { font-variant-numeric: tabular-nums; white-space: nowrap; }
+body.app .agent-open { min-height: var(--ctl); padding: 0 .5rem; margin-left: -.5rem; font-weight: 600; text-decoration: underline; text-underline-offset: .2em; max-width: 100%; white-space: normal; text-align: left; }
+@media (pointer: coarse) { body.app .agent-open { min-height: 44px; } }
+
+body.app .dialog.dialog-wide { width: min(46rem, calc(100% - 1.5rem)); }
+.dialog .gauges { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+.dialog .gauge { display: grid; gap: .4rem; padding: .75rem .9rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.dialog .gauge-head { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }
+.dialog .gauge-label { margin: 0; font-size: .95rem; font-weight: 600; }
+.dialog .gauge-value { font: 700 1.5rem/1.1 var(--mono); font-variant-numeric: tabular-nums; }
+.dialog .gauge[data-status="unknown"] .gauge-value { font-size: 1.1rem; color: var(--muted); font-weight: 600; }
+.dialog .gauge-bar { height: .75rem; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line-ctl); overflow: hidden; }
+.dialog .gauge-fill { display: block; height: 100%; width: 0; background: var(--ok-fg); border-radius: 999px; }
+.dialog .gauge[data-level="mid"] .gauge-fill { background: var(--warn-fg); }
+.dialog .gauge[data-level="high"] .gauge-fill { background: var(--err); }
+.dialog .gauge-reset, .dialog .gauge-note { margin: 0; font-size: .85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dialog .gauge-note { color: var(--warn-fg); background: var(--warn-bg); padding: .3rem .55rem; border-radius: 6px; }
+.dialog .gauge[data-status="unknown"] .gauge-note { color: var(--muted); background: transparent; padding: 0; }
+
+.dialog .seg { display: flex; flex-wrap: wrap; gap: .35rem; }
+.dialog .seg-btn { white-space: normal; flex: 1 1 auto; }
+.dialog .seg-btn[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.dialog .tok-panel { display: grid; gap: .6rem; min-width: 0; }
+.dialog .tok-summary { margin: 0; font-variant-numeric: tabular-nums; }
+.dialog .tok-sum-fig { font: 700 1.25rem/1.2 var(--mono); }
+.dialog .price-label { font-weight: 600; }
+.dialog .tok-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; max-width: 100%; }
+.dialog .tok-table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.dialog .tok-table th, .dialog .tok-table td { padding: .45rem .6rem; border-bottom: 1px solid var(--line); text-align: right; vertical-align: top; white-space: nowrap; }
+.dialog .tok-table thead th { background: var(--surface-2); font-weight: 600; vertical-align: bottom; }
+.dialog .tok-table tr:last-child > * { border-bottom: 0; }
+.dialog .tok-table tfoot th, .dialog .tok-table tfoot td { border-top: 2px solid var(--line-ctl); font-weight: 700; }
+.dialog .tok-table .label-col { text-align: left; position: sticky; left: 0; background: var(--surface); min-width: 7.5rem; max-width: 11rem; white-space: normal; overflow-wrap: anywhere; font-weight: 600; }
+.dialog .tok-table thead .label-col { background: var(--surface-2); }
+.dialog .tok-table .row-main, .dialog .tok-table .row-sub { display: block; }
+.dialog .tok-table .row-sub { font-weight: 400; color: var(--muted); font-size: .78rem; }
+.dialog .tok-table .price-sub { display: block; font-weight: 400; color: var(--muted); font-size: .72rem; white-space: normal; min-width: 8.5rem; margin-left: auto; }
+.dialog .tok-unavailable { margin: 0; padding: .6rem .75rem; border-radius: 6px; background: var(--warn-bg); color: var(--warn-fg); }
+
+/* Transcript sheet: a right-hand drawer on wide screens, a bottom sheet on phones. */
+body.app .dialog.sheet {
+  position: fixed; inset: 0 0 0 auto; margin: 0; width: min(38rem, 100%); max-width: 100%; height: 100dvh; max-height: 100dvh;
+  border-radius: 0; border-width: 0 0 0 1px; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; gap: .5rem;
+}
+body.app .dialog.sheet:not([open]) { display: none; }
+.dialog .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.dialog .sheet-head h2 { overflow-wrap: anywhere; min-width: 0; }
+.dialog .tx-status { margin: 0; font-size: .85rem; color: var(--muted); min-height: 1.3em; }
+.dialog .tx-wrap { position: relative; min-height: 0; display: grid; }
+.dialog .tx-log { overflow: auto; min-height: 0; display: grid; gap: .6rem; align-content: start; padding: .1rem; }
+.dialog .tx-jump { position: absolute; right: .5rem; bottom: .5rem; background: var(--accent); border-color: var(--accent); color: var(--accent-text); box-shadow: 0 2px 8px rgb(0 0 0 / .25); }
+.dialog .tx-entry { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .7rem; background: var(--bg); display: grid; gap: .35rem; min-width: 0; }
+.dialog .tx-assistant { border-left: 3px solid var(--accent); }
+.dialog .tx-head { display: flex; flex-wrap: wrap; gap: .1rem .6rem; align-items: baseline; }
+.dialog .tx-role { font-weight: 700; font-size: .85rem; }
+.dialog .tx-meta { font: .75rem var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.dialog .tx-part { margin: 0; min-width: 0; }
+.dialog .tx-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dialog .tx-part pre { margin: .2rem 0 0; font: .78rem/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; background: var(--surface-2); padding: .4rem .5rem; border-radius: 6px; }
+.dialog .tx-tool-name { font: 600 .78rem var(--mono); color: var(--muted); }
+.dialog .tx-thinking summary { cursor: pointer; min-height: var(--ctl); display: flex; align-items: center; color: var(--muted); font-size: .85rem; }
+@media (max-width: 720px) {
+  body.app .dialog.sheet { inset: auto 0 0 0; width: 100%; height: 88dvh; max-height: 88dvh; border-width: 1px 0 0 0; border-radius: 12px 12px 0 0; }
+}
+@media (pointer: coarse) { .dialog .seg-btn, .dialog .tx-jump, .dialog .tx-thinking summary { min-height: 44px; } }

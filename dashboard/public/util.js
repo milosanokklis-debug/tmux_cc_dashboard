@@ -59,27 +59,26 @@
     return Math.floor(hh / 24) + 'd ' + (hh % 24) + 'h';
   };
 
-  // Non-overlapping poller: waits for fn to finish, then schedules the next run.
-  // Pauses while the tab is hidden and runs immediately when it becomes visible.
-  ns.poller = function poller(fn, ms) {
-    let timer = null;
-    let running = false;
-    let gen = 0;
-    async function tick(myGen) {
-      if (document.hidden) return;
-      try { await fn(); } catch { /* callers report their own errors */ }
-      if (myGen === gen && running && !document.hidden) timer = setTimeout(() => tick(myGen), ms);
+  // Compact counts: 950, 1.2k, 34k, 3.4M, 1.2B.
+  ns.fmtNum = function fmtNum(n) {
+    n = Number(n);
+    if (!Number.isFinite(n)) return '0';
+    const abs = Math.abs(n);
+    const units = [[1e9, 'B'], [1e6, 'M'], [1e3, 'k']];
+    for (const [size, suffix] of units) {
+      if (abs >= size) {
+        const v = n / size;
+        return (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1)).replace(/\.0$/, '') + suffix;
+      }
     }
-    function onVis() {
-      clearTimeout(timer);
-      if (running && !document.hidden) tick(++gen);
-    }
-    document.addEventListener('visibilitychange', onVis);
-    return {
-      start() { if (running) return; running = true; tick(++gen); },
-      stop() { running = false; gen++; clearTimeout(timer); },
-      now() { clearTimeout(timer); if (running) tick(++gen); },
-    };
+    return String(Math.round(n));
+  };
+
+  ns.fmtUsd = function fmtUsd(n) {
+    if (n == null || !Number.isFinite(Number(n))) return '–';
+    n = Number(n);
+    if (n > 0 && n < 0.01) return '<$0.01';
+    return '$' + n.toFixed(2);
   };
 
   // Dismissible message. kind: 'error' (announced assertively) or 'info'.

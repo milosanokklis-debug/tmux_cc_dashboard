@@ -1,8 +1,9 @@
 'use strict';
 // Agent tree panel: projects > conversations (tmux windows) > subagents.
 (function () {
-  const { api, h, poller, fmtDuration, chip, notice } = window.ccdash;
+  const { api, h, fmtDuration, fmtNum, chip, notice } = window.ccdash;
   const controls = window.ccdash.controls;
+  const events = window.ccdash.events;
   const $ = (id) => document.getElementById(id);
 
   const CONV = {
@@ -51,15 +52,37 @@
     return span;
   }
 
+  // Model and in/out token totals under a node's header row. Null tokens (transcript not read yet) show nothing.
+  function metaLine(n) {
+    const bits = [];
+    if (n.model) bits.push(h('span', { class: 'meta-model', 'data-testid': 'node-model', text: n.model }));
+    const t = n.tokens;
+    if (t && typeof t === 'object') {
+      bits.push(h('span', { class: 'meta-tokens', 'data-testid': 'node-tokens', title: 'Input and output tokens', 'aria-label': 'Tokens: ' + fmtNum(t.input) + ' in, ' + fmtNum(t.output) + ' out' }, [
+        h('span', { 'aria-hidden': 'true', text: 'in ' + fmtNum(t.input) + ' · out ' + fmtNum(t.output) }),
+      ]));
+    }
+    return bits.length ? h('div', { class: 'meta-line' }, bits) : null;
+  }
+
   function agentItem(a, sid) {
     const running = a.status === 'running';
-    const li = h('li', { class: 'node agent' }, [
-      h('div', { class: 'row' }, [
-        h('span', { class: 'agent-type', text: a.agent_type || 'agent' }),
-        chip(AGENT, a.status),
-        elapsed(a.startTs, a.endTs, running),
-      ]),
-    ]);
+    const label = a.agent_type || 'agent';
+    const canOpen = !!(a.transcript && a.transcript.conv && a.transcript.agent);
+    const open = canOpen
+      ? h('button', {
+        type: 'button', class: 'btn btn-ghost agent-open', 'data-testid': 'agent-open', 'data-fk': sid + '/' + (a.agent_id || a.startTs) + ':open',
+        'aria-haspopup': 'dialog', 'aria-label': 'Open transcript of ' + label + ' agent', title: 'Read-only transcript',
+        text: label,
+      })
+      : h('span', { class: 'agent-type', text: label });
+    if (canOpen) {
+      open.addEventListener('click', () => window.ccdash.transcript.open({ conv: a.transcript.conv, agent: a.transcript.agent, title: label, opener: open }));
+    }
+    const li = h('li', { class: 'node agent', 'data-testid': 'tree-node', 'data-kind': 'agent' }, [
+      h('div', { class: 'row' }, [open, chip(AGENT, a.status), elapsed(a.startTs, a.endTs, running)]),
+      metaLine(a),
+    ].filter(Boolean));
     if (a.task) {
       const key = sid + '/' + (a.agent_id || a.startTs);
       const open = expanded.has(key);
@@ -117,13 +140,14 @@
 
   function convItem(c, project) {
     const running = c.endedTs == null && !['sleeping', 'ended', 'gone'].includes(c.status);
-    const li = h('li', { class: 'node conv' }, [
+    const li = h('li', { class: 'node conv', 'data-testid': 'tree-node', 'data-kind': 'conversation', 'data-sid': c.sid }, [
       h('div', { class: 'row' }, [
         h('span', { class: 'conv-name', text: c.win || c.sid }),
         chip(CONV, c.status),
         elapsed(c.startedTs, c.endedTs, running),
       ]),
-    ]);
+      metaLine(c),
+    ].filter(Boolean));
     const flags = FLAGS.filter(([k]) => c[k]);
     if (flags.length) {
       const box = h('span', { class: 'flags' }, flags.map((f) => h('span', { class: 'flag', title: f[2], text: f[1] })));
@@ -229,20 +253,32 @@
   }
   new ResizeObserver(fitTasks).observe($('tree-body'));
 
+  // Push path: the server sends the same body as GET /api/tree (without ?all=1).
+  function apply(data) {
+    if (!data || !Array.isArray(data.projects)) return;
+    $('tree-error').hidden = true;
+    skew = data.now - Date.now() / 1000;
+    // `now` changes with every push; the ticker keeps durations live, so only re-render on real changes.
+    const json = JSON.stringify(data.projects);
+    if (json !== lastJson) { lastJson = json; render(data); }
+  }
+
+  // One request, only on a user action or for "Show ended / older than 24h" (which the socket does not carry).
   async function load() {
     const q = $('tree-all-time').checked ? '?all=1' : '';
     try {
       const r = await api('/api/tree' + q);
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      $('tree-error').hidden = true;
-      skew = r.data.now - Date.now() / 1000;
-      // `now` changes every poll; the ticker keeps durations live, so only re-render on real changes.
-      const json = JSON.stringify(r.data.projects);
-      if (json !== lastJson) { lastJson = json; render(r.data); }
+      apply(r.data);
     } catch (e) {
       if (e.message !== 'unauthorized') $('tree-error').hidden = false;
     }
   }
+
+  events.on('tree', (msg) => {
+    if (current == null || $('tree-all-time').checked) return; // all-time data is fetched, not pushed
+    apply(msg.tree);
+  });
 
   function tick() {
     if (document.hidden) return;
@@ -254,14 +290,12 @@
     }
   }
 
-  const poll = poller(load, 2000);
-
-  function refresh() { lastJson = null; poll.now(); }
+  function refresh() { lastJson = null; if (current != null) load(); }
   controls.setOnChange((opts) => {
     if (opts && opts.focus && lastData) render(lastData, opts.focus);
     else { if (lastData) render(lastData); refresh(); }
   });
-  $('tree-all-projects').addEventListener('change', refresh);
+  $('tree-all-projects').addEventListener('change', () => { if (lastData) render(lastData); });
   $('tree-all-time').addEventListener('change', refresh);
 
   window.ccdash.tree = {
@@ -275,12 +309,12 @@
       controls.releasePreviews();
       controls.reset();
       $('tree-empty').hidden = true;
-      poll.start();
+      const pushed = events.last('tree');
+      if (pushed && !$('tree-all-time').checked) apply(pushed.tree); else if (!events.connected()) load();
       clearInterval(ticker);
       ticker = setInterval(tick, 1000);
     },
     stop() {
-      poll.stop();
       controls.releasePreviews();
       clearInterval(ticker);
       current = null;

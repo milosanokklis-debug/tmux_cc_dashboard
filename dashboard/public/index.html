@@ -16,6 +16,7 @@
 <header class="topbar">
   <h1 class="brand">ccdash</h1>
   <div class="topbar-actions">
+    <button type="button" id="usage-open" class="btn btn-ghost" data-testid="usage" aria-haspopup="dialog"><svg class="icon" width="1em" height="1em" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4 20V10h4v10H4zm6 0V4h4v16h-4zm6 0v-7h4v7h-4z"/></svg> Usage</button>
     <button type="button" id="notif-open" class="btn btn-ghost" data-testid="notifications" aria-haspopup="dialog"><svg class="icon" width="1em" height="1em" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.01-1.58zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/></svg> Settings</button>
     <button type="button" id="logout" class="btn btn-ghost">Sign out</button>
   </div>
@@ -122,6 +123,40 @@
   </div>
 </dialog>
 
+<dialog id="usage-dialog" class="dialog dialog-wide" aria-labelledby="usage-title" data-testid="usage-panel">
+  <div class="dialog-body">
+    <h2 id="usage-title">Usage</h2>
+    <section class="settings-section" aria-labelledby="usage-limits-h">
+      <h3 id="usage-limits-h">Plan limits</h3>
+      <div id="usage-gauges" class="gauges"></div>
+      <p id="usage-source" class="hint" data-testid="usage-source" role="status"></p>
+    </section>
+    <section class="settings-section" aria-labelledby="usage-tokens-h">
+      <h3 id="usage-tokens-h">Tokens</h3>
+      <div id="token-tabs" class="seg" role="tablist" aria-label="Group tokens by" data-testid="token-tabs"></div>
+      <p id="token-note" class="hint" hidden>Cache creation and cache read tokens are counted apart from input. Dollar figures come from a price table in the dashboard.</p>
+      <div id="token-panel" role="tabpanel" class="tok-panel" data-testid="token-panel"></div>
+    </section>
+    <div class="dialog-actions">
+      <button type="button" id="usage-close" class="btn">Close</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="transcript-dialog" class="dialog sheet" aria-labelledby="tx-title" data-testid="transcript-panel">
+  <div class="sheet-head">
+    <h2 id="tx-title">Transcript</h2>
+    <button type="button" id="tx-close" class="btn" data-testid="transcript-close">Close</button>
+  </div>
+  <p class="hint">Read-only. This view follows the agent’s transcript while it is open.</p>
+  <p id="tx-status" class="tx-status" role="status" data-testid="transcript-status"></p>
+  <div class="tx-wrap">
+    <div id="tx-log" class="tx-log" role="log" tabindex="0" aria-label="Agent transcript (read-only)" data-testid="transcript-log"></div>
+    <button type="button" id="tx-jump" class="btn tx-jump" hidden data-testid="transcript-jump">New output below</button>
+  </div>
+  <p id="tx-empty" class="muted" hidden>No entries yet.</p>
+</dialog>
+
 <dialog id="paste-dialog" class="dialog" aria-labelledby="paste-title" aria-describedby="paste-desc">
   <form id="paste-form" method="dialog">
     <h2 id="paste-title">Paste text</h2>
@@ -174,10 +209,13 @@
 <script src="/assets/addon-web-links.js" defer></script>
 <script src="/assets/addon-clipboard.js" defer></script>
 <script src="/assets/util.js" defer></script>
+<script src="/assets/events.js" defer></script>
 <script src="/assets/projects.js" defer></script>
 <script src="/assets/controls.js" defer></script>
 <script src="/assets/tree.js" defer></script>
 <script src="/assets/settings.js" defer></script>
+<script src="/assets/usage.js" defer></script>
+<script src="/assets/transcript.js" defer></script>
 <script src="/assets/terminal.js" defer></script>
 <script src="/assets/app.js" defer></script>
 </body>

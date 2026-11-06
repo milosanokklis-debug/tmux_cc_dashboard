@@ -64,5 +64,6 @@
   });
 
   window.addEventListener('hashchange', route);
+  window.ccdash.events.start();
   route();
 })();
