@@ -42,5 +42,7 @@ jobs:
         run: tests/stack/phase-c.sh
       - name: stack test (re-onboarding, pull, git identity)
         run: tests/stack/phase-d.sh
+      - name: stack test (reader service, gauges, tokens, load, headless Chromium)
+        run: tests/stack/phase-e.sh
       - name: build test image
         run: docker build -f tests/Dockerfile.fake-claude -t ccdash-fake-claude:ci .

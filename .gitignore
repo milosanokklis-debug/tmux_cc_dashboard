@@ -6,3 +6,4 @@
 secrets/
 node_modules
 .playwright-mcp/
+tests/stack/out/
