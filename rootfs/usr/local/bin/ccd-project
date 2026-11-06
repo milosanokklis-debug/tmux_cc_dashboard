@@ -6,12 +6,35 @@ export GIT_TERMINAL_PROMPT=0
 # another code-running/credential setting (apiKeyHelper, env, mcpServers, ...), or that has .mcp.json, or whose
 # settings are symlinks or unparseable, is refused (exit 5, a `hooks: <name,name>` line) unless
 # CCDASH_TRUST_HOOKS=1 (ccd-onboard sets it from --trust-hooks or the project record). Only names are printed.
-settings_flags() { # settings_flags <json text>: comma-separated hook events and risky key names; empty when clean
-  jq -r 'def nonempty: . != null and . != false and . != "" and . != [] and . != {};
+# Agent-kit exemption (Phase H): `ccd-onboard` runs the kit, which commits .claude/settings.json with enabledPlugins
+# and extraKnownMarketplaces. Those two keys are not flagged only when ALL hold: .claude/agent-kit.json is a regular
+# file in the same tree, every marketplace is a github source (no other fields) whose repo is $KIT_REPO or one of the
+# kit's pinned upstream marketplaces, and every enabledPlugins key is "<plugin>@<one of those marketplaces>" = true.
+# Only .claude/settings.json is exempt (never settings.local.json); hooks, env, mcpServers etc. are still flagged.
+kit_repo() { # $KIT_REPO, else owner/repo from the kit checkout's origin; empty when unknown
+  local k=${KIT_REPO:-} u
+  if [ -z "$k" ]; then
+    u=$(git -C "$(dirname "${CCDASH_KIT:-/opt/agent-kit/agent-kit.sh}")" config --get remote.origin.url 2> /dev/null || true)
+    case $u in git@github.com:* | https://github.com/*) k=${u#git@github.com:}; k=${k#https://github.com/}; k=${k%.git}; k=${k%/} ;; esac
+  fi
+  printf '%s' "$k"
+}
+KIT_REPO=$(kit_repo)
+settings_flags() { # settings_flags <json text> [kit_ok 0|1]: comma-separated hook events and risky key names; empty when clean
+  jq -r --argjson kit "${2:-0}" --arg kr "$KIT_REPO" 'def nonempty: . != null and . != false and . != "" and . != [] and . != {};
+    def upstream: ["addyosmani/agent-skills","obra/superpowers-marketplace","mattpocock/skills","nutlope/hallmark","0xdesign/design-plugin"];
+    def okrepo: ascii_downcase as $r | ($kr != "" and $r == ($kr | ascii_downcase)) or (upstream | index($r) != null);
+    def kitmk: .extraKnownMarketplaces | type == "object" and length > 0 and all(.[]; type == "object" and keys == ["source"]
+      and (.source | type == "object" and keys == ["repo","source"] and .source == "github" and (.repo | type == "string" and okrepo)));
+    def kitep: ((.extraKnownMarketplaces | objects | keys) // []) as $mk
+      | (.enabledPlugins | type == "object" and length > 0 and all(to_entries[]; .key as $k | .value == true
+          and ($k | test("^[A-Za-z0-9_-]+@[A-Za-z0-9_.-]+$")) and ($mk | index($k | split("@")[1]) != null)));
     [ (if (.hooks | type) == "object" then (.hooks | keys | map(gsub("[^A-Za-z0-9_]"; "?"))[])
        elif (.hooks | nonempty) then "(unrecognised hooks value)" else empty end),
       (["apiKeyHelper","awsAuthRefresh","awsCredentialExport","otelHeadersHelper","env","enabledPlugins","extraKnownMarketplaces","mcpServers"][] as $k
-        | select(.[$k] | nonempty) | $k) ] | join(",")' <<< "$1" 2> /dev/null || echo "(unparseable settings)"
+        | select(.[$k] | nonempty)
+        | select(($k == "extraKnownMarketplaces" and $kit == 1 and kitmk) | not)
+        | select(($k == "enabledPlugins" and $kit == 1 and kitmk and kitep) | not) | $k) ] | join(",")' <<< "$1" 2> /dev/null || echo "(unparseable settings)"
 }
 refuse_hooks() { # refuse_hooks <names...>: print the union and exit 5
   local ev; ev=$(printf '%s\n' "$@" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
@@ -53,14 +76,23 @@ if [ "$1" = pull ]; then
     echo "$proj has no upstream branch; resolve it in a shell" >&2; exit 3
   fi
   if [ "${CCDASH_TRUST_HOOKS:-}" != 1 ] && [ "$up" != "$old" ]; then # what the merge would bring in
-    ev=()
+    ev=(); kit_ok=0; entries=()
     while read -r mode _ _ path; do # symlinks would make `git show` print the link target
+      entries+=("$mode $path")
+      if [ "$path" = .claude/agent-kit.json ] && [ "$mode" = 100644 ]; then kit_ok=1; fi
+    done < <(git -C "$dir" ls-tree "$up" .claude .claude/settings.json .claude/settings.local.json .claude/agent-kit.json .mcp.json 2> /dev/null)
+    for e in "${entries[@]}"; do
+      mode=${e%% *}; path=${e#* }
       case $path in
         .mcp.json) ev+=(".mcp.json") ;;
+        .claude/agent-kit.json) ;;
         *) if [ "$mode" = 120000 ]; then ev+=("(symlink)")
-           elif [ "$mode" != 040000 ]; then ev+=("$(settings_flags "$(git -C "$dir" show "$up:$path" 2> /dev/null)")"); fi ;;
+           elif [ "$mode" != 040000 ]; then
+             ok=0; [ "$path" = .claude/settings.json ] && ok=$kit_ok
+             ev+=("$(settings_flags "$(git -C "$dir" show "$up:$path" 2> /dev/null)" "$ok")")
+           fi ;;
       esac
-    done < <(git -C "$dir" ls-tree "$up" .claude .claude/settings.json .claude/settings.local.json .mcp.json 2> /dev/null)
+    done
     refuse_hooks "${ev[@]}"
   fi
   [ -z "$old" ] || echo "old ${old:0:7}"
@@ -72,7 +104,26 @@ if [ "$1" = pull ]; then
   elif git -C "$dir" merge-base --is-ancestor "$up" "$old"; then
     echo "ahead of origin; nothing to pull"
   else
-    echo "$proj has diverged from origin; resolve it in a shell" >&2; exit 3
+    # Diverged. Only local commits that ccdash itself made (the agent-kit commits: author ccdash@localhost, touching
+    # only .claude/ and CLAUDE.md, no merges) are rebased onto origin; anything else is left for a shell.
+    ours=1
+    if [ -n "$(git -C "$dir" rev-list --merges "$up..HEAD")" ]; then ours=0; fi
+    while read -r c; do
+      [ "$ours" = 1 ] || break
+      [ "$(git -C "$dir" log -1 --format=%ae "$c")" = ccdash@localhost ] || { ours=0; break; }
+      while read -r f; do
+        case $f in .claude/* | CLAUDE.md) ;; *) ours=0; break ;; esac
+      done < <(git -C "$dir" diff-tree --no-commit-id --name-only -r "$c")
+    done < <(git -C "$dir" rev-list "$up..HEAD")
+    if [ "$ours" = 0 ]; then
+      echo "$proj has diverged from origin; resolve it in a shell (local commits not from ccdash)" >&2; exit 3
+    fi
+    if ! git -C "$dir" -c user.name=ccdash -c user.email=ccdash@localhost -c core.hooksPath=/dev/null rebase --quiet "$up" > /dev/null 2>&1 < /dev/null; then
+      git -C "$dir" rebase --abort > /dev/null 2>&1 || true
+      echo "rebase failed" >&2; exit 3
+    fi
+    echo "rebased"
+    echo "pulled"
   fi
   head=$(git -C "$dir" rev-parse --verify -q HEAD || true)
   [ -z "$head" ] || echo "head $head"
@@ -102,7 +153,10 @@ if [ "${CCDASH_TRUST_HOOKS:-}" != 1 ]; then # nothing has run in the clone yet; 
   if [ -L "$dest/.claude" ]; then ev+=("(symlink)"); else
     for f in settings.json settings.local.json; do
       if [ -L "$dest/.claude/$f" ]; then ev+=("(symlink)")
-      elif [ -f "$dest/.claude/$f" ]; then ev+=("$(settings_flags "$(< "$dest/.claude/$f")")"); fi
+      elif [ -f "$dest/.claude/$f" ]; then
+        ok=0; [ "$f" = settings.json ] && [ -f "$dest/.claude/agent-kit.json" ] && [ ! -L "$dest/.claude/agent-kit.json" ] && ok=1
+        ev+=("$(settings_flags "$(< "$dest/.claude/$f")" "$ok")")
+      fi
     done
   fi
   if [ -n "$(printf '%s' "${ev[@]}")" ]; then rm -rf "$dest"; refuse_hooks "${ev[@]}"; fi

@@ -40,7 +40,7 @@ test('GET /api/projects carries repo and the 7-char head from the record; bad re
   t.after(s.stop);
   const { projects } = await (await get(s, '/api/projects')).json();
   const by = Object.fromEntries(projects.map((p) => [p.name, p]));
-  assert.deepStrictEqual(by.demo, { name: 'demo', session: null, state: 'none', repo: 'octo/demo', head: OLD.slice(0, 7) });
+  assert.deepStrictEqual(by.demo, { name: 'demo', session: null, state: 'none', repo: 'octo/demo', head: OLD.slice(0, 7), kit: null });
   for (const n of ['junk', 'big', 'fifo', 'wrongtype']) assert.deepStrictEqual([by[n].repo, by[n].head], [null, null], n);
   assert.strictEqual(readProjectRecord(path.join(svc.dir, 'nonexistent'), 'x'), null);
 });

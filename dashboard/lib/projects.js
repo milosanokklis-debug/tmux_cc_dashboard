@@ -50,7 +50,18 @@ const RECORD_MAX = 4096;
 const SHA_RE = /^[0-9a-f]{7,64}$/;
 const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}$/;
 
-// {repo, head} from <projectsDir>/<name>.json (written by ccd-onboard, in a directory ccd can write):
+const KIT_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,40}$/;
+const KIT_PACKS = ['kit-core', 'kit-design', 'kit-code'];
+// {version, packs, memory} written by ccd-onboard, or null when absent or odd.
+function readKit(k) {
+  if (k === null || typeof k !== 'object' || Array.isArray(k)) return null;
+  if (typeof k.version !== 'string' || !KIT_VERSION_RE.test(k.version)) return null;
+  if (!Array.isArray(k.packs) || !k.packs.every((p) => KIT_PACKS.includes(p))) return null;
+  const memory = k.memory === 'connected' || k.memory === 'missing' ? k.memory : 'unknown';
+  return { version: k.version, packs: KIT_PACKS.filter((p) => k.packs.includes(p)), memory };
+}
+
+// {repo, head, kit} from <projectsDir>/<name>.json (written by ccd-onboard, in a directory ccd can write):
 // regular file only, size capped, every field checked; anything odd gives null and never throws.
 function readProjectRecord(projectsDir, name) {
   try {
@@ -60,7 +71,8 @@ function readProjectRecord(projectsDir, name) {
     if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
     const repo = typeof v.repo === 'string' && REPO_RE.test(v.repo) && !v.repo.includes('..') ? v.repo : null;
     const head = typeof v.head === 'string' && SHA_RE.test(v.head) ? v.head : null;
-    return repo || head ? { repo, head } : null;
+    const kit = readKit(v.kit);
+    return repo || head ? { repo, head, kit } : null;
   } catch { return null; }
 }
 
@@ -80,7 +92,7 @@ function listProjects({ workspace, panes, procTable, projectsDir }) {
     const rec = readProjectRecord(projectsDir, name);
     return {
       name, ...stateOf(name, { workspace, panes, table }),
-      repo: rec?.repo ?? null, head: rec?.head ? rec.head.slice(0, 7) : null,
+      repo: rec?.repo ?? null, head: rec?.head ? rec.head.slice(0, 7) : null, kit: rec?.kit ?? null,
     };
   });
 }
@@ -129,14 +141,18 @@ async function addProject(body, deps) {
   }
   if (body.trustHooks !== undefined && typeof body.trustHooks !== 'boolean') throw new HttpError(400, 'trustHooks must be true or false');
   const trust = body.trustHooks === true;
+  for (const k of ['design', 'code']) {
+    if (body[k] !== undefined && typeof body[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false`);
+  }
   const token = body.token === undefined || body.token === null || body.token === '' ? null : body.token;
   if (token !== null) github.validateToken(token);
 
   const key = `${owner}/${repo}`.toLowerCase();
-  const settings = { prompt: prompt || '', token: token || '', trust };
+  const settings = { prompt: prompt || '', token: token || '', trust, design: body.design, code: body.code };
   const running = inFlight.get(key);
   if (running) {
-    if (running.prompt !== settings.prompt || running.token !== settings.token || running.trust !== settings.trust) {
+    if (running.prompt !== settings.prompt || running.token !== settings.token || running.trust !== settings.trust
+      || running.design !== settings.design || running.code !== settings.code) {
       throw new HttpError(409, 'a request for this repo is already in progress with different settings');
     }
     return running.job; // identical request: shares the first call's result
@@ -148,9 +164,10 @@ async function addProject(body, deps) {
       if (!canPush) warning = 'token cannot push';
       (deps.saveToken || github.saveToken)({ owner, token });
     }
-    const op = await deps.runOp({ argv: ['ccd-onboard', ...(trust ? ['--trust-hooks'] : []), `${owner}/${repo}`] });
+    const op = await deps.runOp({ argv: ['ccd-onboard', ...(trust ? ['--trust-hooks'] : []), ...(body.design === true ? ['--design'] : []), ...(body.code === true ? ['--code'] : []), `${owner}/${repo}`] });
     if (op.timedOut) throw new HttpError(504, 'clone timed out', { log: op.log });
     refuseHooks(op);
+    kitFailed(op);
     if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'clone refused', { log: op.log });
     if (op.rc !== 0) throw new HttpError(502, 'clone failed', { log: op.log });
     const session = await startSession({ runFile: deps.runFile, name: repo, prompt });
@@ -166,6 +183,17 @@ function refuseHooks(op) {
   if (op.rc !== 5) return;
   const m = /^hooks: ([A-Za-z0-9_?,.() ]+)$/m.exec(op.log || '');
   throw new HttpError(409, 'repo-has-hooks', { hooks: m ? m[1].split(',').filter(Boolean) : [] });
+}
+
+// ccd-onboard exit 8: the agent-kit step failed and the checkout was left as it was after the clone/pull.
+// 409 { error: 'kit-failed', code, message, log } where log is the tail of the kit log.
+const KIT_FAILED_RC = 8;
+function kitFailed(op) {
+  if (op.rc !== KIT_FAILED_RC) return;
+  const text = String(op.log || '');
+  const m = /^kit-error (\d+) (.*)$/m.exec(text);
+  const log = m ? text.slice(m.index + m[0].length).trim() : text.trim();
+  throw new HttpError(409, 'kit-failed', { error: 'kit-failed', code: m ? Number(m[1]) : 0, message: m ? m[2] : 'Kit failed', log });
 }
 
 const lastLine = (log) => String(log || '').trim().split('\n').pop().trim();
@@ -188,8 +216,9 @@ async function pullProject({ name, deps }) {
     const op = await deps.runOp({ argv: ['ccd-onboard', rec.repo], timeoutMs: 5 * 60 * 1000 });
     if (op.timedOut) throw new HttpError(504, 'pull timed out', { log: op.log });
     refuseHooks(op);
+    kitFailed(op);
     if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'pull refused', { log: op.log });
-    const full = /^head ([0-9a-f]{40,64})$/m.exec(op.log || '');
+    const full = [...String(op.log || '').matchAll(/^head ([0-9a-f]{40,64})$/gm)].pop();
     const unborn = op.rc === 0 && !full && /^nothing to pull yet/m.test(op.log || '');
     if (op.rc !== 0 || (!full && !unborn)) throw new HttpError(502, 'pull failed', { log: op.log });
     const head = full ? full[1].slice(0, 7) : null;
@@ -205,6 +234,39 @@ async function pullProject({ name, deps }) {
   try { return await job; } finally { if (pulling.get(name) === job) pulling.delete(name); }
 }
 
+const packing = new Set(); // project names with a packs change in progress
+
+// POST /api/projects/:proj/packs { design: bool, code: bool }: reruns ccd-onboard with explicit pack flags (both ways).
+// Does not start, restart or prompt a session. Returns the project summary like GET /api/projects.
+async function setPacks({ name, body, deps }) {
+  if (!validProject(name)) throw new HttpError(400, 'invalid project name');
+  for (const k of ['design', 'code']) {
+    if (typeof body?.[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false`);
+  }
+  if (!isProjectDir(deps.workspace, name)) throw new HttpError(404, 'no such project');
+  const rec = readProjectRecord(deps.projectsDir, name);
+  if (!rec?.repo) throw new HttpError(409, 'no onboarding record; add the project again');
+  if (rec.repo.split('/')[1].toLowerCase() !== name.toLowerCase()) {
+    throw new HttpError(409, 'onboarding record does not match this project');
+  }
+  if (packing.has(name) || pulling.has(name)) throw new HttpError(409, 'another change to this project is in progress');
+  packing.add(name);
+  try {
+    const argv = ['ccd-onboard', body.design ? '--design' : '--no-design', body.code ? '--code' : '--no-code', rec.repo];
+    const op = await deps.runOp({ argv, timeoutMs: 10 * 60 * 1000 });
+    if (op.timedOut) throw new HttpError(504, 'kit timed out', { log: op.log });
+    refuseHooks(op);
+    kitFailed(op);
+    if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'refused', { log: op.log });
+    const full = [...String(op.log || '').matchAll(/^head ([0-9a-f]{40,64})$/gm)].pop();
+    if (op.rc !== 0) throw new HttpError(502, 'packs change failed', { log: op.log });
+    const after = readProjectRecord(deps.projectsDir, name);
+    const st = stateOf(name, { workspace: deps.workspace, panes: await deps.panes(), table: deps.procTable() });
+    const message = /^kit \S+ changed$/m.test(op.log || '') ? `packs now ${(after?.kit?.packs || []).join(', ')}` : 'packs unchanged';
+    return { name, ...st, repo: after?.repo ?? rec.repo, head: full ? full[1].slice(0, 7) : null, kit: after?.kit ?? null, message, log: op.log };
+  } finally { packing.delete(name); }
+}
+
 module.exports = {
-  pullProject, readProjectRecord, memoryOffline, MEMORY_OFFLINE_RC, DEFAULT_PROJECTS_DIR, validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
+  setPacks, KIT_FAILED_RC, pullProject, readProjectRecord, memoryOffline, MEMORY_OFFLINE_RC, DEFAULT_PROJECTS_DIR, validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
 };

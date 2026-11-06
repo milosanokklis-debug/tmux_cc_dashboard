@@ -120,7 +120,7 @@ function createApi(svc) {
       if (get) {
         const list = projects.listProjects({ ...svc, panes: await panes() });
         return send(res, 200, {
-          projects: list.map((p) => ({ name: p.name, session: p.session, state: p.state, repo: p.repo, head: p.head })),
+          projects: list.map((p) => ({ name: p.name, session: p.session, state: p.state, repo: p.repo, head: p.head, kit: p.kit })),
         });
       }
       if (req.method !== 'POST') return methodNotAllowed();
@@ -144,6 +144,14 @@ function createApi(svc) {
       let name;
       try { name = decodeURIComponent(pull[1]); } catch { throw new HttpError(400, 'invalid project name'); }
       return send(res, 200, await audited('pull', ctx, { project: name }, () => projects.pullProject({ name, deps: { ...svc, panes } })));
+    }
+    const packs = /^\/api\/projects\/([^/]+)\/packs$/.exec(pathname);
+    if (packs) {
+      if (req.method !== 'POST') return methodNotAllowed();
+      let name;
+      try { name = decodeURIComponent(packs[1]); } catch { throw new HttpError(400, 'invalid project name'); }
+      const body = await readJson(req, MAX_ADD_BODY);
+      return send(res, 200, await audited('packs', ctx, { project: name }, () => projects.setPacks({ name, body, deps: { ...svc, panes } })));
     }
     if (pathname === '/api/git-identity') {
       if (get) return send(res, 200, await identity.getIdentity(svc));

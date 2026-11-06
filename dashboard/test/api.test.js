@@ -98,6 +98,7 @@ const ROUTES = [
   ['POST', '/api/projects', { repo: 'o/r' }],
   ['POST', '/api/projects/demo/open'],
   ['POST', '/api/projects/demo/pull'],
+  ['POST', '/api/projects/demo/packs', { design: true, code: false }],
   ['GET', '/api/git-identity'],
   ['POST', '/api/git-identity', { name: 'A', email: 'a@b.co' }],
   ['POST', '/api/conversations/00000000-0000-4000-8000-000000000001/wake'],
@@ -211,11 +212,11 @@ test('GET /api/projects: claude / shell / none; dotfiles, files, web-* and _ops 
   const { projects } = await r.json();
   const byName = Object.fromEntries(projects.map((p) => [p.name, p]));
   assert.deepStrictEqual(Object.keys(byName).sort(), ['a.b', 'a_b', 'afterclaude', 'justshell', 'nosession', 'withclaude']);
-  assert.deepStrictEqual(byName.withclaude, { name: 'withclaude', session: 'claude-withclaude', state: 'claude', repo: null, head: null });
-  assert.deepStrictEqual(byName.justshell, { name: 'justshell', session: 'claude-justshell', state: 'shell', repo: null, head: null });
-  assert.deepStrictEqual(byName.nosession, { name: 'nosession', session: null, state: 'none', repo: null, head: null });
-  assert.deepStrictEqual(byName.a_b, { name: 'a_b', session: 'claude-a_b', state: 'shell', repo: null, head: null });
-  assert.deepStrictEqual(byName['a.b'], { name: 'a.b', session: null, state: 'none', repo: null, head: null });
+  assert.deepStrictEqual(byName.withclaude, { name: 'withclaude', session: 'claude-withclaude', state: 'claude', repo: null, head: null, kit: null });
+  assert.deepStrictEqual(byName.justshell, { name: 'justshell', session: 'claude-justshell', state: 'shell', repo: null, head: null, kit: null });
+  assert.deepStrictEqual(byName.nosession, { name: 'nosession', session: null, state: 'none', repo: null, head: null, kit: null });
+  assert.deepStrictEqual(byName.a_b, { name: 'a_b', session: 'claude-a_b', state: 'shell', repo: null, head: null, kit: null });
+  assert.deepStrictEqual(byName['a.b'], { name: 'a.b', session: null, state: 'none', repo: null, head: null, kit: null });
   assert.strictEqual(byName.afterclaude.state, 'shell');
 });
 
