@@ -222,7 +222,7 @@ packages() {
   # shellcheck disable=SC1091
   codename=$(. "$R/etc/os-release" && echo "${VERSION_CODENAME:-}")
   [ -n "$codename" ] || die "no VERSION_CODENAME in os-release"
-  arch=$([ "$ARCH" = x86_64 ] && echo amd64 || echo arm64)
+  if [ "$ARCH" = x86_64 ]; then arch=amd64; else arch=arm64; fi
   for p in ca-certificates curl jq git uidmap dbus-user-session slirp4netns; do pkg_installed "$p" || need+=("$p"); done
   if [ "${#need[@]}" -gt 0 ]; then
     apt-get update || die "apt-get update failed"
@@ -352,7 +352,8 @@ write_env_and_start() {
 start_stack() {
   local e=$INSTALL_DIR/.env image
   if [ -n "$ORIGIN" ]; then set_env "$e" CCDASH_ORIGIN "$ORIGIN" || true; fi
-  set_env "$e" CCDASH_TOTP_REQUIRED "$([ "$TOTP_REQUIRED" -eq 1 ] && echo 1 || echo "")" || true
+  if [ "$TOTP_REQUIRED" -eq 1 ]; then totp_val=1; else totp_val=""; fi
+  set_env "$e" CCDASH_TOTP_REQUIRED "$totp_val" || true
   compose_files
   image="ghcr.io/milosanokklis-debug/ccdash:$(get_env "$e" CCDASH_VERSION)"
   if ! "${DOCKER[@]}" image inspect "$image" >/dev/null 2>&1; then
@@ -599,7 +600,7 @@ selftest() {
     say "skipped (--no-selftest)"
     return 0
   fi
-  if CCDASH_DOCKER="$DOCKER_STR" "$CCD" doctor --live; then SELFTEST=pass; else SELFTEST="warnings (see $SELFTEST_JSON)"; warn "self-test reported problems; the install is still usable"; fi
+  if CCDASH_ENV_FILE="$INSTALL_DIR/.env" CCDASH_DOCKER="$DOCKER_STR" "$CCD" doctor --live; then SELFTEST=pass; else SELFTEST="warnings (see $SELFTEST_JSON)"; warn "self-test reported problems; the install is still usable"; fi
 }
 
 summary() {
@@ -607,8 +608,10 @@ summary() {
   local url=${ORIGIN:-http://127.0.0.1:$PORT}
   say "Dashboard:   $url$([ -n "$ORIGIN" ] || printf '  (SSH: ssh -L %s:127.0.0.1:%s you@this-host)' "$PORT" "$PORT")"
   say "Login file:  $LOGIN_FILE"
-  say "Second factor: $([ "$TOTP_REQUIRED" -eq 1 ] && echo 'TOTP enrolment at the first login' || echo 'Cloudflare Access email one-time code')"
-  say "Checks:      stack up = pass; login = pass; Claude sign-in = $([ "${CCDASH_SETUP_SKIP_CLAUDE_LOGIN:-0}" = 1 ] && echo skipped || echo see above); self-test = $SELFTEST"
+  if [ "$TOTP_REQUIRED" -eq 1 ]; then factor='TOTP enrolment at the first login'; else factor='Cloudflare Access email one-time code'; fi
+  if [ "${CCDASH_SETUP_SKIP_CLAUDE_LOGIN:-0}" = 1 ]; then signin=skipped; else signin='see above'; fi
+  say "Second factor: $factor"
+  say "Checks:      stack up = pass; login = pass; Claude sign-in = $signin; self-test = $SELFTEST"
   [ "${#WARNINGS[@]}" -eq 0 ] || { say "Warnings:"; printf '  - %s\n' "${WARNINGS[@]}"; }
   say "Next: open the dashboard on your phone and press \"Enable notifications\"."
   say "Log: $LOG"

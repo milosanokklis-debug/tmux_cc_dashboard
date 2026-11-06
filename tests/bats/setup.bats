@@ -17,7 +17,7 @@ setup() {
   export CCDASH_SETUP_DOCKER=$FAKEBIN/docker CCDASH_SETUP_CLAUDE_LOGIN=$FAKEBIN/claude-login
   export CCDASH_SETUP_CCD=$FAKEBIN/ccd CCDASH_SETUP_MIN_DISK_MB=1 CCDASH_SETUP_CF_LOGIN_TIMEOUT=20
   export CCDASH_SETUP_HEALTH_WAIT=3 CCDASH_SETUP_WAIT=3
-  printf '#!/bin/sh\necho "ccd $*" >>"$FAKE_STATE/calls.log"\n' >"$FAKEBIN/ccd"
+  printf '#!/bin/sh\necho "ccd $*" >>"$FAKE_STATE/calls.log"\necho "${CCDASH_ENV_FILE:-}" >"$FAKE_STATE/ccd-env-file"\n' >"$FAKEBIN/ccd"
   chmod +x "$FAKEBIN/ccd"
   unset CLOUDFLARE_API_TOKEN SUDO_USER
 }
@@ -109,6 +109,9 @@ run_setup() { run timeout 120 "$ROOT/setup.sh" "$@" </dev/null; }
   [ "$status" -eq 0 ]
   grep -qx 'ccd identity --from-host' <(calls)
   grep -qx 'ccd doctor --live' <(calls)
+  env_file=$(cat "$FAKE_STATE/ccd-env-file")
+  [ "${env_file##*/}" = .env ]
+  [ -f "$env_file" ]
   run_setup --no-cloudflare --no-selftest
   [ "$(grep -c '^ccd doctor' "$FAKE_STATE/calls.log")" -eq 1 ]
 }
