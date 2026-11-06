@@ -35,12 +35,23 @@ function validate(body) {
   return { name: n, email };
 }
 
-async function setIdentity(body, { runOp }) {
+let chain = Promise.resolve(); // one identity write at a time, so two POSTs never interleave name and email
+
+function setIdentity(body, deps) {
   const { name, email } = validate(body);
+  const run = chain.then(() => write(name, email, deps));
+  chain = run.catch(() => {});
+  return run;
+}
+
+async function write(name, email, { runOp }) {
+  let written = null;
   for (const [key, value] of [['user.name', name], ['user.email', email]]) {
     const op = await runOp({ argv: ['git', 'config', '--global', key, tmuxArg(value)], timeoutMs: 30 * 1000 });
-    if (op.timedOut) throw new HttpError(504, `setting ${key} timed out`, { log: op.log });
-    if (op.rc !== 0) throw new HttpError(502, `could not set ${key}`, { log: op.log });
+    const after = written ? `; ${written} was already written` : '';
+    if (op.timedOut) throw new HttpError(504, `setting ${key} timed out${after}`, { log: op.log });
+    if (op.rc !== 0) throw new HttpError(502, `could not set ${key}${after}`, { log: op.log });
+    written = key;
   }
   return { ok: true, name, email, message: `git identity set to ${name} ${email}` };
 }

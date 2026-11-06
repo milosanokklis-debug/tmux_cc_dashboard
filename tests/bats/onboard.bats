@@ -94,7 +94,6 @@ push_commit() { echo "$1" > "$W/f"; git -C "$W" commit -qam "$1"; git -C "$W" pu
 @test "origin match tolerates case, .git and trailing slash" {
   mkdir "$D"; git -C "$D" init -q
   git -C "$D" remote add origin https://github.com/Octo/Demo/
-  git -C "$D" fetch -q 2>/dev/null || true
   run "$BIN/ccd-onboard" octo/demo
   [[ $output != *"different repo"* ]]
 }
@@ -142,4 +141,50 @@ push_commit() { echo "$1" > "$W/f"; git -C "$W" commit -qam "$1"; git -C "$W" pu
   done
   run "$BIN/ccd-project" pull
   [ "$status" -eq 2 ]
+}
+
+@test "empty repo (unborn HEAD): clone and re-add succeed, record has no head" {
+  E=$BATS_TEST_TMPDIR/empty.git
+  git init -q --bare "$E"
+  git config --global url."$E".insteadOf https://github.com/octo/empty.git
+  run "$BIN/ccd-onboard" octo/empty
+  [ "$status" -eq 0 ]
+  [[ $output != *"head "* ]]
+  j=$CCDASH_PROJECTS/empty.json
+  [ "$(jq -r .repo "$j")" = octo/empty ]
+  [ "$(jq -r 'has("head")' "$j")" = false ]
+  run "$BIN/ccd-onboard" octo/empty
+  [ "$status" -eq 0 ]
+  [[ $output == *"nothing to pull yet"* ]]
+  run "$BIN/ccd-project" clone octo/empty
+  [ "$status" -eq 0 ]
+  [[ $output == *"already cloned"* ]]
+}
+
+@test "a branch tracking a remote other than origin is refused (exit 3)" {
+  "$BIN/ccd-onboard" octo/demo
+  git -C "$D" remote add fork "$BARE"
+  git -C "$D" config branch.main.remote fork
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 3 ]
+  [[ $output == *"tracks remote fork, not origin"* ]]
+}
+
+@test "ccd-project pull refuses a foreign origin (exit 3)" {
+  "$BIN/ccd-onboard" octo/demo
+  git -C "$D" remote set-url origin https://github.com/octo/another.git
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 3 ]
+  [[ $output == *"different origin"* ]]
+  git -C "$D" remote set-url origin https://example.com/octo/demo.git
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 3 ]
+}
+
+@test "ahead of origin says so" {
+  "$BIN/ccd-onboard" octo/demo
+  echo local > "$D/g"; git -C "$D" add g; git -C "$D" commit -qm local
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 0 ]
+  [[ $output == *"ahead of origin; nothing to pull"* ]]
 }

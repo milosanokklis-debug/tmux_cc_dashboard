@@ -218,3 +218,31 @@ test('git identity: a failing git config is a 502 with the log; the second value
   assert.strictEqual((await r.json()).log, 'error: could not lock config file');
   assert.strictEqual(svc.calls.runOp.length, 1);
 });
+
+test('pull: a record whose repo name differs from the project is refused (409) without running anything', async (t) => {
+  const svc = setup({}, { repo: 'octo/other', head: OLD });
+  withOp(svc, () => ({ rc: 0, log: pulledLog }));
+  const s = await h.authed(svc);
+  t.after(s.stop);
+  const r = await post(s, '/api/projects/demo/pull', {});
+  assert.strictEqual(r.status, 409);
+  assert.strictEqual((await r.json()).error, 'onboarding record does not match this project');
+  assert.strictEqual(svc.calls.runOp.length, 0);
+  withOp(svc, () => ({ rc: 0, log: pulledLog }));
+  fs.writeFileSync(path.join(svc.projectsDir, 'demo.json'), JSON.stringify({ repo: 'Octo/DEMO', head: OLD }));
+  assert.strictEqual((await post(s, '/api/projects/demo/pull', {})).status, 200);
+});
+
+test('pull: an empty repo (no head line) succeeds with head null; ahead of origin is reported', async (t) => {
+  const svc = setup({}, { repo: 'octo/demo' });
+  let log = 'nothing to pull yet; origin has no commits on this branch\n';
+  withOp(svc, () => ({ rc: 0, log }));
+  const s = await h.authed(svc);
+  t.after(s.stop);
+  let j = await (await post(s, '/api/projects/demo/pull', {})).json();
+  assert.deepStrictEqual([j.head, j.before, j.changed, j.message], [null, null, false, 'octo/demo has no commits yet']);
+  log = `old ${OLD.slice(0, 7)}\nahead of origin; nothing to pull\nhead ${OLD}\n`;
+  j = await (await post(s, '/api/projects/demo/pull', {})).json();
+  assert.strictEqual(j.message, 'ahead of origin at aaaaaaa; nothing to pull');
+  assert.strictEqual(j.changed, false);
+});

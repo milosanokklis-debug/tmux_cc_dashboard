@@ -8,7 +8,7 @@ case "${1:-}" in
   ls) run ccd-session ls ;;
   attach) [ $# -eq 2 ] || usage; run ccd-session attach "$2" ;;
   wake) [ $# -eq 2 ] || usage; run ccd-session wake "$2" ;;
-  clone) [ $# -eq 2 ] || usage; run ccd-project clone "$2" ;;
+  clone) [ $# -eq 2 ] || usage; run ccd-onboard "$2" ;;
   pull) [ $# -eq 2 ] || usage; run ccd-project pull "$2" ;;
   identity)
     if [ $# -eq 2 ] && [ "$2" = --from-host ]; then

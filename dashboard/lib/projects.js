@@ -160,18 +160,23 @@ async function pullProject({ name, deps }) {
   const job = (async () => {
     const rec = readProjectRecord(deps.projectsDir, name);
     if (!rec?.repo) throw new HttpError(409, 'no onboarding record; add the project again');
+    if (rec.repo.split('/')[1].toLowerCase() !== name.toLowerCase()) {
+      throw new HttpError(409, 'onboarding record does not match this project');
+    }
     const claude = stateOf(name, { workspace: deps.workspace, panes: await deps.panes(), table: deps.procTable() }).state === 'claude';
     const op = await deps.runOp({ argv: ['ccd-onboard', rec.repo], timeoutMs: 5 * 60 * 1000 });
     if (op.timedOut) throw new HttpError(504, 'pull timed out', { log: op.log });
     if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'pull refused', { log: op.log });
     const full = /^head ([0-9a-f]{40,64})$/m.exec(op.log || '');
-    if (op.rc !== 0 || !full) throw new HttpError(502, 'pull failed', { log: op.log });
-    const head = full[1].slice(0, 7);
+    const unborn = op.rc === 0 && !full && /^nothing to pull yet/m.test(op.log || '');
+    if (op.rc !== 0 || (!full && !unborn)) throw new HttpError(502, 'pull failed', { log: op.log });
+    const head = full ? full[1].slice(0, 7) : null;
     const old = /^old ([0-9a-f]{7,64})$/m.exec(op.log)?.[1];
     const changed = /^pulled$/m.test(op.log);
-    const message = changed
-      ? `pulled ${rec.repo} to ${head}${claude ? '; Claude was not restarted' : ''}`
-      : `already up to date at ${head}`;
+    const ahead = /^ahead of origin/m.test(op.log);
+    const message = !head ? `${rec.repo} has no commits yet`
+      : changed ? `pulled ${rec.repo} to ${head}${claude ? '; Claude was not restarted' : ''}`
+        : ahead ? `ahead of origin at ${head}; nothing to pull` : `already up to date at ${head}`;
     return { project: name, repo: rec.repo, head, before: old ? old.slice(0, 7) : null, changed, claude, message, log: op.log };
   })();
   pulling.set(name, job);

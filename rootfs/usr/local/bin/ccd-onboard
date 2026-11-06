@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ccd-onboard <owner/repo>: clone, or pull when the folder is already that repo, then record
-# {repo, head, ts} in $CCDASH_PROJECTS/<project>.json (existing keys are kept).
+# {repo, head, ts} (no head for an empty repo) in $CCDASH_PROJECTS/<project>.json (existing keys are kept).
 set -euo pipefail
 WS=${CCDASH_WS:-/workspace} # overridden only by the tests
 PROJECTS=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}
@@ -17,14 +17,11 @@ if [ -e "$dir/.git" ]; then
   norm=${origin%/}; norm=${norm%.git}; norm=${norm%/}
   want=$(printf 'https://github.com/%s' "$repo")
   if [ "${norm,,}" != "${want,,}" ]; then echo "$dir belongs to a different repo" >&2; exit 3; fi
-  if [ -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then
-    echo "uncommitted changes in $proj; commit or stash first" >&2; exit 3
-  fi
   "$cp" pull "$proj"
 else
   "$cp" clone "$repo"
 fi
-head=$(git -C "$dir" rev-parse HEAD)
+head=$(git -C "$dir" rev-parse --verify -q HEAD || true) # empty for an unborn HEAD (empty repo)
 umask 027
 mkdir -p "$PROJECTS" # umask 027 makes new directories 750
 f=$PROJECTS/$proj.json
@@ -32,6 +29,6 @@ cur=$(jq -c 'if type == "object" then . else {} end' "$f" 2>/dev/null) || cur='{
 [ -n "$cur" ] || cur='{}'
 tmp=$f.tmp.$$
 jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" \
-  '$cur + {repo: $repo, head: $head, ts: $ts}' > "$tmp"
+  '$cur + {repo: $repo, ts: $ts} | if $head == "" then del(.head) else .head = $head end' > "$tmp"
 mv "$tmp" "$f"
-echo "head $head"
+[ -z "$head" ] || echo "head $head"

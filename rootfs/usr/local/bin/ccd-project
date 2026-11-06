@@ -14,24 +14,39 @@ if [ "$1" = pull ]; then
   if [ ! -e "$dir/.git" ]; then echo "$proj is not a git checkout" >&2; exit 3; fi
   if ! status=$(git -C "$dir" status --porcelain 2>&1); then echo "$proj is not a git checkout" >&2; exit 3; fi
   if [ -n "$status" ]; then echo "uncommitted changes in $proj; commit or stash first" >&2; exit 3; fi
-  old=$(git -C "$dir" rev-parse HEAD)
+  origin=$(git -C "$dir" config --get remote.origin.url 2>/dev/null || true)
+  norm=${origin%/}; norm=${norm%.git}; norm=${norm%/}
+  if ! [[ ${norm,,} =~ ^https://github\.com/[a-z0-9][a-z0-9-]*/${proj,,}$ ]]; then
+    echo "$dir has a different origin" >&2; exit 3
+  fi
+  branch=$(git -C "$dir" symbolic-ref -q --short HEAD || true)
+  if [ -n "$branch" ]; then
+    remote=$(git -C "$dir" config --get "branch.$branch.remote" 2>/dev/null || true)
+    if [ -n "$remote" ] && [ "$remote" != origin ]; then
+      echo "$proj tracks remote $remote, not origin; resolve it in a shell" >&2; exit 3
+    fi
+  fi
+  old=$(git -C "$dir" rev-parse --verify -q HEAD || true) # empty for an unborn HEAD
   if ! out=$(git -C "$dir" fetch --quiet origin 2>&1 < /dev/null); then
     echo "could not reach the remote: $(printf '%s\n' "$out" | head -n 1)" >&2; exit 4
   fi
   if ! up=$(git -C "$dir" rev-parse --verify --quiet '@{u}' 2>/dev/null); then
+    if [ -z "$old" ]; then echo "nothing to pull yet; origin has no commits on this branch"; exit 0; fi
     echo "$proj has no upstream branch; resolve it in a shell" >&2; exit 3
   fi
-  echo "old ${old:0:7}"
-  if [ "$up" = "$old" ] || git -C "$dir" merge-base --is-ancestor "$up" "$old"; then
-    echo "new ${old:0:7}"; echo "already up to date"
-  elif git -C "$dir" merge-base --is-ancestor "$old" "$up"; then
+  [ -z "$old" ] || echo "old ${old:0:7}"
+  if [ -z "$old" ] || { [ "$up" != "$old" ] && git -C "$dir" merge-base --is-ancestor "$old" "$up"; }; then
     git -C "$dir" merge --ff-only --quiet "$up" > /dev/null
-    new=$(git -C "$dir" rev-parse HEAD)
-    echo "new ${new:0:7}"; echo "pulled"
+    echo "pulled"
+  elif [ "$up" = "$old" ]; then
+    echo "already up to date"
+  elif git -C "$dir" merge-base --is-ancestor "$up" "$old"; then
+    echo "ahead of origin; nothing to pull"
   else
     echo "$proj has diverged from origin; resolve it in a shell" >&2; exit 3
   fi
-  echo "head $(git -C "$dir" rev-parse HEAD)"
+  head=$(git -C "$dir" rev-parse --verify -q HEAD || true)
+  [ -z "$head" ] || echo "head $head"
   exit 0
 fi
 repo=$2
@@ -45,10 +60,12 @@ if [ -d "$dest" ]; then
   norm=${origin%.git}; norm=${norm%/}
   if [ "${norm,,}" = "$(printf 'https://github.com/%s' "$repo" | tr '[:upper:]' '[:lower:]')" ]; then
     echo "already cloned"
-    echo "head $(git -C "$dest" rev-parse HEAD)"
+    head=$(git -C "$dest" rev-parse --verify -q HEAD || true)
+    [ -z "$head" ] || echo "head $head"
     exit 0
   fi
   echo "$dest exists with a different origin" >&2; exit 3
 fi
 git clone -- "https://github.com/$repo.git" "$dest"
-echo "head $(git -C "$dest" rev-parse HEAD)"
+head=$(git -C "$dest" rev-parse --verify -q HEAD || true)
+[ -z "$head" ] || echo "head $head"
