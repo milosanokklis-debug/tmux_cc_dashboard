@@ -23,7 +23,7 @@ function defaultServices() {
   return {
     reader,
     tokens: createTokens({ reader }),
-    usageDir: process.env.CCDASH_USAGE_DIR || usage.DEFAULT_DIR,
+    usageDir: usage.DEFAULT_DIR,
     usageFallback: createUsageFallback({ tmux }),
     workspace: '/workspace',
     agentsDir: '/home/ccd/.ccdash/agents',
@@ -84,15 +84,17 @@ function createApi(svc) {
     }
     return { now: Math.floor(now / 1000), projects: projectsTree }; // unix seconds
   }
+  let lastPrune = -Infinity;
   function usagePayload() {
+    if (Date.now() - lastPrune > 3600 * 1000) { lastPrune = Date.now(); usage.prune(svc.usageDir); } // hourly
     const fb = svc.usageFallback;
     const g = usage.gauges({ dir: svc.usageDir, now: Math.floor(svc.now() / 1000), fallback: fb ? fb.latest : null });
     if (g.five_hour.status === 'unknown' && g.seven_day.status === 'unknown') fb?.refresh(); // off unless switched on
     return { ...g, fallback_enabled: !!fb?.enabled() };
   }
-  async function tokensPayload() {
+  async function tokensPayload(conversation = null) {
     await svc.tokens.refresh(trackedFiles());
-    return svc.tokens.views({ conversation: null });
+    return svc.tokens.views({ conversation });
   }
 
   async function handleApi(req, res, pathname, searchParams, ctx = {}) {
@@ -141,8 +143,7 @@ function createApi(svc) {
       if (!get) return methodNotAllowed();
       const conversation = searchParams.get('conversation');
       if (conversation !== null && !/^[A-Za-z0-9_-]{1,100}$/.test(conversation)) throw new HttpError(400, 'invalid conversation id');
-      await svc.tokens.refresh(trackedFiles());
-      return send(res, 200, svc.tokens.views({ conversation }));
+      return send(res, 200, await tokensPayload(conversation));
     }
     if (pathname === '/api/transcript') {
       if (!get) return methodNotAllowed();

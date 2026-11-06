@@ -29,6 +29,8 @@ record() {
   fi
 }
 
+# keep hook.log small: start over when it passes 256 KB
+if [ "$(stat -c %s "$base/hook.log" 2>/dev/null || echo 0)" -gt 262144 ]; then : >"$base/hook.log" 2>/dev/null || true; fi
 record 2>>"$base/hook.log" || true
 
 if [ -n "${CCDASH_STATUSLINE_CMD:-}" ]; then

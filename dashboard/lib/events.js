@@ -3,12 +3,11 @@
 // change, and terminal previews for the cards a client says it is looking at. See NOTES.md
 // "/events protocol". Authentication is the caller's (guardUpgrade) and happens before the handshake.
 const fs = require('node:fs');
-const path = require('node:path');
 
 const MAX_CLIENTS = 32;
 const MAX_WATCH = 50;
+const MAX_PER_SESSION = 8;
 const SID_RE = /^[0-9a-f-]{36}$/;
-const envMs = (name, dflt) => (/^[0-9]+$/.test(process.env[name] ?? '') && Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt);
 
 // Values that change with the clock alone must not make a payload look changed.
 const VOLATILE = new Set(['now', 'elapsed', 'countdown']);
@@ -18,11 +17,12 @@ const fingerprint = (v) => JSON.stringify(v, (k, x) => (VOLATILE.has(k) ? undefi
 //         debounceMs?, previewMs?, pingMs?, rewatchMs?, maxClients?, log? }
 function createEvents(deps) {
   const { wss, registry, api, reconciler, watchDir, log = console.error } = deps;
-  const debounceMs = deps.debounceMs ?? envMs('CCDASH_EVENTS_DEBOUNCE_MS', 100);
-  const previewMs = deps.previewMs ?? envMs('CCDASH_EVENTS_PREVIEW_MS', 1000);
+  const debounceMs = deps.debounceMs ?? 100;
+  const previewMs = deps.previewMs ?? 1000;
   const pingMs = deps.pingMs ?? 30000;
   const rewatchMs = deps.rewatchMs ?? 5000;
   const maxClients = deps.maxClients ?? MAX_CLIENTS;
+  const maxPerSession = deps.maxPerSession ?? MAX_PER_SESSION;
   const clients = new Set();
   const last = new Map(); // type -> { hash, msg } of what clients were last told
   let watcher = null;
@@ -129,7 +129,7 @@ function createEvents(deps) {
   }
 
   function connect(ws, key) {
-    const c = { ws, watch: new Set(), sentAt: new Map(), sentText: new Map(), busy: false, alive: true };
+    const c = { key, ws, watch: new Set(), sentAt: new Map(), sentText: new Map(), busy: false, alive: true };
     clients.add(c);
     const pinger = setInterval(() => {
       if (!c.alive) { ws.terminate(); return; }
@@ -150,6 +150,9 @@ function createEvents(deps) {
   // Called after guardUpgrade accepted the request.
   function handleUpgrade(req, socket, head, { key }, reject) {
     if (clients.size >= maxClients) return reject(503, 'Service Unavailable');
+    let mine = 0;
+    for (const c of clients) if (c.key === key) mine++;
+    if (mine >= maxPerSession) return reject(503, 'Service Unavailable');
     registry.add(key, socket); // logout, expiry or a password change close it
     wss.handleUpgrade(req, socket, head, (ws) => connect(ws, key));
     return undefined;
@@ -164,7 +167,7 @@ function createEvents(deps) {
     clients.clear();
   }
 
-  return { handleUpgrade, compute, close, get clients() { return clients.size; }, watchDir: path.resolve(watchDir) };
+  return { handleUpgrade, close, get clients() { return clients.size; } };
 }
 
-module.exports = { createEvents, fingerprint, MAX_CLIENTS, MAX_WATCH };
+module.exports = { createEvents };

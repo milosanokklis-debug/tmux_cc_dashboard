@@ -121,7 +121,7 @@ function serve({ sock = DEFAULT_SOCK, root = DEFAULT_ROOT, log = console.error }
         try { req = JSON.parse(line); } catch { /* answered as bad_request */ }
         c.write(`${JSON.stringify(handle(root, req))}\n`);
       }
-      if (buf.length > MAX_REQUEST) { c.end(`${JSON.stringify({ ok: false, error: 'too_large' })}\n`); }
+      if (buf.length > MAX_REQUEST) { buf = ''; c.end(`${JSON.stringify({ ok: false, error: 'too_large' })}\n`); c.destroy(); }
     });
   });
   const prev = process.umask(0o007); // the socket is created 0660

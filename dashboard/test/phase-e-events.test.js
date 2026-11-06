@@ -123,3 +123,16 @@ test('logout closes the events socket', async (t) => {
   assert.strictEqual(out.status, 200);
   await closed;
 });
+
+test('one session may hold at most 8 events sockets', async (t) => {
+  const c = await setup();
+  t.after(c.stop);
+  const socks = [];
+  for (let i = 0; i < 8; i++) socks.push(await c.open());
+  assert.strictEqual(await status(c.open()), 503);
+  socks[0].close();
+  await c.sleep(100);
+  const again = await c.open();
+  socks.push(again);
+  for (const w of socks) w.terminate();
+});

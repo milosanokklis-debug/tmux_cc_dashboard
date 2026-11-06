@@ -63,7 +63,7 @@ function createApp({
   });
   const events = createEvents({
     wss, registry, api: handleApi, reconciler: rec, log,
-    watchDir: svc.eventsDir || process.env.CCDASH_EVENTS_WATCH || path.dirname(svc.agentsDir),
+    watchDir: svc.eventsDir || path.dirname(svc.agentsDir),
     ...svc.eventsOpts,
   });
   const limiter = new LoginLimiter({ clock });
