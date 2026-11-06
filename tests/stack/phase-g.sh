@@ -42,6 +42,7 @@ cleanup() {
 trap cleanup EXIT
 ok() { echo "PASS $*"; }
 bad() { echo "FAIL $*"; fail=1; }
+indent() { sed "s/^/$1/"; } # indent PREFIX: put PREFIX in front of every line on stdin
 until_ok() { # until_ok SECONDS DESCRIPTION CMD...
   local n=$1 what=$2; shift 2
   for _ in $(seq $((n * 5))); do if "$@" >/dev/null 2>&1; then ok "$what"; return 0; fi; sleep 0.2; done
@@ -93,7 +94,7 @@ ccd sh -c 'mkdir -p /home/ccd/.claude && echo "{\"display\":\"backup marker\"}" 
 marker=$(ccd cat /workspace/demo/MARKER)
 secret=$(compose exec -T -u web ccdash node -e "const t=require('/opt/ccdash/dashboard/lib/totp'),s=t.generateSecret();require('/opt/ccdash/dashboard/lib/authstore').enableTotp({dir:'/var/lib/ccdash-web',secret:s}).then(()=>process.stdout.write(s))")
 eq "TOTP enabled (password alone is no longer enough)" "$(pw_status)" 401
-before=$(owners); echo "$before" | sed 's/^/     before: /'
+before=$(owners); indent '     before: ' <<<"$before"
 eq "markers are owned by ccd, not root" "$(echo "$before" | grep -c '^0:0 .*MARKER')" 0
 
 echo "== backup: stop, tar each volume into $BK"
@@ -101,8 +102,8 @@ compose stop >/dev/null 2>&1
 for v in $VOLS; do
   $D run --rm -v "$P"_"$v":/v -v "$BK":/b debian:trixie-slim tar czf "/b/$P-$v.tgz" -C /v --numeric-owner .
 done
-sizes=$($D run --rm -v "$BK":/b debian:trixie-slim sh -c 'ls -l /b | awk "NR>1 {print \$5, \$9}"')
-echo "$sizes" | sed 's/^/     archive: /'
+sizes=$($D run --rm -v "$BK":/b debian:trixie-slim ls -l /b | awk 'NR>1 {print $5, $9}')
+indent '     archive: ' <<<"$sizes"
 eq "four non-empty archives" "$(echo "$sizes" | awk '$1 > 100' | wc -l | tr -d ' ')" 4
 
 echo "== delete: compose down -v"
@@ -129,7 +130,7 @@ eq "history marker is back" "$(ccd cat /home/ccd/.claude/history.jsonl)" '{"disp
 eq "project marker file is back" "$(ccd cat /workspace/demo/MARKER)" "$marker"
 if body GET /api/projects | jq -e '.projects[] | select(.name == "demo") | .repo == "octo/demo"' >/dev/null; then ok "project demo is in /api/projects"; else bad "project list: $(body GET /api/projects)"; fi
 eq "project is still a git checkout of the seed commit" "$(ccd git -C /workspace/demo log -1 --format=%s)" one
-after=$(owners); echo "$after" | sed 's/^/     after:  /'
+after=$(owners); indent '     after:  ' <<<"$after"
 eq "owners and modes are unchanged" "$after" "$before"
 
 if [ -n "${SCREENSHOT:-}" ]; then
