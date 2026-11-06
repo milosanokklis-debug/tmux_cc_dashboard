@@ -5,7 +5,11 @@ const { HttpError, send, readJson } = require('./http');
 const { createTmux, readProcTable, runFile, runOp } = require('./tmux');
 const projects = require('./projects');
 const identity = require('./identity');
-const { buildTree } = require('./tree');
+const { buildTree, listConversations } = require('./tree');
+const { createReader, ReaderError } = require('./reader');
+const { createTokens, readTranscript, transcriptFiles } = require('./tokens');
+const usage = require('./usage');
+const { createUsageFallback } = require('./usage-fallback');
 const { createReconciler } = require('./state');
 const { createControls } = require('./controls');
 const { MAX_MESSAGE } = require('./broker');
@@ -15,7 +19,12 @@ const MAX_ADD_BODY = 64 * 1024; // prompt <= 4000 chars, up to 6 bytes each when
 
 function defaultServices() {
   const tmux = createTmux();
+  const reader = createReader();
   return {
+    reader,
+    tokens: createTokens({ reader }),
+    usageDir: process.env.CCDASH_USAGE_DIR || usage.DEFAULT_DIR,
+    usageFallback: createUsageFallback({ tmux }),
     workspace: '/workspace',
     agentsDir: '/home/ccd/.ccdash/agents',
     projectsDir: projects.DEFAULT_PROJECTS_DIR,
@@ -34,6 +43,16 @@ function createApi(svc) {
   let tmuxDown = false; // logged once per outage
   const controls = createControls(svc, { closeWaitSec: svc.closeWaitSec });
   const waking = new Set(); // sids with a wake running
+
+  // Transcripts to read: each conversation's own and its subagents', from the agent events
+  // (subagents) and the state snapshot (the conversation's transcript path).
+  const trackedFiles = () => transcriptFiles(listConversations(svc.agentsDir), svc.reconciler.snapshot());
+  // Reader failures become plain HTTP errors; the reader's own messages never carry a path.
+  const readerError = (e) => {
+    if (!(e instanceof ReaderError)) throw e;
+    if (e.code === 'not_found') throw new HttpError(404, 'transcript not found');
+    throw new HttpError(503, 'transcript reader unavailable');
+  };
 
   // Pane list, or 503: a denied or unreachable tmux must not look like "everything is gone".
   async function panes() {
@@ -88,8 +107,9 @@ function createApi(svc) {
       const now = svc.now();
       const projectsTree = buildTree({
         agentsDir: svc.agentsDir, transcriptRoot: svc.transcriptRoot, panes: await panes(), table: svc.procTable(),
-        now, all: searchParams.get('all') === '1', states: svc.reconciler.snapshot(),
+        now, all: searchParams.get('all') === '1', states: svc.reconciler.snapshot(), tokens: svc.tokens ?? null,
       });
+      svc.tokens?.refresh(trackedFiles()).catch(() => {}); // totals in the next tree; never delays this answer
       for (const p of projectsTree) { // an approval card only while the conversation really is in needs_approval
         for (const c of p.conversations) {
           const a = c.status === 'needs_approval' ? svc.broker?.forSid(c.sid) : null;
@@ -97,6 +117,36 @@ function createApi(svc) {
         }
       }
       return send(res, 200, { now: Math.floor(now / 1000), projects: projectsTree }); // unix seconds
+    }
+    if (pathname === '/api/usage') {
+      if (!get) return methodNotAllowed();
+      const fb = svc.usageFallback;
+      const g = usage.gauges({ dir: svc.usageDir, now: Math.floor(svc.now() / 1000), fallback: fb ? fb.latest : null });
+      if (g.five_hour.status === 'unknown' && g.seven_day.status === 'unknown') fb?.refresh(); // off unless switched on
+      return send(res, 200, { ...g, fallback_enabled: !!fb?.enabled() });
+    }
+    if (pathname === '/api/tokens') {
+      if (!get) return methodNotAllowed();
+      const conversation = searchParams.get('conversation');
+      if (conversation !== null && !/^[A-Za-z0-9_-]{1,100}$/.test(conversation)) throw new HttpError(400, 'invalid conversation id');
+      await svc.tokens.refresh(trackedFiles());
+      return send(res, 200, svc.tokens.views({ conversation }));
+    }
+    if (pathname === '/api/transcript') {
+      if (!get) return methodNotAllowed();
+      const conv = searchParams.get('conv');
+      const agent = searchParams.get('agent') || 'main';
+      const off = searchParams.get('offset');
+      if (!conv || !/^[A-Za-z0-9_-]{1,100}$/.test(conv)) throw new HttpError(400, 'invalid conversation id');
+      if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(agent)) throw new HttpError(400, 'invalid agent id');
+      if (off !== null && !/^[0-9]{1,15}$/.test(off)) throw new HttpError(400, 'invalid offset');
+      // the file comes from our own records, never from the request
+      const file = trackedFiles().find((f) => f.conv === conv && f.agent === agent);
+      if (!file) throw new HttpError(404, 'no such transcript');
+      try {
+        const view = await readTranscript(svc.reader, file.path, { offset: off === null ? null : Number(off) });
+        return send(res, 200, { conv, agent, agent_type: file.agent_type, ...view });
+      } catch (e) { return readerError(e); }
     }
     const decision = /^\/api\/approvals\/([^/]+)\/decision$/.exec(pathname);
     if (decision) {

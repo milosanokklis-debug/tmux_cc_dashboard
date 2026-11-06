@@ -111,7 +111,7 @@ test('Phase C: prompt, interrupt, close and preview against the fake claude', { 
     assert.strictEqual((await call(sid, 'prompt', { text: '/status' })).status, 200);
     assert.strictEqual(await readPrompt(sid, 3), '/status');
     await turnDone('c1', 3);
-    assert.match(s.t('capture-pane', '-p', '-t', s.cur('c1').pane), /5h 23\.5%/); // the fake ran its /status cue
+    assert.match(s.t('capture-pane', '-p', '-t', s.cur('c1').pane), /Opus 5\.5 · ctx 8%/); // the fake ran its /status cue: managed settings run statusline.sh
   });
 
   await t.test('size and character limits', async () => {

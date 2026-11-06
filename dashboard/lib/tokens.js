@@ -47,7 +47,7 @@ function usageOf(u) {
 }
 
 function newState(meta) {
-  return { meta, inode: null, offset: 0, carry: Buffer.alloc(0), ids: new Map(), agg: new Map(), size: 0, error: null, synced: false, lastSeen: 0 };
+  return { meta, inode: null, offset: 0, carry: Buffer.alloc(0), ids: new Map(), agg: new Map(), size: 0, error: null, synced: false, lastSeen: 0, model: null };
 }
 function resetState(st) {
   st.offset = 0; st.carry = Buffer.alloc(0); st.ids = new Map(); st.agg = new Map(); st.synced = false;
@@ -69,6 +69,7 @@ function consumeLine(st, line) {
   const ts = Date.parse(o.timestamp) / 1000;
   if (!u || !Number.isFinite(ts)) return;
   const model = cleanStr(o.message.model) || 'unknown';
+  if (model !== 'unknown' && model !== '<synthetic>') st.model = model;
   const key = `${Math.floor(ts / BUCKET) * BUCKET}|${model}`;
   const id = cleanStr(o.message.id, 200) || cleanStr(o.requestId, 200);
   const prev = id ? st.ids.get(id) : null;
@@ -222,8 +223,14 @@ function createTokens({ reader, now = () => Date.now(), prices = PRICES, minInte
     return t;
   }
 
+  // The model a conversation (agent 'main') or subagent last used, or null.
+  function modelOf(conv, agent = 'main') {
+    for (const st of files.values()) if (st.meta?.conv === conv && st.meta.agent === agent) return st.model;
+    return null;
+  }
+
   return {
-    refresh, views, forNode, version: () => version,
+    refresh, views, forNode, modelOf, version: () => version,
     _files: files, _sync: sync,
   };
 }
