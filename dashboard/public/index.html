@@ -16,7 +16,7 @@
 <header class="topbar">
   <h1 class="brand">ccdash</h1>
   <div class="topbar-actions">
-    <button type="button" id="notif-open" class="btn btn-ghost" data-testid="notifications" aria-haspopup="dialog"><span aria-hidden="true">&#9881;</span> Notifications</button>
+    <button type="button" id="notif-open" class="btn btn-ghost" data-testid="notifications" aria-haspopup="dialog"><span aria-hidden="true">&#9881;</span> Settings</button>
     <button type="button" id="logout" class="btn btn-ghost">Sign out</button>
   </div>
 </header>
@@ -76,9 +76,11 @@
   </div>
 </div>
 
-<dialog id="notif-dialog" class="dialog" aria-labelledby="notif-title" aria-describedby="notif-state">
+<dialog id="notif-dialog" class="dialog" aria-labelledby="notif-title">
   <div class="dialog-body">
-    <h2 id="notif-title">Notifications</h2>
+    <h2 id="notif-title">Settings</h2>
+    <section class="settings-section" aria-labelledby="notif-h">
+    <h3 id="notif-h">Notifications</h3>
     <p id="notif-state" class="notif-state" role="status" data-testid="notif-state">Checking…</p>
     <p id="notif-error" class="inline-error" role="alert" hidden></p>
     <div class="dialog-actions dialog-actions-start">
@@ -92,6 +94,29 @@
     </fieldset>
     <div class="dialog-actions">
       <button type="button" id="notif-disable" class="btn" data-testid="disable-notifications" hidden>Turn off on this browser</button>
+    </div>
+    </section>
+    <section class="settings-section" aria-labelledby="gid-h">
+      <h3 id="gid-h">Git identity</h3>
+      <form id="gid-form" class="fields" novalidate>
+        <p id="gid-hint" class="hint">Used for commits Claude makes. Stored in the ccd user's git config.</p>
+        <div class="field">
+          <label for="gid-name">Name</label>
+          <input id="gid-name" name="name" type="text" maxlength="100" autocomplete="name" aria-describedby="gid-hint gid-name-err" data-testid="git-name">
+          <p id="gid-name-err" class="field-error" hidden></p>
+        </div>
+        <div class="field">
+          <label for="gid-email">Email</label>
+          <input id="gid-email" name="email" type="email" autocomplete="email" autocapitalize="none" spellcheck="false" aria-describedby="gid-hint gid-email-err" data-testid="git-email">
+          <p id="gid-email-err" class="field-error" hidden></p>
+        </div>
+        <p id="gid-status" class="gid-status" role="status" tabindex="-1" hidden></p>
+        <div class="dialog-actions dialog-actions-start">
+          <button type="submit" id="gid-save" class="btn btn-primary" data-testid="git-save">Save identity</button>
+        </div>
+      </form>
+    </section>
+    <div class="dialog-actions">
       <button type="button" id="notif-close" class="btn">Close</button>
     </div>
   </div>

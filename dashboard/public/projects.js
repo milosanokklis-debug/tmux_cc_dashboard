@@ -16,15 +16,22 @@
 
   function makeCard(p) {
     const button = h('button', { type: 'button', class: 'btn card-open' });
-    const li = h('li', { class: 'card' }, [h('h3', { class: 'card-name', text: p.name }), button]);
+    const head = h('span', { class: 'card-head' });
+    const pull = h('button', { type: 'button', class: 'btn card-pull', text: 'Pull' });
+    const meta = h('div', { class: 'card-meta' }, [head, pull]);
+    // Persistent polite status region: polling never rebuilds it, so a result message survives re-renders.
+    const result = h('div', { class: 'card-result', role: 'status', 'aria-live': 'polite' });
+    const li = h('li', { class: 'card' }, [h('h3', { class: 'card-name', text: p.name }), meta, result, button]);
+    const c = { li, chip: null, state: null, button, meta, head, pull, result, repo: null };
     button.addEventListener('click', () => openProject(p.name, button));
-    return { li, chip: null, state: null, button };
+    pull.addEventListener('click', () => pullProject(p.name, c));
+    return c;
   }
 
   function updateCard(c, p) {
     if (c.state !== p.state) {
       const next = chip(STATES, p.state);
-      if (c.chip) c.chip.replaceWith(next); else c.button.before(next);
+      if (c.chip) c.chip.replaceWith(next); else c.meta.before(next);
       c.chip = next;
       c.state = p.state;
     }
@@ -33,6 +40,17 @@
     c.button.setAttribute('aria-label', fresh
       ? 'Start session for ' + p.name
       : 'Open ' + p.name + ' (' + STATES[p.state].label + ')');
+    c.repo = p.repo || null;
+    const pulling = c.pull.getAttribute('aria-busy') === 'true';
+    const headText = p.head ? 'HEAD ' + p.head : '';
+    // While a pull runs, or right after one, the pull response is fresher than a poll that began before it.
+    if (!pulling && c.head.textContent !== headText && !(c.freshHead && Date.now() < c.freshHead.until && c.head.textContent === c.freshHead.text)) {
+      c.head.textContent = headText;
+    }
+    c.head.hidden = !headText && !c.head.textContent;
+    c.pull.setAttribute('aria-label', 'Pull latest for ' + p.name);
+    c.meta.hidden = !(c.repo || c.head.textContent);
+    c.pull.hidden = !c.repo;
   }
 
   function render(list) {
@@ -88,6 +106,50 @@
       button.removeAttribute('aria-busy');
       const p = known.find((k) => k.name === name);
       if (p && cards.has(name)) updateCard(cards.get(name), p);
+    }
+  }
+
+  async function pullProject(name, c) {
+    const btn = c.pull;
+    if (btn.getAttribute('aria-busy') === 'true') return;
+    // aria-disabled keeps focus on the button (a disabled control would drop it to body).
+    btn.setAttribute('aria-disabled', 'true');
+    btn.setAttribute('aria-busy', 'true');
+    btn.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), document.createTextNode('Pulling…'));
+    c.result.replaceChildren();
+    c.result.classList.remove('is-error');
+    const show = (msg, log, isError) => {
+      const kids = [h('p', { class: 'card-result-msg', text: msg })];
+      if (log) {
+        kids.push(h('details', {}, [
+          h('summary', { text: 'Show log' }),
+          h('pre', { tabindex: '0', 'aria-label': 'Pull log for ' + name, text: String(log) }),
+        ]));
+      }
+      c.result.classList.toggle('is-error', !!isError);
+      c.result.replaceChildren(...kids);
+    };
+    try {
+      const r = await api('/api/projects/' + encodeURIComponent(name) + '/pull', { method: 'POST', body: {} });
+      const d = r.data || {};
+      if (!r.ok) {
+        show(d.error || 'Pull failed (HTTP ' + r.status + ').', d.log, true);
+      } else {
+        show(d.message || 'Pulled ' + name + '.', null, false);
+        if (d.head) {
+          c.head.textContent = 'HEAD ' + d.head;
+          c.head.hidden = false;
+          c.meta.hidden = false;
+          c.freshHead = { text: c.head.textContent, until: Date.now() + 10000 };
+        }
+        poll.now();
+      }
+    } catch (e) {
+      if (e.message !== 'unauthorized') show('Network error: ' + e.message, null, true);
+    } finally {
+      btn.removeAttribute('aria-disabled');
+      btn.removeAttribute('aria-busy');
+      btn.textContent = 'Pull';
     }
   }
 

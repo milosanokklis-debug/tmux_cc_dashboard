@@ -396,3 +396,27 @@ body.app .appr-strip .btn { background: var(--surface); }
 @media (prefers-reduced-motion: reduce) {
   body.app *, body.app *::before, body.app *::after, .dialog .spinner { animation: none !important; transition: none !important; }
 }
+
+/* ===== Pull and git identity ===== */
+body.app .card-meta { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; min-width: 0; }
+body.app .card-head { font: .8rem var(--mono); color: var(--muted); margin-right: auto; overflow-wrap: anywhere; }
+body.app .card-pull { flex: 0 0 auto; }
+body.app .card-pull .spinner { margin-right: .4rem; }
+body.app .card-result { flex: 1 1 100%; margin: 0; min-width: 0; display: grid; gap: .4rem; }
+body.app .card-result-msg { margin: 0; padding: .5rem .75rem; border-radius: 6px; background: var(--info-bg); color: var(--info-fg); overflow-wrap: anywhere; }
+body.app .card-result.is-error .card-result-msg { background: var(--err-bg); color: var(--err); }
+body.app .card-result details { min-width: 0; }
+body.app .card-result summary { cursor: pointer; min-height: var(--ctl); display: flex; align-items: center; }
+body.app .card-result pre {
+  margin: 0; max-height: 14rem; overflow: auto; padding: .6rem; border-radius: 4px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); font: .8rem/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.dialog .settings-section { display: grid; gap: .75rem; }
+.dialog .settings-section + .settings-section { border-top: 1px solid var(--line); padding-top: 1rem; }
+.dialog .settings-section h3 { margin: 0; font-size: 1rem; }
+.dialog .field-error { color: var(--err); font-size: .85rem; margin: 0; overflow-wrap: anywhere; }
+.dialog .gid-status { margin: 0; padding: .5rem .75rem; border-radius: 6px; background: var(--info-bg); color: var(--info-fg); overflow-wrap: anywhere; }
+.dialog .gid-status.is-error { background: var(--err-bg); color: var(--err); }
+/* Empty live region stays rendered (so it announces) but takes no space. */
+body.app .card-result:empty { margin-top: -.6rem; height: 0; }
+@media (pointer: coarse) { body.app .card-pull, body.app .card-result summary { min-height: 44px; } .dialog input, .dialog .btn { min-height: 44px; } }
