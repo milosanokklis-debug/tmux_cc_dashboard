@@ -17,7 +17,7 @@
   function makeCard(p) {
     const button = h('button', { type: 'button', class: 'btn card-open' });
     const head = h('span', { class: 'card-head' });
-    const pull = h('button', { type: 'button', class: 'btn card-pull', text: 'Pull' });
+    const pull = h('button', { type: 'button', class: 'btn card-pull', text: 'Pull', 'aria-label': 'Pull ' + p.name });
     const meta = h('div', { class: 'card-meta' }, [head, pull]);
     // Two persistent live regions, both always in the DOM: a polite status for results, an alert for failures.
     // Polling never rebuilds them, so a message survives re-renders.

@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 
 const MAX_CLIENTS = 32;
+const MAX_BUFFERED = 1024 * 1024;
 const MAX_WATCH = 50;
 const MAX_PER_SESSION = 8;
 const SID_RE = /^[0-9a-f-]{36}$/;
@@ -14,15 +15,13 @@ const VOLATILE = new Set(['now', 'elapsed', 'countdown']);
 const fingerprint = (v) => JSON.stringify(v, (k, x) => (VOLATILE.has(k) ? undefined : x));
 
 // deps: { wss, registry, api (handleApi with the payload helpers), reconciler, watchDir,
-//         debounceMs?, previewMs?, pingMs?, rewatchMs?, maxClients?, log? }
+//         debounceMs?, previewMs?, pingMs?, rewatchMs?, log? }
 function createEvents(deps) {
   const { wss, registry, api, reconciler, watchDir, log = console.error } = deps;
   const debounceMs = deps.debounceMs ?? 100;
   const previewMs = deps.previewMs ?? 1000;
   const pingMs = deps.pingMs ?? 30000;
   const rewatchMs = deps.rewatchMs ?? 5000;
-  const maxClients = deps.maxClients ?? MAX_CLIENTS;
-  const maxPerSession = deps.maxPerSession ?? MAX_PER_SESSION;
   const clients = new Set();
   const last = new Map(); // type -> { hash, msg } of what clients were last told
   let watcher = null;
@@ -32,7 +31,11 @@ function createEvents(deps) {
   let again = false;
   let closed = false;
 
-  const send = (ws, msg) => { if (ws.readyState === 1) ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg)); };
+  const send = (ws, msg) => {
+    if (ws.readyState !== 1) return;
+    if (ws.bufferedAmount > MAX_BUFFERED) { ws.terminate(); return; } // a client that does not read
+    ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
+  };
 
   function stateMessage() {
     const snap = reconciler.snapshot?.();
@@ -149,10 +152,10 @@ function createEvents(deps) {
 
   // Called after guardUpgrade accepted the request.
   function handleUpgrade(req, socket, head, { key }, reject) {
-    if (clients.size >= maxClients) return reject(503, 'Service Unavailable');
+    if (clients.size >= MAX_CLIENTS) return reject(503, 'Service Unavailable');
     let mine = 0;
     for (const c of clients) if (c.key === key) mine++;
-    if (mine >= maxPerSession) return reject(503, 'Service Unavailable');
+    if (mine >= MAX_PER_SESSION) return reject(503, 'Service Unavailable');
     registry.add(key, socket); // logout, expiry or a password change close it
     wss.handleUpgrade(req, socket, head, (ws) => connect(ws, key));
     return undefined;

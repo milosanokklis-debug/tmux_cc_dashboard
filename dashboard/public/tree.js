@@ -220,7 +220,7 @@
   function syncApprovalToggle(items) {
     const n = items.length;
     const toggle = $('tree-toggle');
-    const text = n ? 'Agents, ' + n + ' needs approval' : 'Agents';
+    const text = n ? 'Agents, ' + n + (n === 1 ? ' needs approval' : ' need approval') : 'Agents';
     if (toggle.textContent !== text) toggle.textContent = text;
     const ids = new Set(items.map((it) => it.c.approval.id));
     let fresh = false;

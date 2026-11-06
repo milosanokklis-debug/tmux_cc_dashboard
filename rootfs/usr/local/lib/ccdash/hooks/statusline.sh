@@ -31,6 +31,10 @@ record() {
 
 # keep hook.log small: start over when it passes 256 KB
 if [ "$(stat -c %s "$base/hook.log" 2>/dev/null || echo 0)" -gt 262144 ]; then : >"$base/hook.log" 2>/dev/null || true; fi
+# readings older than 7 days go, checked at most once a day (the dashboard runs as web and cannot delete)
+if [ -d "$base/usage" ] && [ -z "$(find "$base/.pruned" -mmin -1440 2>/dev/null)" ]; then
+  find "$base/usage" -maxdepth 1 -name '*.json' -mtime +7 -delete 2>/dev/null; touch "$base/.pruned" 2>/dev/null
+fi
 record 2>>"$base/hook.log" || true
 
 if [ -n "${CCDASH_STATUSLINE_CMD:-}" ]; then
