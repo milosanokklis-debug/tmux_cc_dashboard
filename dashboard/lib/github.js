@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { HttpError } = require('./http');
+const { fetchViaProxy, proxyUrl } = require('./proxy');
 
 const TOKEN_RE = /^[A-Za-z0-9_.-]{1,255}$/;
 
@@ -11,9 +12,12 @@ function validateToken(token) {
   if (typeof token !== 'string' || !TOKEN_RE.test(token)) throw new HttpError(400, 'invalid token format');
 }
 
+// Node's global fetch ignores HTTPS_PROXY; with egress on, go through the proxy.
+function defaultFetch(proxy = proxyUrl()) { return proxy ? (url, opts) => fetchViaProxy(url, opts, proxy) : fetch; }
+
 // GET /repos/{owner}/{repo} with the token; anything but 200 refuses before any clone.
 // Returns { canPush } (false only when GitHub says permissions.push === false).
-async function checkRepoAccess({ owner, repo, token, fetchImpl = fetch, timeoutMs = 10000 }) {
+async function checkRepoAccess({ owner, repo, token, fetchImpl = defaultFetch(), timeoutMs = 10000 }) {
   let res;
   try {
     res = await fetchImpl(`https://api.github.com/repos/${owner}/${repo}`, {

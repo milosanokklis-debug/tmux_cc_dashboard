@@ -1,0 +1,28 @@
+# Hosts the ccdash container may reach through the egress proxy. One per line: `host`, `*.suffix`,
+# or `host:port`. A host without a port is allowed on 443 and 80 only. Lines starting with # are comments.
+# Extra hosts do not go here: use EGRESS_EXTRA_HOSTS or host/ccdash-egress-allow (see NOTES.md, Phase F: egress).
+
+# Claude Code: API, login, telemetry
+api.anthropic.com
+console.anthropic.com
+claude.ai
+platform.claude.com
+statsig.anthropic.com
+statsig.com
+sentry.io
+
+# Git and GitHub (clone, pull, token check)
+github.com
+api.github.com
+codeload.github.com
+objects.githubusercontent.com
+
+# Package registries
+registry.npmjs.org
+pypi.org
+files.pythonhosted.org
+
+# Web Push services (the only endpoints the dashboard accepts for subscriptions)
+fcm.googleapis.com
+updates.push.services.mozilla.com
+web.push.apple.com
