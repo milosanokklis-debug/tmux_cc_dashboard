@@ -180,7 +180,7 @@ body.app .dialog, .dialog {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Terminal view */
-body.app.in-terminal { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
+body.app.in-terminal { height: 100vh; height: 100dvh; min-height: 0; overflow: clip; grid-template-rows: auto minmax(0, 1fr); }
 /* Notices float over the top-right of the terminal, just under its toolbar and clear of the prompt at the bottom, so a
    copy/paste message never resizes the terminal, which would reflow the shell. */
 body.app.in-terminal .notices {
@@ -312,6 +312,11 @@ body.app .prompt-input { resize: vertical; min-height: 4.5rem; font-family: var(
 body.app .prompt-input:disabled, body.app .appr-msg:disabled { opacity: .6; cursor: not-allowed; }
 body.app .prompt-input[aria-invalid="true"] { border-color: var(--err); box-shadow: 0 0 0 1px var(--err); }
 body.app .prompt-bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .1rem .75rem; font-size: .8125rem; color: var(--muted); }
+@media (pointer: coarse) { body.app .ctl-hint { display: none; } }
+body.app .appr-raw summary { cursor: pointer; font-size: .8125rem; font-weight: 600; display: list-item; list-style-position: inside; padding: .55rem 0; }
+body.app .appr-raw[open] summary { padding-top: .1rem; }
+body.app .tree-legend { font-size: .75rem; line-height: 1.4; }
+body.app .ctl-empty-why { flex: 1 1 8rem; align-self: center; }
 body.app .ctl-count { font-variant-numeric: tabular-nums; }
 body.app .ctl-count.is-over { color: var(--err); font-weight: 700; }
 body.app .ctl-error { color: var(--err); font-size: .875rem; overflow-wrap: anywhere; }
@@ -375,6 +380,17 @@ body.app .appr-strip .btn { background: var(--surface); }
 @media (max-width: 400px) {
   body.app .topbar { padding: .3rem .5rem; gap: .25rem; }
   body.app .btn { padding: 0 .65rem; }
+  /* Terminal toolbar: row 1 back / agents, row 2 Copy / Paste / Reconnect, row 3 title and connection label. */
+  body.app .term-bar { gap: .25rem .5rem; padding: .3rem .5rem; }
+  body.app .back-more { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  body.app .term-bar #back { order: 1; }
+  body.app .term-bar #tree-toggle { order: 2; margin-left: auto; white-space: normal; text-align: left; line-height: 1.15; padding: .2rem .5rem; }
+  body.app .term-actions { display: contents; }
+  body.app #copy { order: 3; }
+  body.app #paste { order: 4; }
+  body.app #reconnect { order: 5; }
+  body.app .term-bar .term-title { order: 6; flex: 1 1 6rem; }
+  body.app .term-bar .conn { order: 7; flex: 0 0 auto; min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

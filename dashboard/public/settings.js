@@ -124,13 +124,21 @@
     }
   }
 
+  // Once the state is known: Enable when it is shown, else the first toggle; otherwise stay on Close.
+  function focusFirst() {
+    if (!dlg.open) return;
+    const enable = $('notif-enable');
+    if (!enable.hidden) enable.focus();
+    else if (!$('notif-prefs').hidden) $('toggle-approval').focus();
+  }
+
   const dlg = $('notif-dialog');
   let opener = null;
   $('notif-open').addEventListener('click', () => {
     opener = $('notif-open');
     dlg.showModal();
-    load();
-    $('notif-close').focus();
+    load().then(focusFirst);
+    $('notif-close').focus(); // until the state is known
   });
   $('notif-close').addEventListener('click', () => dlg.close());
   dlg.addEventListener('close', () => { if (opener) opener.focus(); });

@@ -16,7 +16,11 @@
     gone: { label: 'gone', icon: '✕' },
   };
   // Extra flags the reconciler sets next to the status.
-  const FLAGS = [['idle', 'idle'], ['quiet', 'quiet'], ['outsideTmux', 'outside tmux']];
+  const FLAGS = [
+    ['idle', 'idle', 'Idle: no activity for a while.'],
+    ['quiet', 'quiet', 'Quiet: running, but it has not printed anything recently.'],
+    ['outsideTmux', 'outside tmux', 'Outside tmux: Claude runs somewhere other than a tmux window here, so it cannot be prompted or closed from this page.'],
+  ];
   const AGENT = {
     running: { label: 'running', icon: '●' },
     done: { label: 'done', icon: '✓' },
@@ -27,6 +31,9 @@
   let lastData = null;
   let skew = 0; // server clock minus client clock, seconds
   let ticker = null;
+  const waking = new Set(); // sids with a wake request in flight
+  const seenApprovals = new Set(); // approval ids already counted for the auto-open
+  const phone = window.matchMedia('(max-width: 720px)');
   const expanded = new Set(); // task rows the user opened, by conversation/agent id
 
   const nowSec = () => Date.now() / 1000 + skew;
@@ -76,22 +83,34 @@
     return li;
   }
 
+  // A persistent live region (the tree re-renders, so a status inside a card would be lost).
+  function say(text) { const el = $('tree-status'); if (el) el.textContent = text; }
+
   async function wake(c, btn) {
-    btn.disabled = true;
+    const name = c.win || c.sid;
+    waking.add(c.sid);
+    btn.disabled = true; btn.textContent = 'Waking…'; btn.setAttribute('aria-busy', 'true');
+    say('Waking ' + name + '…');
     try {
       const r = await api('/api/conversations/' + encodeURIComponent(c.sid) + '/wake', { method: 'POST', body: {} });
-      if (r.ok) notice('Woke ' + (c.win || c.sid) + '.', 'info');
-      else notice('Could not wake the conversation: ' + ((r.data && r.data.error) || 'HTTP ' + r.status), 'error');
+      if (r.ok) { notice('Woke ' + name + '.', 'info'); say('Woke ' + name + '.'); }
+      else {
+        const m = 'Could not wake the conversation: ' + ((r.data && r.data.error) || 'HTTP ' + r.status);
+        notice(m, 'error'); say(m);
+      }
     } catch (e) {
-      if (e.message !== 'unauthorized') notice('Could not wake the conversation.', 'error');
+      if (e.message !== 'unauthorized') { notice('Could not wake the conversation.', 'error'); say('Could not wake the conversation.'); }
     }
-    btn.disabled = false;
+    waking.delete(c.sid);
+    btn.disabled = false; btn.textContent = 'Wake'; btn.removeAttribute('aria-busy');
     refresh();
   }
 
   function wakeControl(c) {
     const note = h('p', { class: 'wake-note', id: 'wake-' + domId(c.sid), text: 'Resumes the full history. A step that was interrupted does not continue, and processes Claude started do not come back.' });
-    const btn = h('button', { type: 'button', class: 'btn', 'aria-describedby': note.id, text: 'Wake' });
+    const busy = waking.has(c.sid);
+    const btn = h('button', { type: 'button', class: 'btn', 'aria-describedby': note.id, 'aria-busy': busy ? 'true' : null, text: busy ? 'Waking…' : 'Wake' });
+    btn.disabled = busy;
     btn.addEventListener('click', () => wake(c, btn));
     return h('div', { class: 'wake' }, [btn, note]);
   }
@@ -107,7 +126,7 @@
     ]);
     const flags = FLAGS.filter(([k]) => c[k]);
     if (flags.length) {
-      const box = h('span', { class: 'flags' }, flags.map((f) => h('span', { class: 'flag', text: f[1] })));
+      const box = h('span', { class: 'flags' }, flags.map((f) => h('span', { class: 'flag', title: f[2], text: f[1] })));
       li.firstChild.insertBefore(box, li.firstChild.children[2]);
     }
     if (c.approval) li.append(controls.approvalCard(c, project));
@@ -162,11 +181,26 @@
   function renderStrip(data) {
     const items = [];
     for (const p of data.projects) for (const c of p.conversations) if (c.approval) items.push({ project: p.project, c });
+    syncApprovalToggle(items);
     const box = $('approvals');
     const strip = controls.approvalStrip(items, jumpTo);
     const focused = box.contains(document.activeElement) ? document.activeElement.dataset.fk : null;
     box.replaceChildren(...(strip ? [strip] : []));
     if (focused) { const again = box.querySelector('[data-fk="' + CSS.escape(focused) + '"]'); if (again) again.focus(); }
+  }
+
+  // Phones: the panel starts collapsed, so surface pending approvals on the Agents toggle and open the
+  // panel once per approval. A user who collapses it again while that approval is pending is left alone.
+  function syncApprovalToggle(items) {
+    const n = items.length;
+    const toggle = $('tree-toggle');
+    const text = n ? 'Agents, ' + n + ' needs approval' : 'Agents';
+    if (toggle.textContent !== text) toggle.textContent = text;
+    const ids = new Set(items.map((it) => it.c.approval.id));
+    let fresh = false;
+    for (const id of ids) if (!seenApprovals.has(id)) { seenApprovals.add(id); fresh = true; }
+    for (const id of seenApprovals) if (!ids.has(id)) seenApprovals.delete(id);
+    if (fresh && phone.matches && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
   }
 
   function jumpTo(id) {
@@ -180,7 +214,8 @@
     if (!card) return;
     card.scrollIntoView({ block: 'nearest' });
     const btn = card.querySelector('[data-testid="approve"]');
-    if (btn && !btn.disabled) btn.focus();
+    const target = btn && !btn.disabled ? btn : card.querySelector('[data-testid="deny"]');
+    if (target && !target.disabled) target.focus();
   }
 
   // Show 'Show full task' only where the two-line clamp hides text. Open tasks keep their button
@@ -233,6 +268,8 @@
     start(project) {
       current = project;
       lastJson = null;
+      seenApprovals.clear();
+      $('tree-toggle').textContent = 'Agents';
       $('tree').replaceChildren();
       $('approvals').replaceChildren();
       controls.releasePreviews();

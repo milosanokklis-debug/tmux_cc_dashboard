@@ -9,7 +9,15 @@
   const enc = new TextEncoder();
   const domId = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, '_');
   const byteLen = (s) => enc.encode(s).length;
-  const tooLong = (n) => 'Prompt is too long: ' + n + ' bytes, the limit is ' + MAX_PROMPT_BYTES + '. Shorten or split it.';
+  // No byte count here: the live region only announces when the over-limit state changes, and the counter shows the number.
+  const TOO_LONG = 'Prompt is too long. The limit is ' + MAX_PROMPT_BYTES + ' bytes. Shorten or split it.';
+  const WHY_NO_PROMPT = {
+    needs_approval: 'Answer the approval above first',
+    working: 'Available when Claude is waiting for input',
+    sleeping: 'Wake the conversation first',
+    ended: 'Wake the conversation first',
+    gone: 'Wake the conversation first',
+  };
   const errText = (r) => (r.data && r.data.error) || 'HTTP ' + r.status;
 
   // State that must survive a tree re-render (the tree rebuilds its DOM when the data changes).
@@ -160,11 +168,15 @@
 
   function previewBlock(c) {
     const pre = h('pre', {
-      class: 'preview', tabindex: '0', 'data-testid': 'preview', 'data-sid': c.sid,
+      class: 'preview', tabindex: '0', role: 'region', 'data-testid': 'preview', 'data-sid': c.sid,
       'aria-label': 'Terminal preview of ' + (c.win || c.sid) + ' (read-only, last lines)',
     });
     if (previewCache.has(c.sid)) paint(pre, previewCache.get(c.sid));
-    else { pre.textContent = 'Loading preview…'; pre.dataset.state = 'loading'; }
+    else {
+      pre.textContent = 'Scroll to load preview';
+      pre.dataset.state = 'loading';
+      if (!io) fetchPreview(pre, c.sid); // no observer: nothing else would ever load it
+    }
     if (io) io.observe(pre);
     return pre;
   }
@@ -183,7 +195,7 @@
     const id = 'prompt-' + domId(sid);
     const can = !!c.canPrompt;
     const label = h('label', { for: id, class: 'ctl-label', text: 'Prompt' });
-    const reason = h('p', { class: 'ctl-reason', id: id + '-reason', text: 'Available when the conversation is waiting' });
+    const reason = h('p', { class: 'ctl-reason', id: id + '-reason', text: WHY_NO_PROMPT[c.status] || 'Available when the conversation is waiting' });
     const ta = h('textarea', {
       id, rows: '3', class: 'prompt-input', 'data-testid': 'prompt', 'data-fk': sid + ':prompt',
       autocomplete: 'off', autocapitalize: 'sentences', spellcheck: 'false', enterkeyhint: 'enter',
@@ -196,6 +208,8 @@
     const err = h('p', { class: 'ctl-error', id: id + '-error', 'aria-live': 'polite' });
     const send = h('button', { type: 'button', class: 'btn btn-primary', 'data-testid': 'send', 'data-fk': sid + ':send', text: 'Send' });
     const hint = h('span', { class: 'ctl-hint', text: 'Ctrl+Enter or Cmd+Enter sends' });
+    const emptyWhy = h('p', { class: 'ctl-reason ctl-empty-why', id: id + '-empty', text: 'Type a message first' });
+    let wasOver = false;
 
     function validate() {
       const n = byteLen(ta.value);
@@ -203,9 +217,16 @@
       count.classList.toggle('is-over', n > MAX_PROMPT_BYTES);
       const over = n > MAX_PROMPT_BYTES;
       ta.setAttribute('aria-invalid', over ? 'true' : 'false');
-      if (over) err.textContent = tooLong(n);
-      else if (err.dataset.kind !== 'server') err.textContent = '';
-      send.disabled = !can || over || !ta.value.trim() || busyAction.has(sid + ':send');
+      if (over !== wasOver) {
+        wasOver = over;
+        if (over) { err.dataset.kind = ''; err.textContent = TOO_LONG; }
+        else if (err.dataset.kind !== 'server') err.textContent = '';
+      }
+      const empty = !ta.value.trim();
+      send.disabled = !can || over || empty || busyAction.has(sid + ':send');
+      const why = can && !over && empty && !busyAction.has(sid + ':send');
+      emptyWhy.hidden = !why;
+      if (why) send.setAttribute('aria-describedby', emptyWhy.id); else send.removeAttribute('aria-describedby');
       return !send.disabled;
     }
 
@@ -240,7 +261,7 @@
 
     ta.addEventListener('input', () => {
       drafts.set(sid, ta.value);
-      err.dataset.kind = '';
+      if (err.dataset.kind === 'server') { err.dataset.kind = ''; err.textContent = wasOver ? TOO_LONG : ''; }
       validate();
     });
     ta.addEventListener('keydown', (e) => {
@@ -254,7 +275,7 @@
       h('div', { class: 'prompt-bar' }, [count, hint]),
       err,
       can ? null : reason,
-      h('div', { class: 'ctl-actions' }, [send]),
+      h('div', { class: 'ctl-actions' }, [send, emptyWhy]),
     ].filter(Boolean));
   }
 
@@ -297,7 +318,7 @@
     const panelId = 'close-' + domId(sid);
     const btn = h('button', {
       type: 'button', class: 'btn', 'data-testid': 'close', 'data-fk': sid + ':close', text: 'Close',
-      'aria-expanded': live ? String(!!state) : null, 'aria-controls': live ? panelId : null,
+      'aria-expanded': state ? 'true' : null, 'aria-controls': state ? panelId : null,
       'aria-describedby': live ? null : panelId + '-why',
     });
     btn.disabled = !live || state === 'busy';
@@ -312,7 +333,7 @@
     cancel.disabled = state === 'busy';
     const panel = h('div', { class: 'confirm', id: panelId, role: 'group', 'aria-labelledby': panelId + '-t', 'aria-describedby': panelId + '-d' }, [
       h('p', { class: 'confirm-title', id: panelId + '-t', text: 'Close ' + (c.win || sid) + '?' }),
-      h('p', { class: 'confirm-desc', id: panelId + '-d', text: 'Asks Claude to exit; the pane is closed after 10 s if it does not' }),
+      h('p', { class: 'confirm-desc', id: panelId + '-d', text: 'Asks Claude to exit. The pane closes after 10 s if it does not. A pending approval is dropped.' }),
       state === 'busy' ? h('p', { class: 'ctl-progress', role: 'status' }, [h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('span', { text: 'Closing… this can take up to 10 seconds.' })]) : null,
       h('div', { class: 'ctl-actions' }, [confirm, cancel]),
     ].filter(Boolean));
@@ -357,16 +378,23 @@
     const done = busyAction.has(a.id);
     const approve = h('button', { type: 'button', class: 'btn btn-primary', 'data-testid': 'approve', 'data-fk': a.id + ':approve', text: 'Approve' });
     const deny = h('button', { type: 'button', class: 'btn btn-danger', 'data-testid': 'deny', 'data-fk': a.id + ':deny', text: 'Deny' });
+    const msgCount = h('span', { class: 'ctl-count', id: id + '-msg-count' });
     const msg = h('input', {
+      'aria-describedby': id + '-msg-count',
       type: 'text', id: id + '-msg', class: 'appr-msg', maxlength: '500', autocomplete: 'off', 'data-testid': 'deny-message', 'data-fk': a.id + ':msg',
       placeholder: 'Tell Claude why (sent with Deny)',
     });
     msg.value = denyDrafts.get(a.id) || '';
-    msg.addEventListener('input', () => denyDrafts.set(a.id, msg.value));
-    approve.disabled = deny.disabled = msg.disabled = done;
+    const countMsg = () => { msgCount.textContent = msg.value.length + ' / 500'; };
+    countMsg();
+    msg.addEventListener('input', () => { denyDrafts.set(a.id, msg.value); countMsg(); });
+    const cut = !!a.truncated;
+    approve.disabled = done || cut;
+    deny.disabled = msg.disabled = done;
+    if (cut) approve.setAttribute('aria-describedby', id + '-why');
     const bashCommand = a.tool === 'Bash' && a.input && typeof a.input === 'object' && typeof a.input.command === 'string' ? a.input.command : null;
-    const cmdPre = bashCommand === null ? null : h('pre', { class: 'appr-input appr-command', tabindex: '0', 'aria-label': 'Command', 'data-testid': 'approval-command', text: showInvisible(bashCommand) });
-    const inputPre = h('pre', { class: 'appr-input', tabindex: '0', 'aria-label': 'Input for ' + showInvisible(a.tool), text: fmtInput(a.input) });
+    const cmdPre = bashCommand === null ? null : h('pre', { class: 'appr-input appr-command', tabindex: '0', role: 'region', 'aria-label': 'Command', 'data-testid': 'approval-command', text: showInvisible(bashCommand) });
+    const inputPre = h('pre', { class: 'appr-input', tabindex: '0', role: 'region', 'aria-label': 'Input for ' + showInvisible(a.tool), text: fmtInput(a.input) });
     const scrollHint = h('p', { class: 'appr-trunc', hidden: '', text: 'Scroll for more.' });
     requestAnimationFrame(() => {
       if ([inputPre, cmdPre].some((el) => el && el.scrollHeight > el.clientHeight + 1)) scrollHint.hidden = false;
@@ -405,13 +433,16 @@
         h('dt', { text: 'Tool' }), h('dd', { class: 'appr-tool', 'data-testid': 'approval-tool', text: showInvisible(a.tool) }),
       ]),
       cmdPre,
-      inputPre,
+      // A Bash command is fully shown above; the raw JSON is one tap away. Other tools show their input directly.
+      cmdPre ? h('details', { class: 'appr-raw' }, [h('summary', { text: 'Show raw input' }), inputPre]) : inputPre,
       scrollHint,
       a.truncated ? h('p', { class: 'appr-trunc', text: 'The input was cut short; what you see is only the start.' }) : null,
+      cut ? h('p', { class: 'appr-trunc', id: id + '-why', text: 'Too long to review here. Deny, or answer in the terminal.' }) : null,
       h('div', { class: 'ctl-actions' }, [approve]),
       h('div', { class: 'appr-deny' }, [
         h('label', { for: id + '-msg', class: 'ctl-label', text: 'Deny message (optional)' }),
         h('div', { class: 'appr-deny-row' }, [msg, deny]),
+        msgCount,
       ]),
     ].filter(Boolean));
     return card;

@@ -41,7 +41,7 @@
 
 <div id="view-terminal" class="term-view" hidden>
   <div class="term-bar">
-    <a href="#/" id="back" class="btn btn-ghost"><span aria-hidden="true">&larr;</span> Back to projects</a>
+    <a href="#/" id="back" class="btn btn-ghost"><span aria-hidden="true">&larr;</span> Back<span class="back-more"> to projects</span></a>
     <span id="term-title" class="term-title"></span>
     <span class="term-actions">
       <button type="button" id="copy" class="btn" disabled aria-keyshortcuts="Control+Shift+C" title="Copy the selected terminal text (Ctrl+Shift+C)">Copy selection</button>
@@ -65,6 +65,8 @@
           <label class="check"><input type="checkbox" id="tree-all-projects"> All projects</label>
           <label class="check"><input type="checkbox" id="tree-all-time"> Show ended / older than 24h</label>
         </div>
+        <p class="tree-legend muted">Tags: <b>idle</b> no recent activity, <b>quiet</b> running but silent, <b>outside tmux</b> not in a tmux window here.</p>
+        <p id="tree-status" class="sr-only" role="status"></p>
         <p id="tree-error" class="inline-error" role="alert" hidden>Could not load agent tree.</p>
         <div id="approvals" class="approvals"></div>
         <ul id="tree" class="tree" aria-label="Agent tree"></ul>

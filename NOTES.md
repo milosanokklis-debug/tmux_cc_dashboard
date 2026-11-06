@@ -225,3 +225,36 @@ Each check reports one of `ok`, `mismatch` (warning, never an install failure), 
 - `dashboard/test/phase-b.test.js` (part of `npm test`; needs tmux and jq, skipped without): real tmux, ccd-session, state.sh and fake claude with `CCDASH_QUIET_AFTER=5`, `CCDASH_IDLE_FLAG=5`: prompt, tool call, permission prompt, finish, Esc interrupt; kill -9 -> sleeping within 10 s; wake with and without the project's tmux session (fake claude records `--resume <sid>`, the pane replays the history, exactly one visible conversation); tmux server restart -> every conversation sleeping; wake refuses bad ids and projects outside the workspace.
 - `tests/bats/state.bats`: state.sh fields, modes, project written once, waiting_since, resumed_from, corrupt input; with jq removed state.sh is silent and the fake claude shows no hook error (with a control run).
 - `tests/stack/phase-b.sh` (test compose project `ccdashtest-b`, port 7691, own volumes, removed at the end): `compose restart` -> both conversations sleeping within 10 s; Wake through the API -> new conversation waiting, old record gone from the tree, fake claude log shows `--resume <old sid>`. Locally: `CCDASH_DOCKER="sudo -n -u ccdash /usr/local/bin/ccdash-docker" tests/stack/phase-b.sh`. Sudo drops environment variables, so the compose file takes its image and port as `@IMAGE@` / `@PORT@` placeholders filled in by the script, and goes in on stdin.
+
+## Handoff 2 Phase C: controls, approvals and notifications (2026-11-05)
+
+### What was built
+- `dashboard/lib/controls.js`: `POST /api/conversations/<sid>/{prompt,interrupt,close}` and `GET .../preview`. Prompt only when the status is `waiting`. Text goes through `load-buffer -b <hex> -` on stdin, then `paste-buffer -p -d` (bracketed, so newlines stay in the prompt) and `send-keys Enter`. Limit 8000 bytes (Phase A decision): 413 with a message. Control characters are rejected (400), so a bracketed-paste end marker cannot break out. CRLF is normalised to LF. The text is never logged.
+- Interrupt sends Escape when the status is `working` or `needs_approval`.
+- Close: when `needs_approval`, Escape first and wait up to 2 s, because Enter on the permission dialog would pick Yes. Then paste `/exit` + Enter and poll up to `CCDASH_CLOSE_WAIT` (default 10 s); else `kill-pane`. Result is `ended`, `killed` or `gone`. After kill-pane the reconciler (still read-only) shows `sleeping`, and Wake still works.
+- Preview: `capture-pane -p -e`, last 20 lines, 1 s cache. The UI fetches only cards on screen (IntersectionObserver in `dashboard/public/controls.js`).
+- Broker, `dashboard/lib/broker.js` + `rootfs/usr/local/lib/ccdash/hooks/permission.sh`: unix socket only, default `/run/ccdash-web/broker.sock` (`CCDASH_BROKER_SOCK`). Directory `web:ccd 0750` made by init-ccdash; socket `web:ccd 0660`, chowned to the directory's gid. Never TCP. Only `POST /permission`, 256 KB body cap (413).
+- Broker requires a state file with `needs_approval` and a matching pane. One pending request per conversation (second gets 409), max 50 pending (429). Holds up to `CCDASH_APPROVAL_WAIT` (default 120; hook timeout 150). A 204, any error or a timeout makes the hook exit 0 silently, so the terminal dialog shows. Connection close drops the request. A request is cancelled when the reconciler sees the conversation leave `needs_approval`.
+- Decisions only via `POST /api/approvals/:id/decision` (session + Origin + X-CCDash). Tree conversations carry `approval` only while a request is pending. permission.sh whitelists `{behavior, message}` and passes `message` only for deny. Bodies over 256 KB (a large Write) fall through to the terminal.
+- Push: `web-push` 3.6.7 (exact pin) in `dashboard/lib/push.js`. `push.json` (0600, in /var/lib/ccdash-web) holds VAPID keys and subscriptions, one per session, prefs approval / error / finished. Routes `/api/push/{config,subscribe,prefs,unsubscribe}`; `/sw.js` behind the session. Payload is exactly `{project, status}`. Deleted on logout, session expiry and password change. Triggers on reconciler transitions (first snapshot silent) and immediately on a broker request, de-duplicated. `CCDASH_PUSH_SUBJECT` is optional.
+- SSRF note: any https endpoint is accepted from an authenticated user. The server POSTs a fixed-shape encrypted body, no redirects. The Phase F egress allowlist has to cover it.
+- UI: `dashboard/public/{controls,settings}.js` and `tree.js`. Design-audit fixes: Approve disabled for truncated input; bidi and control characters shown as `\uXXXX`; Agents toggle shows a count and auto-opens on phones; Bash command block.
+- Fake claude (`tests/fake-claude/claude`): bracketed paste; each prompt written as exact bytes to `prompts/<sid>.<n>`; `events.log`; `/long` (Esc interrupts, fires idle_prompt Notification, no Stop; hypothetical until doctor --live); `/perm` honours the hook's timeout and prints `permission-message`; Esc on the fall-through prompt = cancel (deny).
+
+### Findings
+- s6 services do not inherit the container env, so tmux (and claude and the hooks) never saw `CCDASH_APPROVAL_WAIT`. `rootfs/etc/s6-overlay/s6-rc.d/tmux/run` now forwards only that one variable from `/run/s6/container_environment`. Production `compose.yaml` still passes only `CCDASH_ORIGIN`, so add the variable there to change the wait.
+- Playwright headless shell reports `Notification.permission` as denied, so the specs use `channel: 'chromium'`.
+- After Approve in the fake there is no working->waiting transition (Stop fires at once), so the finished-turn push test uses `/long` + Interrupt.
+- Node cannot read SO_PEERCRED, so any member of group `ccd` can post a request. ccd can also write fake state files: it can only create cards that answer to its own socket, never an allow for anyone else.
+- A request whose body and FIN arrive together is not noticed as disconnected until `CCDASH_APPROVAL_WAIT` (known gap; fails safe).
+- Approve of AskUserQuestion / ExitPlanMode goes through the same hook (open question for doctor --live). Real-CLI behaviour of Esc, bracketed paste and /exit also stays for `ccd doctor --live`, which is not in the code yet.
+
+### Tests
+- `dashboard/test/{phase-c-controls,phase-c-broker,push}.test.js` (part of `npm test`), `tests/bats/permission.bats`.
+- `tests/stack/phase-c.sh` (stacks `ccdashtest-c*`, ports 7692+): two stacks in turn. First CCDASH_APPROVAL_WAIT=60 and CCDASH_CLOSE_WAIT=3 for everything, including killing the dashboard mid-wait; then CCDASH_APPROVAL_WAIT=5 for the timeout. Playwright 1.65.0 pinned in package-lock, image `mcr.microsoft.com/playwright:v1.65.0-noble`, run with `--network container:<dashboard>`, a fake https push service, self-signed CA via NODE_EXTRA_CA_CERTS, and CDP `ServiceWorker.deliverPushMessage`.
+- CI step added to job `test`. Locally: `CCDASH_DOCKER="sudo -n -u ccdash /usr/local/bin/ccdash-docker" tests/stack/phase-c.sh` (remove a stale ccdash:ci image first).
+
+### Deviations
+- None from the Done-when list.
+- Additions: Close's Escape-first step, and Approve disabled for truncated input.
+- The stop() inode check cannot protect against libuv unlinking the socket on close.
