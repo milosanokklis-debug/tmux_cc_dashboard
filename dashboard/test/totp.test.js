@@ -157,3 +157,21 @@ test('enrol mode: limited session reaches only /api/totp/enroll, then upgrades',
   assert.ok(authstore.readAuth(s.dir).totp);
   assert.strictEqual((await h.login(s.base)).status, 401); // now a code is needed
 });
+
+test('enrol mode: already enrolled -> 409; a generation change drops the limited session', async (t) => {
+  const s = await h.start();
+  t.after(s.stop);
+  await authstore.setCredentials({ dir: s.dir, username: h.USER, password: h.PASS, hashOptions: FAST });
+  authstore.setTotpRequired({ dir: s.dir, required: true });
+  s.app.refreshAuth();
+  const cookie = (await h.login(s.base)).headers.get('set-cookie').split(';')[0];
+  assert.strictEqual((await h.req(s.base, '/api/totp/enroll', { cookie })).status, 200);
+  await authstore.enableTotp({ dir: s.dir, secret: totp.generateSecret(), hashOptions: FAST }); // `ccd passwd --totp` elsewhere, no rotation
+  s.app.refreshAuth();
+  const post = h.req(s.base, '/api/totp/enroll', { method: 'POST', headers: POST_HEADERS, json: { code: '000000' }, cookie });
+  assert.strictEqual((await post).status, 409);
+  assert.strictEqual((await h.req(s.base, '/api/totp/enroll', { cookie })).status, 409);
+  await authstore.setCredentials({ dir: s.dir, username: h.USER, password: h.PASS, hashOptions: FAST });
+  s.app.refreshAuth();
+  assert.notStrictEqual((await h.req(s.base, '/api/totp/enroll', { cookie })).status, 200);
+});

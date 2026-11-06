@@ -131,3 +131,17 @@ test('fetchViaProxy: HTTPS through CONNECT to an allowed host; a denied host fai
 });
 
 test('lib/proxy fetchViaProxy is exported', () => assert.strictEqual(typeof fetchViaProxy, 'function'));
+
+test('proxy: plain http sends the allowlisted host as Host, not the client-supplied one', async () => {
+  let seen;
+  const web = http.createServer((q, r) => { seen = q.headers.host; r.end('ok'); });
+  const wp = await listen(web);
+  const proxy = createProxy({ allowed: createMatcher({ inline: `localhost:${wp}` }), log: () => {} });
+  const pp = await listen(proxy);
+  try {
+    await new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: pp, path: `http://localhost:${wp}/`, headers: { host: 'evil.example' } }, (r) => { r.resume(); r.on('end', resolve); }).on('error', reject);
+    });
+    assert.strictEqual(seen, `localhost:${wp}`);
+  } finally { proxy.close(); web.close(); }
+});

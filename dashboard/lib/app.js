@@ -97,7 +97,7 @@ function createApp({
     const changed = auth && next && auth.generation !== next.generation;
     auth = next;
     if (changed) audit('auth.change', { outcome: 'ok' }); // password or TOTP changed by `ccd passwd`
-    if (sessions && sessions.setGeneration(generationOf())) { registry.closeAll(); svc.push.clear(); }
+    if (sessions && sessions.setGeneration(generationOf())) { registry.closeAll(); svc.push.clear(); enrolling.clear(); }
   }
   refreshAuth();
   sessions = new SessionStore({ dir: webDir, clock, generation: generationOf() });
@@ -107,7 +107,6 @@ function createApp({
     refreshAuth();
     for (const [k, e] of enrolling) if (e.expires <= clock.now()) enrolling.delete(k);
     for (const key of sessions.sweep()) registry.closeSession(key);
-    registry.closeWhere((key) => !sessions.map.has(key));
     svc.push.prune((k) => sessions.map.has(k)); // also covers sessions dropped lazily on a failed validate
   }
 
@@ -244,6 +243,7 @@ function createApp({
     if (pathname !== '/api/totp/enroll' || (req.method !== 'GET' && req.method !== 'POST')) {
       return send(res, 403, { error: 'two-factor enrolment required' });
     }
+    if (auth.totp) throw new HttpError(409, 'two-factor already enrolled');
     const ip = sec.clientIp(req);
     if (req.method === 'GET') {
       e.secret ??= totp.generateSecret();
@@ -372,7 +372,7 @@ function createApp({
     server.close = (cb) => { svc.broker.stop(); events.close(); return closeServer(cb); };
     server.on('close', () => { svc.broker.stop(); events.close(); });
     const timer = setInterval(tick, 30000);
-    // backstop: sockets whose session vanished are closed within ~2 s (tick also does it every 30 s)
+    // backstop: sockets whose session vanished are closed within ~2 s
     const sweeper = setInterval(() => registry.closeWhere((key) => !sessions.map.has(key)), svc.sweepMs || 2000);
     sweeper.unref();
     server.on('close', () => clearInterval(sweeper));

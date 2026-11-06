@@ -58,7 +58,7 @@ function createProxy({ allowed, log = console.log, connectTimeoutMs = 15000 }) {
       res.writeHead(403); return res.end('ccdash-egress: host not allowed\n');
     }
     log(`ALLOW ${u.hostname}:${port}`);
-    const headers = { ...req.headers };
+    const headers = { ...req.headers, host: u.host }; // the allowlisted host, not the client's Host
     for (const h of Object.keys(headers)) if (h.startsWith('proxy-')) delete headers[h];
     const up = http.request({ host: u.hostname, port, method: req.method, path: u.pathname + u.search, headers }, (r) => {
       res.writeHead(r.statusCode, r.headers); r.pipe(res);
