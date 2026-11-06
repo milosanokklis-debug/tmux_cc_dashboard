@@ -95,7 +95,6 @@
   // again, and when /events says conversations changed (a Claude start or exit changes a project's state).
   // Pushes are throttled to one request per 2 s. A hidden tab marks the list stale and reloads on return.
   const events = window.ccdash.events;
-  const poll = { now() { if (active) load(); } };
   let active = false;
   let stale = false;
   const sigs = {};
@@ -171,7 +170,7 @@
           c.meta.hidden = false;
           c.freshHead = { text: c.head.textContent, until: Date.now() + 10000 };
         }
-        poll.now();
+        if (active) load();
       }
     } catch (e) {
       if (e.message !== 'unauthorized') show('Network error: ' + e.message, null, true);
@@ -300,7 +299,7 @@
       clearDraft();
       closeDialog();
       if (warning) notice(String(warning), 'info');
-      poll.now();
+      if (active) load();
       window.ccdash.go(project);
     } catch (e) {
       if (e.message !== 'unauthorized') showError('Network error: ' + e.message);

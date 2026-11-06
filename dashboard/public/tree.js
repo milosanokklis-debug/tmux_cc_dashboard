@@ -58,8 +58,10 @@
     if (n.model) bits.push(h('span', { class: 'meta-model', 'data-testid': 'node-model', text: n.model }));
     const t = n.tokens;
     if (t && typeof t === 'object') {
-      bits.push(h('span', { class: 'meta-tokens', 'data-testid': 'node-tokens', title: 'Input and output tokens', 'aria-label': 'Tokens: ' + fmtNum(t.input) + ' in, ' + fmtNum(t.output) + ' out' }, [
-        h('span', { 'aria-hidden': 'true', text: 'in ' + fmtNum(t.input) + ' · out ' + fmtNum(t.output) }),
+      // A named group, so the label reaches screen readers; the visible in/out figures are plain text inside it.
+      bits.push(h('span', { class: 'meta-tokens', 'data-testid': 'node-tokens', role: 'group', title: 'Input and output tokens', 'aria-label': 'Tokens: ' + fmtNum(t.input) + ' in, ' + fmtNum(t.output) + ' out' }, [
+        h('span', { class: 'meta-in', text: 'in ' + fmtNum(t.input) }),
+        h('span', { class: 'meta-out', text: 'out ' + fmtNum(t.output) }),
       ]));
     }
     return bits.length ? h('div', { class: 'meta-line' }, bits) : null;

@@ -79,7 +79,6 @@
 
   window.ccdash.events = {
     start() { if (running) return; running = true; delay = 1000; connect(); },
-    stop() { running = false; clearTimeout(retry); if (sock) { const s = sock; sock = null; s.close(); } },
     // on('tree', fn) -> off(). Also 'connection' with {connected}.
     on(type, fn) {
       if (!handlers.has(type)) handlers.set(type, new Set());

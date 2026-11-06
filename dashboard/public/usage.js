@@ -30,7 +30,12 @@
   let tab = 'window';
   let tickTimer = null;
   let opener = null;
+  const failed = { usage: false, tokens: false }; // the last HTTP load failed and no push has replaced it
   const gauges = {}; // name -> element refs
+  const LOAD = {
+    usage: { what: 'plan usage', path: '/api/usage', box: 'usage-error', set: (d) => { usage = d; } },
+    tokens: { what: 'token counts', path: '/api/tokens', box: 'token-error', set: (d) => { tokens = d; } },
+  };
 
   const nowSec = () => Date.now() / 1000;
 
@@ -44,7 +49,7 @@
       const fill = h('span', { class: 'gauge-fill' });
       const bar = h('div', { class: 'gauge-bar', id: id + '-bar' }, [fill]);
       const reset = h('p', { class: 'gauge-reset', 'data-testid': 'gauge-reset' });
-      const note = h('p', { class: 'gauge-note', 'data-testid': 'gauge-stale', hidden: '' });
+      const note = h('p', { class: 'gauge-note', id: id + '-note', 'data-testid': 'gauge-stale', hidden: '' });
       const root = h('div', { class: 'gauge', 'data-testid': 'gauge-' + name, 'data-window': name, 'data-status': 'unknown' }, [
         h('div', { class: 'gauge-head' }, [h('h4', { class: 'gauge-label', id: id + '-l', text: label }), value]),
         bar, reset, note,
@@ -63,16 +68,19 @@
     const ok = w && w.status === 'ok' && Number.isFinite(w.used_percentage);
     g.root.dataset.status = ok ? 'ok' : 'unknown';
     if (!ok) {
-      g.value.textContent = 'unknown';
+      g.value.textContent = usage || failed.usage ? 'unknown' : '…';
       g.fill.style.width = '0';
       g.root.removeAttribute('data-level');
-      // A meter needs a value: with none there is no meter role, just a labelled, empty track.
-      g.bar.removeAttribute('role'); g.bar.removeAttribute('aria-valuenow'); g.bar.removeAttribute('aria-valuetext');
+      // A meter needs a value: with none the track is an image with a label, not a meter.
+      g.bar.removeAttribute('aria-valuemin'); g.bar.removeAttribute('aria-valuemax');
+      g.bar.removeAttribute('aria-valuenow'); g.bar.removeAttribute('aria-valuetext');
+      g.bar.removeAttribute('aria-describedby');
+      g.bar.setAttribute('role', 'img');
       g.bar.setAttribute('aria-label', g.label + ': unknown');
       g.reset.textContent = '';
       g.note.hidden = false;
-      g.note.textContent = usage ? 'No reading yet. It appears once a Claude session reports its limits.' : 'Loading…';
-      if (!usage) g.value.textContent = '…';
+      if (!usage) g.note.textContent = failed.usage ? 'Not available: the usage request failed. Use Retry above.' : 'Loading…';
+      else g.note.textContent = 'No reading yet. It appears once a Claude session reports its limits.';
       return;
     }
     const pct = Math.max(0, Math.min(100, w.used_percentage));
@@ -88,6 +96,7 @@
     g.bar.setAttribute('aria-valuetext', text + ' used');
     g.note.hidden = !w.stale;
     g.note.textContent = w.stale ? 'Stale: this reading is from before the window reset, so the real figure is probably lower.' : '';
+    if (w.stale) g.bar.setAttribute('aria-describedby', g.note.id); else g.bar.removeAttribute('aria-describedby');
     paintCountdown(name);
   }
 
@@ -145,9 +154,7 @@
   function cell(text, cls) { return h('td', { class: 'num' + (cls ? ' ' + cls : ''), text }); }
 
   function costCell(row) {
-    return h('td', { class: 'num cost', 'data-testid': 'cost' }, [
-      h('span', { text: fmtUsd(row.cost_usd) }),
-    ]);
+    return h('td', { class: 'num cost', 'data-testid': 'cost', text: fmtUsd(row.cost_usd) });
   }
 
   function buildTable(kind, label, rows, total) {
@@ -180,9 +187,10 @@
   function paintTokens() {
     const panel = $('token-panel');
     const note = $('token-note');
+    paintLoadError('tokens');
     if (!tokens) {
       note.hidden = true;
-      panel.replaceChildren(h('p', { class: 'muted', text: 'Loading…' }));
+      panel.replaceChildren(failed.tokens ? h('p', { class: 'muted', text: 'No token counts are shown.' }) : h('p', { class: 'muted', text: 'Loading…' }));
       return;
     }
     const unavailable = tokens.reader && tokens.reader.unavailable;
@@ -198,12 +206,14 @@
     const def = TABS.find((t) => t[0] === tab) || TABS[0];
     const rows = Array.isArray(tokens[def[2]]) ? tokens[def[2]] : [];
     const kids = [];
+    const unpriced = Array.isArray(tokens.unpriced_models) ? tokens.unpriced_models.length : 0;
     if (tokens.total) {
       kids.push(h('p', { class: 'tok-summary', 'data-testid': 'token-summary' }, [
         h('span', { class: 'tok-sum-fig', text: fmtUsd(tokens.total.cost_usd) }),
-        h('span', { class: 'price-label', 'data-testid': 'price-note', text: ' ' + PRICE_LABEL }),
-        h('span', { class: 'muted', text: ' · ' + fmtNum(tokens.total.input) + ' in, ' + fmtNum(tokens.total.output) + ' out in total' }),
-      ]));
+        h('span', { class: 'price-label', 'data-testid': 'price-note', text: PRICE_LABEL }),
+        unpriced ? h('span', { class: 'tok-unpriced', 'data-testid': 'unpriced-count', text: 'excludes ' + unpriced + ' unpriced model' + (unpriced === 1 ? '' : 's') }) : null,
+        h('span', { class: 'muted', text: fmtNum(tokens.total.input) + ' in, ' + fmtNum(tokens.total.output) + ' out in total' }),
+      ].filter(Boolean)));
     }
     if (!rows.length) kids.push(h('p', { class: 'muted', text: 'Nothing recorded yet.' }));
     else kids.push(h('div', { class: 'tok-scroll', tabindex: '0', role: 'region', 'aria-label': def[1] + ' (scrolls sideways on narrow screens)' }, [buildTable(def[0], def[1].replace(/^By /, ''), rows, tokens.total)]));
@@ -251,18 +261,41 @@
   // ---------------------------------------------------------------- data + open/close
 
   function paintUsage() {
+    paintLoadError('usage');
     for (const [name] of WINDOWS) paintGauge(name);
     paintSource();
   }
 
-  events.on('usage', (m) => { usage = m.usage || null; if (dlg.open) paintUsage(); });
-  events.on('tokens', (m) => { tokens = m.tokens || null; if (dlg.open) paintTokens(); });
+  events.on('usage', (m) => { usage = m.usage || null; failed.usage = false; if (dlg.open) paintUsage(); });
+  events.on('tokens', (m) => { tokens = m.tokens || null; failed.tokens = false; if (dlg.open) paintTokens(); });
 
-  async function fetchOnce(path, set) {
+  // A failed or empty response leaves the panel on an error with a Retry button, not on "Loading…".
+  // The Retry button stays in place while the request runs, so keyboard focus is not lost on the way.
+  function paintLoadError(kind) {
+    const box = $(LOAD[kind].box);
+    const hadFocus = box.contains(document.activeElement);
+    box.replaceChildren();
+    box.hidden = !failed[kind];
+    if (failed[kind]) {
+      const retry = h('button', { type: 'button', class: 'btn', text: 'Retry', 'data-testid': kind + '-retry' });
+      retry.addEventListener('click', () => fetchOnce(kind));
+      box.append(h('span', { text: 'Could not load ' + LOAD[kind].what + '. ' }), retry);
+      if (hadFocus) retry.focus({ preventScroll: true });
+    } else if (hadFocus) {
+      $('usage-close').focus({ preventScroll: true });
+    }
+  }
+
+  async function fetchOnce(kind) {
+    const src = LOAD[kind];
+    let ok = false;
     try {
-      const r = await api(path);
-      if (r.ok && r.data) set(r.data);
-    } catch { /* the panel keeps "Loading…" or the last data */ }
+      const r = await api(src.path);
+      if (r.ok && r.data) { src.set(r.data); ok = true; }
+    } catch { /* api() sends a 401 to the login page; any other error counts as a failed load */ }
+    failed[kind] = !ok;
+    if (!dlg.open) return;
+    if (kind === 'usage') paintUsage(); else paintTokens();
   }
 
   function open() {
@@ -273,8 +306,8 @@
     paintUsage();
     paintTokens();
     // The socket sends a snapshot on connect; ask over HTTP once only when it has nothing.
-    if (!usage) fetchOnce('/api/usage', (d) => { usage = d; if (dlg.open) paintUsage(); });
-    if (!tokens) fetchOnce('/api/tokens', (d) => { tokens = d; if (dlg.open) paintTokens(); });
+    if (!usage) fetchOnce('usage');
+    if (!tokens) fetchOnce('tokens');
     clearInterval(tickTimer);
     tickTimer = setInterval(tick, 1000);
     $('usage-close').focus({ preventScroll: true });

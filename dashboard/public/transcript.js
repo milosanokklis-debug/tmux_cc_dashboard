@@ -51,9 +51,9 @@
     const role = ROLE[e.role] || String(e.role || 'entry');
     const meta = [];
     if (e.model) meta.push(e.model);
-    if (e.ts) { const d = new Date(e.ts); if (!Number.isNaN(d.getTime())) meta.push(d.toLocaleTimeString()); }
+    if (e.ts) { const d = new Date(e.ts * 1000); if (!Number.isNaN(d.getTime())) meta.push(d.toLocaleTimeString()); } // ts is in seconds
     return h('article', { class: 'tx-entry tx-' + (e.role === 'assistant' ? 'assistant' : 'user'), 'data-testid': 'transcript-entry', 'data-role': String(e.role || '') }, [
-      h('header', { class: 'tx-head' }, [h('span', { class: 'tx-role', text: role }), meta.length ? h('span', { class: 'tx-meta', text: meta.join(' · ') }) : null].filter(Boolean)),
+      h('header', { class: 'tx-head' }, [h('span', { class: 'tx-role', text: role }), ...meta.map((m) => h('span', { class: 'tx-meta', text: m }))]),
       ...(Array.isArray(e.parts) ? e.parts.map(part) : []),
     ]);
   }

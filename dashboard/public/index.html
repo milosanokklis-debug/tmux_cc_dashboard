@@ -128,13 +128,15 @@
     <h2 id="usage-title">Usage</h2>
     <section class="settings-section" aria-labelledby="usage-limits-h">
       <h3 id="usage-limits-h">Plan limits</h3>
+      <div id="usage-error" class="usage-error" role="status" hidden></div>
       <div id="usage-gauges" class="gauges"></div>
       <p id="usage-source" class="hint" data-testid="usage-source" role="status"></p>
     </section>
     <section class="settings-section" aria-labelledby="usage-tokens-h">
       <h3 id="usage-tokens-h">Tokens</h3>
       <div id="token-tabs" class="seg" role="tablist" aria-label="Group tokens by" data-testid="token-tabs"></div>
-      <p id="token-note" class="hint" hidden>Cache creation and cache read tokens are counted apart from input. Dollar figures come from a price table in the dashboard.</p>
+      <p id="token-note" class="hint" hidden>Cache creation and cache read tokens are counted apart from input. Dollar figures are an API-price estimate, not billing.</p>
+      <div id="token-error" class="usage-error" role="status" hidden></div>
       <div id="token-panel" role="tabpanel" class="tok-panel" data-testid="token-panel"></div>
     </section>
     <div class="dialog-actions">
