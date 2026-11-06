@@ -1,0 +1,145 @@
+#!/usr/bin/env bats
+# ccd-onboard and ccd-project pull against local bare repos (insteadOf), no network, no token.
+
+setup() {
+  ROOT=$(cd "$BATS_TEST_DIRNAME/../.." && pwd)
+  BIN=$ROOT/rootfs/usr/local/bin
+  export HOME=$BATS_TEST_TMPDIR/home
+  export CCDASH_WS=$BATS_TEST_TMPDIR/ws
+  export CCDASH_PROJECTS=$BATS_TEST_TMPDIR/home/.ccdash/projects
+  export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
+  mkdir -p "$HOME" "$CCDASH_WS"
+  git config --global init.defaultBranch main
+  git config --global protocol.file.allow always
+  BARE=$BATS_TEST_TMPDIR/demo.git
+  git init -q --bare "$BARE"
+  W=$BATS_TEST_TMPDIR/seed
+  git clone -q "$BARE" "$W" 2>/dev/null
+  echo one > "$W/f"; git -C "$W" add f; git -C "$W" commit -qm one; git -C "$W" push -q origin HEAD:main
+  git --git-dir="$BARE" symbolic-ref HEAD refs/heads/main
+  git config --global url."$BARE".insteadOf https://github.com/octo/demo.git
+  D=$CCDASH_WS/demo
+}
+
+push_commit() { echo "$1" > "$W/f"; git -C "$W" commit -qam "$1"; git -C "$W" push -q origin HEAD:main; }
+
+@test "fresh clone writes the project json (mode 640, repo/head/ts)" {
+  run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "head $(git -C "$D" rev-parse HEAD)" ]
+  j=$CCDASH_PROJECTS/demo.json
+  [ "$(stat -c %a "$j")" = 640 ]
+  [ "$(stat -c %a "$CCDASH_PROJECTS")" = 750 ]
+  [ "$(jq -r .repo "$j")" = octo/demo ]
+  [ "$(jq -r .head "$j")" = "$(git -C "$D" rev-parse HEAD)" ]
+  [ "$(jq -r '.ts | type' "$j")" = number ]
+  [ "$(ls -A "$CCDASH_PROJECTS")" = demo.json ]
+}
+
+@test "adding again fast-forwards and updates head" {
+  "$BIN/ccd-onboard" octo/demo
+  push_commit two
+  run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 0 ]
+  [[ $output == *pulled* ]]
+  [ "$(cat "$D/f")" = two ]
+  [ "$(jq -r .head "$CCDASH_PROJECTS/demo.json")" = "$(git -C "$W" rev-parse HEAD)" ]
+  run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 0 ]
+  [[ $output == *"already up to date"* ]]
+}
+
+@test "the json keeps existing keys such as packs, and survives a corrupt file" {
+  "$BIN/ccd-onboard" octo/demo
+  j=$CCDASH_PROJECTS/demo.json
+  jq -c '. + {packs: ["a"]}' "$j" > "$j.x"; mv "$j.x" "$j"
+  push_commit two
+  "$BIN/ccd-onboard" octo/demo
+  [ "$(jq -c .packs "$j")" = '["a"]' ]
+  echo '{not json' > "$j"
+  run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .repo "$j")" = octo/demo ]
+}
+
+@test "dirty tree is refused (exit 3) and left alone" {
+  "$BIN/ccd-onboard" octo/demo
+  push_commit two
+  echo mine >> "$D/f"
+  run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 3 ]
+  [[ $output == *"uncommitted changes in demo; commit or stash first"* ]]
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 3 ]
+  [[ $output == *"uncommitted changes in demo; commit or stash first"* ]]
+  grep -q mine "$D/f"
+}
+
+@test "untracked files count as dirty" {
+  "$BIN/ccd-onboard" octo/demo
+  touch "$D/new"
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 3 ]
+}
+
+@test "a folder of a different repo is refused (exit 3)" {
+  mkdir "$D"; git -C "$D" init -q
+  git -C "$D" remote add origin https://github.com/other/demo.git
+  run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 3 ]
+  [[ $output == *"belongs to a different repo"* ]]
+  [ ! -e "$CCDASH_PROJECTS/demo.json" ]
+}
+
+@test "origin match tolerates case, .git and trailing slash" {
+  mkdir "$D"; git -C "$D" init -q
+  git -C "$D" remote add origin https://github.com/Octo/Demo/
+  git -C "$D" fetch -q 2>/dev/null || true
+  run "$BIN/ccd-onboard" octo/demo
+  [[ $output != *"different repo"* ]]
+}
+
+@test "pull refuses a non-checkout (exit 3)" {
+  mkdir "$D"
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 3 ]
+  run "$BIN/ccd-project" pull nothere
+  [ "$status" -eq 3 ]
+}
+
+@test "diverged branch is refused (exit 3) and unchanged" {
+  "$BIN/ccd-onboard" octo/demo
+  echo local > "$D/g"; git -C "$D" add g; git -C "$D" commit -qm local
+  mine=$(git -C "$D" rev-parse HEAD)
+  push_commit two
+  run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 3 ]
+  [[ $output == *"demo has diverged from origin; resolve it in a shell"* ]]
+  [ "$(git -C "$D" rev-parse HEAD)" = "$mine" ]
+}
+
+@test "unreachable remote: exit 4, checkout unchanged" {
+  "$BIN/ccd-onboard" octo/demo
+  before=$(git -C "$D" rev-parse HEAD)
+  git config --global url."$BATS_TEST_TMPDIR/nonexistent".insteadOf https://github.com/octo/demo.git
+  git config --global --unset url."$BARE".insteadOf
+  run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 4 ]
+  [[ $output == *"could not reach the remote:"* ]]
+  [ "$(git -C "$D" rev-parse HEAD)" = "$before" ]
+  [ "$(cat "$D/f")" = one ]
+  [ -z "$(git -C "$D" status --porcelain)" ]
+}
+
+@test "invalid names and .. are exit 2" {
+  for n in 'bad;name' '../x' 'octo/..' 'octo/a..b' 'octo/.hid' 'a/b/c' 'octo/x y' ''; do
+    run "$BIN/ccd-onboard" "$n"
+    [ "$status" -eq 2 ]
+  done
+  for n in '..' 'a..b' '.x' '-x' 'a/b' 'a b' '../x'; do
+    run "$BIN/ccd-project" pull "$n"
+    [ "$status" -eq 2 ]
+  done
+  run "$BIN/ccd-project" pull
+  [ "$status" -eq 2 ]
+}

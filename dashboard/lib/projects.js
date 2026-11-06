@@ -6,6 +6,7 @@ const path = require('node:path');
 const { HttpError } = require('./http');
 const { hasClaude } = require('./tmux');
 const github = require('./github');
+const { readRegular } = require('./safefile');
 
 const PROJECT_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 const OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
@@ -44,16 +45,43 @@ const isProjectDir = (workspace, name) => {
   try { return fs.lstatSync(path.join(workspace, name)).isDirectory(); } catch { return false; }
 };
 
+const DEFAULT_PROJECTS_DIR = '/home/ccd/.ccdash/projects';
+const RECORD_MAX = 4096;
+const SHA_RE = /^[0-9a-f]{7,64}$/;
+const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}$/;
+
+// {repo, head} from <projectsDir>/<name>.json (written by ccd-onboard, in a directory ccd can write):
+// regular file only, size capped, every field checked; anything odd gives null and never throws.
+function readProjectRecord(projectsDir, name) {
+  try {
+    const f = readRegular(path.join(projectsDir || DEFAULT_PROJECTS_DIR, `${name}.json`), RECORD_MAX);
+    if (!f || f.size > RECORD_MAX) return null;
+    const v = JSON.parse(f.buf.toString('utf8'));
+    if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+    const repo = typeof v.repo === 'string' && REPO_RE.test(v.repo) && !v.repo.includes('..') ? v.repo : null;
+    const head = typeof v.head === 'string' && SHA_RE.test(v.head) ? v.head : null;
+    return repo || head ? { repo, head } : null;
+  } catch { return null; }
+}
+
+function stateOf(name, { workspace, panes, table }) {
+  const session = sessionNameFor(name);
+  const mine = panes.filter((p) => p.session === session
+    && (p.projectDir === '' || p.projectDir === path.join(workspace, name)));
+  if (!mine.length) return { session: null, state: 'none' };
+  const claude = mine.some((p) => p.active && hasClaude(table, p.panePid));
+  return { session, state: claude ? 'claude' : 'shell' };
+}
+
 // `panes` comes from tmux.listPanes (the caller turns a tmux failure into a 503).
-function listProjects({ workspace, panes, procTable }) {
+function listProjects({ workspace, panes, procTable, projectsDir }) {
   const table = procTable();
   return projectDirs(workspace).map((name) => {
-    const session = sessionNameFor(name);
-    const mine = panes.filter((p) => p.session === session
-      && (p.projectDir === '' || p.projectDir === path.join(workspace, name)));
-    if (!mine.length) return { name, session: null, state: 'none' };
-    const claude = mine.some((p) => p.active && hasClaude(table, p.panePid));
-    return { name, session, state: claude ? 'claude' : 'shell' };
+    const rec = readProjectRecord(projectsDir, name);
+    return {
+      name, ...stateOf(name, { workspace, panes, table }),
+      repo: rec?.repo ?? null, head: rec?.head ? rec.head.slice(0, 7) : null,
+    };
   });
 }
 
@@ -108,8 +136,9 @@ async function addProject(body, deps) {
       if (!canPush) warning = 'token cannot push';
       (deps.saveToken || github.saveToken)({ owner, token });
     }
-    const op = await deps.runOp({ argv: ['ccd-project', 'clone', `${owner}/${repo}`] });
+    const op = await deps.runOp({ argv: ['ccd-onboard', `${owner}/${repo}`] });
     if (op.timedOut) throw new HttpError(504, 'clone timed out', { log: op.log });
+    if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'clone refused', { log: op.log });
     if (op.rc !== 0) throw new HttpError(502, 'clone failed', { log: op.log });
     const session = await startSession({ runFile: deps.runFile, name: repo, prompt });
     return { project: repo, session, ...(warning ? { warning } : {}) };
@@ -118,6 +147,37 @@ async function addProject(body, deps) {
   try { return await job; } finally { if (inFlight.get(key)?.job === job) inFlight.delete(key); }
 }
 
+const lastLine = (log) => String(log || '').trim().split('\n').pop().trim();
+const pulling = new Map(); // project name -> job: a second pull at the same time shares the first one's result
+
+// POST /api/projects/:proj/pull: `ccd-onboard <repo>` for a project that has an onboarding record.
+// Never starts, restarts or prompts a session. deps: { workspace, projectsDir?, runOp, panes, procTable }
+async function pullProject({ name, deps }) {
+  if (!validProject(name)) throw new HttpError(400, 'invalid project name');
+  if (!isProjectDir(deps.workspace, name)) throw new HttpError(404, 'no such project');
+  const running = pulling.get(name);
+  if (running) return running;
+  const job = (async () => {
+    const rec = readProjectRecord(deps.projectsDir, name);
+    if (!rec?.repo) throw new HttpError(409, 'no onboarding record; add the project again');
+    const claude = stateOf(name, { workspace: deps.workspace, panes: await deps.panes(), table: deps.procTable() }).state === 'claude';
+    const op = await deps.runOp({ argv: ['ccd-onboard', rec.repo], timeoutMs: 5 * 60 * 1000 });
+    if (op.timedOut) throw new HttpError(504, 'pull timed out', { log: op.log });
+    if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'pull refused', { log: op.log });
+    const full = /^head ([0-9a-f]{40,64})$/m.exec(op.log || '');
+    if (op.rc !== 0 || !full) throw new HttpError(502, 'pull failed', { log: op.log });
+    const head = full[1].slice(0, 7);
+    const old = /^old ([0-9a-f]{7,64})$/m.exec(op.log)?.[1];
+    const changed = /^pulled$/m.test(op.log);
+    const message = changed
+      ? `pulled ${rec.repo} to ${head}${claude ? '; Claude was not restarted' : ''}`
+      : `already up to date at ${head}`;
+    return { project: name, repo: rec.repo, head, before: old ? old.slice(0, 7) : null, changed, claude, message, log: op.log };
+  })();
+  pulling.set(name, job);
+  try { return await job; } finally { if (pulling.get(name) === job) pulling.delete(name); }
+}
+
 module.exports = {
-  validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
+  pullProject, readProjectRecord, DEFAULT_PROJECTS_DIR, validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
 };

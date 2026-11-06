@@ -61,7 +61,7 @@ function fakeServices(over = {}) {
   fs.mkdirSync(workspace); fs.mkdirSync(agentsDir);
   const calls = { runFile: [], runOp: [] };
   const svc = {
-    workspace, agentsDir, transcriptRoot: dir, calls, dir,
+    workspace, agentsDir, projectsDir: path.join(dir, 'projects'), transcriptRoot: dir, calls, dir,
     tmux: { sock: '/tmp/fake.sock', listPanes: async () => [], run: async () => '', ensureOps: async () => {} },
     procTable: () => new Map(),
     reconciler: { tick: async () => null, snapshot: () => null, get: () => null },
