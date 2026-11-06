@@ -4,7 +4,7 @@
 set -euo pipefail
 WS=${CCDASH_WS:-/workspace} # overridden only by the tests
 PROJECTS=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}
-# A repo that defines hooks in .claude/settings*.json is refused (exit 5, "hooks: <events>" on stdout)
+# A repo that defines hooks in .claude/settings*.json is refused (exit 5, "hooks: <names>" on stdout)
 # unless --trust-hooks is given or an earlier onboarding was trusted (trustHooks in the record).
 trust=0
 if [ "${1:-}" = --trust-hooks ]; then trust=1; shift; fi
@@ -32,12 +32,11 @@ fi
 head=$(git -C "$dir" rev-parse --verify -q HEAD || true) # empty for an unborn HEAD (empty repo)
 umask 027
 mkdir -p "$PROJECTS" # umask 027 makes new directories 750
-f=$PROJECTS/$proj.json
-cur=$(jq -c 'if type == "object" then . else {} end' "$f" 2>/dev/null) || cur='{}'
+cur=$(jq -c 'if type == "object" then . else {} end' "$rec" 2>/dev/null) || cur='{}'
 [ -n "$cur" ] || cur='{}'
-tmp=$f.tmp.$$
+tmp=$rec.tmp.$$
 jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" --argjson trust "$trust" \
   '$cur + {repo: $repo, ts: $ts} | if $head == "" then del(.head) else .head = $head end
    | if $trust == 1 then .trustHooks = true else . end' > "$tmp"
-mv "$tmp" "$f"
+mv "$tmp" "$rec"
 [ -z "$head" ] || echo "head $head"

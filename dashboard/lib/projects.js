@@ -151,10 +151,10 @@ async function addProject(body, deps) {
 }
 
 // ccd-onboard / ccd-project exit 5: the repo defines hooks and was not trusted. Only event names leave
-// the container (`hooks: A,B`), never the commands.
+// the container (`hooks: A,B`; also key names, `.mcp.json`, `(symlink)`), never the commands.
 function refuseHooks(op) {
   if (op.rc !== 5) return;
-  const m = /^hooks: ([A-Za-z0-9_?,]+)$/m.exec(op.log || '');
+  const m = /^hooks: ([A-Za-z0-9_?,.() ]+)$/m.exec(op.log || '');
   throw new HttpError(409, 'repo-has-hooks', { hooks: m ? m[1].split(',').filter(Boolean) : [] });
 }
 
