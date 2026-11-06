@@ -3,7 +3,68 @@ set -euo pipefail
 # $D may contain spaces (e.g. "sudo docker"); it is left unquoted on purpose.
 D=${CCDASH_DOCKER:-docker}
 run() { local t=-i; [ -t 0 ] && t=-it; $D exec $t -u ccd ccdash "$@"; }
-usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] <owner/repo> | pull <project> | identity <name> <email> | identity --from-host | login | passwd [--totp|--no-totp]" >&2; exit 2; }
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+now_ms() { echo $(($(date +%s%N) / 1000000)); }
+
+# ccd doctor --live: the deferred Phase A checks. ccd-doctor (in the container) runs the real conversation
+# and prints one JSON line per check; the checks that need the host (egress proxy log, gVisor) run here.
+# Mismatches go to $CCDASH_SELFTEST_FILE (default /var/log/ccdash-selftest.json) and, copied into the
+# container, drive the dashboard's warning badge. Never fails: the exit status is 0 whatever is found.
+# Env: CCDASH_EGRESS_CONTAINER (ccdash-egress), CCDASH_EGRESS_ALLOW (the ccdash-egress-allow helper),
+# CCDASH_CONTAINER (ccdash), CCDASH_ENV_FILE (the .env to write CCDASH_RUNTIME=runsc into).
+doctor_live() {
+  local ctr=${CCDASH_CONTAINER:-ccdash} egress=${CCDASH_EGRESS_CONTAINER:-ccdash-egress}
+  local out=${CCDASH_SELFTEST_FILE:-/var/log/ccdash-selftest.json} since lines hosts denied allow
+  local checks=() slow=null
+  since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  add() { checks+=("$(jq -nc --arg c "$1" --arg s "$2" --arg d "$3" '{check: $c, status: $s, detail: $d}')"); }
+  while IFS= read -r l; do [ -z "$l" ] || checks+=("$l"); done < <($D exec -i -u ccd "$ctr" ccd-doctor </dev/null 2>/dev/null | grep '^{' || true)
+  [ ${#checks[@]} -gt 0 ] || add conversation warn "ccd-doctor produced no result (is the container up?)"
+
+  # egress: every host the proxy saw during the run; denied ones are appended to the allowlist
+  if $D inspect "$egress" >/dev/null 2>&1; then
+    lines=$($D logs --since "$since" "$egress" 2>&1 || true)
+    hosts=$(sed -n 's/^.*\(ALLOW\|DENY\) \([^ ]*\)$/\2/p' <<<"$lines" | sort -u | tr '\n' ' ')
+    denied=$(sed -n 's/^.*DENY \([^ ]*\)$/\1/p' <<<"$lines" | sed 's/:443$//; s/:80$//' | sort -u | tr '\n' ' ')
+    allow=${CCDASH_EGRESS_ALLOW:-$(command -v ccdash-egress-allow || echo "$HERE/../host/ccdash-egress-allow")}
+    if [ -z "$denied" ]; then add egress_hosts pass "hosts seen: ${hosts:-none}; none denied"
+    else
+      # shellcheck disable=SC2086 # one argument per host
+      if "$allow" $denied >/dev/null 2>&1; then add egress_hosts warn "denied, now allowed: $denied(rerun to confirm); seen: $hosts"
+      else add egress_hosts warn "denied and could not be allowed: $denied"; fi
+    fi
+  else add egress_hosts skip "no $egress container (egress proxy is off)"; fi
+
+  # gVisor: the same small workload on runc and runsc; enabled only if runsc runs it
+  if ! $D info --format '{{json .Runtimes}}' 2>/dev/null | grep -q runsc; then add gvisor skip "runsc is not installed; staying on runc"
+  else
+    # shellcheck disable=SC2016 # the loop variable expands in the container's shell
+    local img t0 runc_ms runsc_ms bench='i=0; while [ $i -lt 2000 ]; do : >/tmp/f$i; i=$((i+1)); done; git --version'
+    img=$($D inspect -f '{{.Config.Image}}' "$ctr" 2>/dev/null || true)
+    t0=$(now_ms); $D run --rm --entrypoint sh "$img" -c "$bench" >/dev/null 2>&1 || true; runc_ms=$(($(now_ms) - t0))
+    t0=$(now_ms)
+    if $D run --rm --runtime=runsc --entrypoint sh "$img" -c "$bench" >/dev/null 2>&1; then
+      runsc_ms=$(($(now_ms) - t0))
+      slow=$(jq -nc --argjson a "$runc_ms" --argjson b "$runsc_ms" '{runc_ms: $a, runsc_ms: $b, slowdown: (if $a > 0 then ($b / $a * 100 | round / 100) else null end)}')
+      if [ -n "${CCDASH_ENV_FILE:-}" ]; then
+        { grep -v '^CCDASH_RUNTIME=' "$CCDASH_ENV_FILE" 2>/dev/null; echo CCDASH_RUNTIME=runsc; } >"$CCDASH_ENV_FILE.tmp" && mv "$CCDASH_ENV_FILE.tmp" "$CCDASH_ENV_FILE"
+        add gvisor pass "runsc works (runc ${runc_ms} ms, runsc ${runsc_ms} ms); CCDASH_RUNTIME=runsc written, recreate the container to use it"
+      else add gvisor pass "runsc works (runc ${runc_ms} ms, runsc ${runsc_ms} ms); not enabled, CCDASH_ENV_FILE is not set"; fi
+    else add gvisor warn "runsc could not start a container; staying on runc"; fi
+  fi
+
+  local json
+  json=$(printf '%s\n' "${checks[@]}" | jq -s --argjson slow "$slow" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{ts: $ts, ok: (all(.[]; .status != "warn")), mismatches: [.[] | select(.status == "warn")], gvisor: $slow, checks: .}')
+  if ! { printf '%s\n' "$json" >"$out.tmp" && mv "$out.tmp" "$out"; } 2>/dev/null; then echo "ccd: cannot write $out (not root?); results are shown but not stored" >&2; fi
+  # a copy for the dashboard badge (it cannot read the host's /var/log)
+  # shellcheck disable=SC2016 # $HOME expands in the container
+  printf '%s\n' "$json" | $D exec -i -u ccd "$ctr" sh -c 'umask 027; cat >"$HOME/.ccdash/selftest.json.tmp" && mv "$HOME/.ccdash/selftest.json.tmp" "$HOME/.ccdash/selftest.json"' >/dev/null 2>&1 || true
+  jq -r '.checks[] | "\(.status | ascii_upcase | .[0:4])  \(.check)  \(.detail)"' <<<"$json"
+  jq -r 'if .ok then "selftest: all checks passed or skipped" else "selftest: \(.mismatches | length) warning(s), see '"$out"' (the install is not affected)" end' <<<"$json"
+}
+
+usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] <owner/repo> | pull <project> | identity <name> <email> | identity --from-host | login | passwd [--totp|--no-totp] | doctor --live" >&2; exit 2; }
 case "${1:-}" in
   ls) run ccd-session ls ;;
   attach) [ $# -eq 2 ] || usage; run ccd-session attach "$2" ;;
@@ -31,5 +92,6 @@ case "${1:-}" in
     if [ "$#" -le 2 ] && { [ "$#" -lt 2 ] || [ "$2" = --totp ] || [ "$2" = --no-totp ]; }; then
       $D exec -it -u web ccdash node /opt/ccdash/dashboard/ccdash-passwd.js "${@:2}"
     else usage; fi ;;
+  doctor) if [ $# -eq 2 ] && [ "$2" = --live ]; then doctor_live; else usage; fi ;;
   *) usage ;;
 esac

@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+# ccd-doctor: the in-container half of `ccd doctor --live` (the host half is bin/ccd). Runs as ccd.
+# Creates the scratch project /workspace/_selftest, starts a real conversation in the project's tmux session
+# with extra hooks (--settings) that record every payload, drives it and prints one JSON line per check on
+# stdout: {"check", "status": pass|warn|skip, "detail"}. A mismatch is a warn, never a failure: this script
+# exits 0 whatever it finds. Progress goes to stderr. The scratch project, its transcripts and state records
+# are removed on exit.
+# Env (all optional; the tests set them): CCDASH_WS, CCDASH_TMUX, CCDASH_FIXTURES (2.1.317 payload fixtures),
+# CCDASH_DOCTOR_WAIT (seconds per wait, 60), CCDASH_DOCTOR_ESC_WAIT (75: idle_prompt fires after ~60 s),
+# CCDASH_DOCTOR_HOOK_TIMEOUT (5), CCDASH_DOCTOR_SETTLE (3), CCDASH_DOCTOR_DIALOG_RE (in-REPL dialog text),
+# CCDASH_USAGE_DIR, CCDASH_STATE, CCDASH_FALLBACK_FLAG, CCDASH_CLAUDE_HOME.
+set -uo pipefail
+WS=${CCDASH_WS:-/workspace}
+SOCK=${CCDASH_TMUX:-/run/ccdash/tmux.sock}
+FIX=${CCDASH_FIXTURES:-/usr/local/share/ccdash/fixtures/2.1.317}
+W=${CCDASH_DOCTOR_WAIT:-60}
+ESC_W=${CCDASH_DOCTOR_ESC_WAIT:-75}
+HT=${CCDASH_DOCTOR_HOOK_TIMEOUT:-5}
+SETTLE=${CCDASH_DOCTOR_SETTLE:-3}
+DIALOG_RE=${CCDASH_DOCTOR_DIALOG_RE:-Do you want to|Allow this|fall-through: asking user}
+USAGE_DIR=${CCDASH_USAGE_DIR:-$HOME/.ccdash/usage}
+STATE_DIR=${CCDASH_STATE:-$HOME/.ccdash/sessions}
+FLAG=${CCDASH_FALLBACK_FLAG:-$HOME/.ccdash/usage-fallback.enabled}
+CHOME=${CCDASH_CLAUDE_HOME:-$HOME/.claude}
+NAME=_selftest
+DIR=$WS/$NAME
+S=claude-$NAME
+KNOWN_TOOLS=" bm_search bm_read bm_write bm_edit bm_find bm_list bm_context bm_project bm_move bm_delete bm_schema bm_man "
+
+if ! { command -v jq && command -v tmux && command -v claude; } >/dev/null; then
+  echo "ccd-doctor: needs jq, tmux and claude" >&2
+  exit 1
+fi
+t() { tmux -S "$SOCK" "$@"; }
+log() { echo "ccd-doctor: $*" >&2; }
+res() { jq -nc --arg c "$1" --arg s "$2" --arg d "${3:-}" '{check: $c, status: $s, detail: $d}'; }
+
+T=$(mktemp -d) || exit 1
+EV=$T/events.jsonl
+: >"$EV"
+sid=
+# shellcheck disable=SC2317 # runs from the EXIT trap
+cleanup() {
+  t kill-session -t "=$S" 2>/dev/null
+  rm -rf "${DIR:?}" "${T:?}"
+  rm -rf "${CHOME:?}/projects/${DIR//[\/._]/-}" # Claude's per-project transcript dir
+  # state and usage records of the scratch conversations (the first and the resumed one)
+  local f s
+  for f in "$STATE_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    [ "$(jq -r '.project // empty' "$f" 2>/dev/null)" = "$DIR" ] || continue
+    s=$(basename "$f" .json)
+    rm -f "${f:?}" "${USAGE_DIR:?}/$s.json"
+  done
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+
+# ---- scratch project and the recording settings ------------------------------------------------------
+rm -rf "${DIR:?}"
+mkdir -p "$DIR" || { res scratch_project warn "cannot create $DIR"; exit 0; }
+echo allow >"$T/mode"
+cat >"$T/rec.sh" <<EOS
+#!/bin/bash
+jq -c . >>"$EV"
+EOS
+# PermissionRequest: record, then answer as $T/mode says. fall = print nothing (the REPL asks itself);
+# sleep = outlive the hook timeout (timeout case).
+cat >"$T/perm.sh" <<EOS
+#!/bin/bash
+in=\$(cat); printf '%s' "\$in" | jq -c . >>"$EV"
+case \$(cat "$T/mode") in
+  allow) echo '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}' ;;
+  deny) echo '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"ccd doctor"}}}' ;;
+  sleep) exec sleep 120 ;;
+esac
+exit 0
+EOS
+cat >"$T/status.sh" <<EOS
+#!/bin/bash
+cat >"$T/statusline.json"; echo selftest
+EOS
+chmod +x "$T"/*.sh
+hook() { jq -nc --arg c "$1" '[{hooks: [{type: "command", command: $c}]}]'; }
+jq -n --argjson r "$(hook "$T/rec.sh")" --argjson p "$(jq -nc --arg c "$T/perm.sh" --argjson t "$HT" '[{hooks: [{type: "command", command: $c, timeout: $t}]}]')" \
+  --arg s "$T/status.sh" '
+  {hooks: {SessionStart: $r, UserPromptSubmit: $r, PostToolUse: $r, Stop: $r, Notification: $r, SubagentStart: $r,
+           SubagentStop: $r, SessionEnd: $r, PermissionRequest: $p},
+   statusLine: {type: "command", command: $s}}' >"$T/settings.json"
+
+# ---- driving the conversation ---------------------------------------------------------------------------
+screen() { t capture-pane -p -t "=$S:" -S -300 2>/dev/null; }
+ev_count() { local n; n=$(grep -c "\"hook_event_name\":\"$1\"" "$EV" 2>/dev/null) || true; echo "${n:-0}"; }
+# until_ CMD...: polls every 0.2 s for up to $WAIT_S (default $W) seconds
+until_() { local n=$((${WAIT_S:-$W} * 5)); while [ "$n" -gt 0 ]; do "$@" && return 0; sleep 0.2; n=$((n - 1)); done; return 1; }
+more_than() { [ "$(ev_count "$1")" -gt "$2" ]; }
+sees() { screen | grep -Eq -- "$1"; }
+send() { t send-keys -t "=$S:" -l -- "$1"; sleep 0.3; t send-keys -t "=$S:" Enter; }
+key() { t send-keys -t "=$S:" "$@"; }
+launch() { # extra claude args
+  t kill-session -t "=$S" 2>/dev/null
+  # the broker socket is pointed nowhere so the managed permission hook falls through at once
+  t new-session -d -s "$S" -c "$DIR" -e CCDASH_BROKER_SOCK=/nonexistent -e CCDASH_SELFTEST=1 \
+    bash -lc 'claude --settings "$@"; exec bash -l' _ "$T/settings.json" "$@" || return 1
+  t set -t "=$S:" @project_dir "$DIR" 2>/dev/null
+}
+turn() { # prompt: sends it and waits for the turn to end (Stop)
+  local n; n=$(ev_count Stop)
+  send "$1"
+  until_ more_than Stop "$n"
+}
+first_event() { # name [jq filter]: first captured payload of that event
+  jq -c "select(.hook_event_name == \"$1\") | select(${2:-true})" "$EV" | head -n1
+}
+shape_diff() { # fixture-file payload-json -> "missing:a,extra:b,type:c" or nothing
+  jq -rn --slurpfile f "$1" --argjson p "$2" '
+    ($f[0] | del(.synthetic) | map_values(type)) as $a | ($p | del(.synthetic) | map_values(type)) as $b |
+    ([($a | keys[]) as $k | select($b[$k] == null) | "missing:\($k)"]
+     + [($b | keys[]) as $k | select($a[$k] == null) | "extra:\($k)"]
+     + [($a | keys[]) as $k | select($b[$k] != null and $b[$k] != $a[$k]) | "type:\($k)"]) | join(",")'
+}
+dialog_check() { # check-name answer(esc|yes): the mode is already set; expects the REPL's own dialog, then answers it
+  local name=$1 answer=$2 n p
+  n=$(ev_count Stop); p=$(ev_count PermissionRequest)
+  send "Run this exact shell command with the Bash tool and nothing else: touch $T/ok-$name . Then reply done. /perm"
+  if WAIT_S=$((W + HT)) until_ sees "$DIALOG_RE"; then
+    if [ "$answer" = esc ]; then key Escape; else key y; sleep 0.2; key Enter; fi
+    until_ more_than Stop "$n"
+    if [ "$(ev_count PermissionRequest)" -gt "$p" ]; then res "$name" pass "hook produced no usable decision, the REPL showed its own dialog"
+    else res "$name" warn "dialog seen but no PermissionRequest hook ran"; fi
+  else
+    key Escape; sleep 1
+    res "$name" warn "no in-REPL dialog within $((W + HT))s; the dashboard must answer through send-keys"
+  fi
+}
+
+# ---- conversation 1 ---------------------------------------------------------------------------------------
+log "starting a conversation in $DIR"
+launch || { res conversation warn "tmux could not start the scratch conversation"; exit 0; }
+if ! until_ more_than SessionStart 0; then
+  key Enter # a new folder may show the trust dialog first; Enter takes its default (trust)
+  until_ more_than SessionStart 0
+fi
+sid=$(first_event SessionStart | jq -r '.session_id // empty')
+if [ -z "$sid" ]; then
+  res conversation warn "no SessionStart hook within ${W}s; nothing else could be checked"
+  exit 0
+fi
+
+# allow: also the first tool use (PostToolUse) and the first statusline payload
+echo allow >"$T/mode"
+turn "Run this exact shell command with the Bash tool and nothing else: touch $T/ok-allow . Then reply done. /perm /tool /status"
+if [ "$(ev_count PermissionRequest)" -gt 0 ] && { [ -e "$T/ok-allow" ] || sees 'permission: allow'; }; then
+  res permission_allow pass "hook allow ran the tool without a dialog"
+else res permission_allow warn "allow was not honoured (no PermissionRequest hook, or the command did not run)"; fi
+
+echo deny >"$T/mode"
+p=$(ev_count PermissionRequest)
+ended=0
+turn "Run this exact shell command with the Bash tool and nothing else: touch $T/ok-deny . Then reply done. /perm" && ended=1
+if [ "$(ev_count PermissionRequest)" -gt "$p" ] && [ ! -e "$T/ok-deny" ] && [ "$ended" = 1 ]; then
+  res permission_deny pass "hook deny stopped the tool and the turn ended"
+else res permission_deny warn "deny was not honoured (hook did not run, the command ran, or the turn did not end)"; fi
+
+echo fall >"$T/mode"
+dialog_check permission_fallthrough yes
+echo sleep >"$T/mode"
+dialog_check permission_timeout esc
+
+# Esc / idle_prompt
+echo allow >"$T/mode"
+s0=$(ev_count Stop); i0=$(ev_count Notification)
+send "Run this exact shell command with the Bash tool and nothing else: sleep 120 . /long"
+sleep "$SETTLE"
+key Escape
+# shellcheck disable=SC2317 # called through until_
+esc_hit() { more_than Stop "$s0" || more_than Notification "$i0"; }
+if WAIT_S=$ESC_W until_ esc_hit; then
+  d=
+  more_than Stop "$s0" && d="Stop fired"
+  if more_than Notification "$i0"; then d="${d:+$d and }idle_prompt Notification fired"; fi
+  res esc_idle_prompt pass "after Esc: $d"
+else res esc_idle_prompt warn "neither Stop nor idle_prompt within ${ESC_W}s of Esc; only the pane-activity timeout marks the card idle"; fi
+sleep 1
+
+# SessionStart source compact
+send "/compact"
+sleep 1
+if sees 'Not enough messages'; then
+  res sessionstart_compact skip "nothing to compact yet"
+elif WAIT_S=$W until_ grep -q '"source":"compact"' "$EV"; then res sessionstart_compact pass "SessionStart carries source compact"
+else res sessionstart_compact warn "no SessionStart with source compact after /compact"; fi
+
+# Basic Memory from a subagent: tool names and no permission prompt
+echo deny >"$T/mode" # a prompt would be denied (and recorded) instead of hanging the check
+a=$(ev_count SubagentStart)
+turn "Use the Task tool to start a subagent. The subagent must call mcp__basic-memory__bm_write (project main, note selftest/doctor-$$, content 'ccdash selftest') then mcp__basic-memory__bm_read to read it back, then mcp__basic-memory__bm_delete to remove it. Reply done. /memsub"
+names=$(jq -r 'select(.hook_event_name == "PostToolUse") | .tool_name // empty | select(startswith("mcp__basic-memory__")) | ltrimstr("mcp__basic-memory__")' "$EV" | sort -u | tr '\n' ' ')
+unknown=
+for n in $names; do [[ $KNOWN_TOOLS == *" $n "* ]] || unknown="$unknown $n"; done
+if [ -z "$names" ]; then res memory_tool_names warn "no mcp__basic-memory__* tool call seen"
+elif [ -n "$unknown" ] || [[ " $names " != *" bm_read "* ]] || [[ " $names " != *" bm_write "* ]]; then
+  res memory_tool_names warn "saw: $names; unexpected:${unknown:- none}; bm_read and bm_write are both needed"
+else res memory_tool_names pass "saw: $names"; fi
+prompted=$(jq -r 'select(.hook_event_name == "PermissionRequest") | .tool_name // empty | select(startswith("mcp__basic-memory__"))' "$EV" | head -n1)
+if [ -n "$prompted" ]; then res memory_subagent_noprompt warn "$prompted asked for permission"
+elif [ -z "$names" ] || [ "$(ev_count SubagentStart)" -le "$a" ]; then res memory_subagent_noprompt warn "no subagent memory call was seen, so no-prompt access is unconfirmed"
+else res memory_subagent_noprompt pass "a subagent read and wrote memory with no permission prompt"; fi
+
+# rate_limits: the status line payload, or the statusline hook's own usage record
+rl=
+for f in "$T/statusline.json" "$USAGE_DIR/$sid.json"; do
+  [ -s "$f" ] || continue
+  if jq -e '(.rate_limits.five_hour.used_percentage // .rate_limits.seven_day.used_percentage) | type == "number"' "$f" >/dev/null 2>&1; then rl=yes; break; fi
+  rl=no
+done
+case $rl in
+  yes) res rate_limits pass "status line payload carries rate_limits" ;;
+  no)
+    fb=
+    if mkdir -p "$(dirname "$FLAG")" && : >"$FLAG"; then fb="; /usage fallback turned on"; fi
+    res rate_limits warn "status line payload has no rate_limits (plan without them?)$fb" ;;
+  *) res rate_limits skip "no status line payload was captured" ;;
+esac
+
+# ---- payload shapes against the fixtures ------------------------------------------------------------------
+bad=
+seen=0
+for pair in SessionStart:SessionStart:true UserPromptSubmit:UserPromptSubmit:true Stop:Stop:true PermissionRequest:PermissionRequest:true \
+            Notification:Notification-idle_prompt:'.notification_type == "idle_prompt"'; do
+  IFS=: read -r ev fx flt <<<"$pair"
+  p=$(first_event "$ev" "$flt")
+  if [ -z "$p" ]; then [ "$ev" = Notification ] || bad="$bad $ev:not-seen"; continue; fi
+  seen=$((seen + 1))
+  d=$(shape_diff "$FIX/$fx.json" "$p" 2>&1) || d="compare-failed"
+  [ -z "$d" ] || bad="$bad $ev:$d"
+done
+if [ -n "$bad" ]; then res hook_payloads warn "differs from the fixtures:$bad"; else res hook_payloads pass "$seen payload shapes match the fixtures"; fi
+p=$(first_event PostToolUse '(.tool_name | startswith("mcp__") | not)')
+if [ -z "$p" ]; then res posttooluse_shape skip "no PostToolUse payload seen"
+else
+  d=$(shape_diff "$FIX/PostToolUse.json" "$p" 2>&1) || d="compare-failed"
+  if [ -z "$d" ]; then res posttooluse_shape pass "matches the fixture"; else res posttooluse_shape warn "differs: $d"; fi
+fi
+
+# ---- --resume ------------------------------------------------------------------------------------------------
+send "/exit"
+until_ more_than SessionEnd 0
+n=$(ev_count SessionStart)
+launch --resume "$sid"
+if WAIT_S=$W until_ more_than SessionStart "$n"; then
+  nsid=$(jq -r 'select(.hook_event_name == "SessionStart") | .session_id' "$EV" | tail -n1)
+  if [ "$nsid" = "$sid" ]; then res resume_keeps_id pass "--resume kept the session id"
+  else res resume_keeps_id pass "--resume gave a new session id (the card is chained through CCDASH_RESUMED_FROM)"; fi
+  send "/exit"; sleep 1
+else res resume_keeps_id warn "no SessionStart after claude --resume $sid"; fi
+exit 0

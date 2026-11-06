@@ -15,6 +15,7 @@ const { createControls } = require('./controls');
 const { MAX_MESSAGE } = require('./broker');
 const github = require('./github');
 const { PushError, defaultPrefs } = require('./push');
+const { readRegular } = require('./safefile');
 
 const MAX_ADD_BODY = 64 * 1024; // prompt <= 4000 chars, up to 6 bytes each when \u-escaped
 
@@ -26,6 +27,7 @@ function defaultServices() {
     tokens: createTokens({ reader }),
     usageDir: usage.DEFAULT_DIR,
     usageFallback: createUsageFallback({ tmux }),
+    selftestFile: '/home/ccd/.ccdash/selftest.json',
     workspace: '/workspace',
     agentsDir: '/home/ccd/.ccdash/agents',
     projectsDir: projects.DEFAULT_PROJECTS_DIR,
@@ -92,6 +94,15 @@ function createApi(svc) {
     const g = usage.gauges({ dir: svc.usageDir, now: Math.floor(svc.now() / 1000), fallback: fb ? fb.latest : null });
     if (g.five_hour.status === 'unknown' && g.seven_day.status === 'unknown') fb?.refresh(); // off unless switched on
     return { ...g, fallback_enabled: !!fb?.enabled() };
+  }
+  // `ccd doctor --live` result (written by the host's ccd into ccd's home); only the warnings are sent.
+  function selftestPayload() {
+    const r = svc.selftestFile ? readRegular(svc.selftestFile, 256 * 1024) : null;
+    let j = null;
+    try { j = r && JSON.parse(r.buf.toString('utf8')); } catch { j = null; }
+    const warn = Array.isArray(j?.mismatches) ? j.mismatches : [];
+    const str = (v) => (typeof v === 'string' ? v.slice(0, 300) : '');
+    return { ts: str(j?.ts), warnings: warn.slice(0, 50).map((m) => ({ check: str(m?.check), detail: str(m?.detail) })) };
   }
   async function tokensPayload(conversation = null) {
     await svc.tokens.refresh(trackedFiles());
@@ -165,6 +176,10 @@ function createApi(svc) {
     if (pathname === '/api/usage') {
       if (!get) return methodNotAllowed();
       return send(res, 200, usagePayload());
+    }
+    if (pathname === '/api/selftest') {
+      if (!get) return methodNotAllowed();
+      return send(res, 200, selftestPayload());
     }
     if (pathname === '/api/tokens') {
       if (!get) return methodNotAllowed();

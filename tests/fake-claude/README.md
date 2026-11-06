@@ -6,7 +6,7 @@ feeding them the fixture payloads from `tests/fixtures/2.1.317/` (session_id and
 to real values; `CLAUDE_PROJECT_DIR` is set). Hooks run with `bash -c`, matched by event name and
 the optional `matcher` regex (tool_name, source, notification_type, reason).
 
-Environment: `FAKE_CLAUDE_FIXTURES` (fixtures dir), `FAKE_CLAUDE_SETTINGS` (default
+`--settings <file>` replaces `FAKE_CLAUDE_SETTINGS` (used by `ccd-doctor`). Environment: `FAKE_CLAUDE_FIXTURES` (fixtures dir), `FAKE_CLAUDE_SETTINGS` (default
 `/etc/claude-code/managed-settings.json`), `FAKE_CLAUDE_TIMEOUT` (seconds per hook, default 5). The session_id is a random UUID per run (so `ccd-session wake` accepts it).
 `FAKE_CLAUDE_HOME` (default `~/.fake-claude`) holds `args.log` (one line per start, the argv) and
 `history/<sid>`, one line per prompt. `--resume <uuid>` prints `resumed <uuid>`, replays the old
@@ -38,6 +38,8 @@ prompt is read with `read -ra`, so cues are plain words, not globs.
 | `/notify idle\|perm` | Notification (idle_prompt or permission_prompt) |
 | `/esc` | Esc interrupt: prints `interrupted` and fires no Stop, then returns to the prompt. This is hypothetical: Claude Code probably does not run Stop on a user Esc, and that is unverified until `ccd doctor --live` checks it against the real CLI. |
 | `/long` | A turn that blocks (prints `working...`), polling stdin for up to 120 s. A lone ESC prints `interrupted`, writes `interrupted` to `events.log`, fires Notification idle_prompt and no Stop, and returns to the prompt (hypothetical like `/esc`: real CLI behaviour is unverified until `ccd doctor --live`). Anything else typed or pasted meanwhile, including bracketed pastes and other escape sequences, is ignored, so a pasted `/exit` does not end it. |
+| `/compact` | SessionStart with `source` `compact` |
+| `/memsub` | A subagent that calls `mcp__basic-memory__bm_write` and `bm_read` (SubagentStart, two PostToolUse, SubagentStop; no PermissionRequest) |
 | `/status` | Runs `statusLine.command` from the settings with statusline.json on stdin, else prints a line derived from the fixture |
 
 Usage and transcripts (off by default):
