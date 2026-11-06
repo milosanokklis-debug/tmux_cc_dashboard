@@ -69,3 +69,9 @@ setup() {
   [ "$status" -eq 0 ]
   [ "$output" = "? · ctx ?%" ]
 }
+
+@test "managed settings deny Bash(tmux:*) and keep the hooks" {
+  f=$ROOT/rootfs/etc/claude-code/managed-settings.json
+  jq -e '.permissions.deny | index("Bash(tmux:*)") != null' "$f" >/dev/null
+  jq -e '.hooks.PermissionRequest and .statusLine' "$f" >/dev/null
+}

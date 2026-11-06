@@ -2,6 +2,20 @@
 set -euo pipefail
 WS=${CCDASH_WS:-/workspace} # overridden only by the tests
 export GIT_TERMINAL_PROMPT=0
+# Hook trust (Phase F speed bump): a repo whose .claude/settings.json or settings.local.json defines
+# hooks is refused (exit 5, a `hooks: <Event,Event>` line) unless CCDASH_TRUST_HOOKS=1 (ccd-onboard sets it
+# from --trust-hooks or the project record). Event names only are ever printed.
+hook_events() { # JSON on stdin -> comma-separated event names when `hooks` is non-empty
+  jq -r 'if (.hooks | type) == "object" then (.hooks | keys | map(gsub("[^A-Za-z0-9_]"; "?")) | join(","))
+    elif .hooks == null or .hooks == [] or .hooks == "" or .hooks == false then empty else "(unrecognised hooks value)" end' 2>/dev/null || true
+}
+refuse_hooks() { # refuse_hooks <names...>: print the union and exit 5
+  local ev; ev=$(printf '%s\n' "$@" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
+  [ -n "$ev" ] || return 0
+  echo "this repo defines hooks ($ev); onboard it with --trust-hooks (UI: \"I trust this repo's hooks\") if you trust it" >&2
+  echo "hooks: $ev"
+  exit 5
+}
 usage() { echo "usage: ccd-project clone <owner/repo> | pull <project>" >&2; exit 2; }
 [ $# -eq 2 ] || usage
 case $1 in clone | pull) ;; *) usage ;; esac
@@ -33,6 +47,13 @@ if [ "$1" = pull ]; then
   if ! up=$(git -C "$dir" rev-parse --verify --quiet '@{u}' 2>/dev/null); then
     if [ -z "$old" ]; then echo "nothing to pull yet; origin has no commits on this branch"; exit 0; fi
     echo "$proj has no upstream branch; resolve it in a shell" >&2; exit 3
+  fi
+  if [ "${CCDASH_TRUST_HOOKS:-}" != 1 ] && [ "$up" != "$old" ]; then # what the merge would bring in
+    ev=()
+    for f in settings.json settings.local.json; do
+      ev+=("$(git -C "$dir" show "$up:.claude/$f" 2>/dev/null | hook_events || true)")
+    done
+    refuse_hooks "${ev[@]}"
   fi
   [ -z "$old" ] || echo "old ${old:0:7}"
   if [ -z "$old" ] || { [ "$up" != "$old" ] && git -C "$dir" merge-base --is-ancestor "$old" "$up"; }; then
@@ -67,5 +88,12 @@ if [ -d "$dest" ]; then
   echo "$dest exists with a different origin" >&2; exit 3
 fi
 git clone -- "https://github.com/$repo.git" "$dest"
+if [ "${CCDASH_TRUST_HOOKS:-}" != 1 ]; then # nothing has run in the clone yet; remove it (it did not exist before)
+  ev=()
+  for f in settings.json settings.local.json; do
+    [ -f "$dest/.claude/$f" ] && ev+=("$(hook_events < "$dest/.claude/$f")")
+  done
+  if [ "${#ev[@]}" -gt 0 ] && [ -n "$(printf '%s' "${ev[@]}")" ]; then rm -rf "$dest"; refuse_hooks "${ev[@]}"; fi
+fi
 head=$(git -C "$dest" rev-parse --verify -q HEAD || true)
 [ -z "$head" ] || echo "head $head"

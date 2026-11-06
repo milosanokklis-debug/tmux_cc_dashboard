@@ -117,14 +117,16 @@ async function addProject(body, deps) {
     if (prompt.length > MAX_PROMPT) throw new HttpError(400, `prompt is longer than ${MAX_PROMPT} characters`);
     if (prompt.includes('\0')) throw new HttpError(400, 'prompt contains a NUL byte');
   }
+  if (body.trustHooks !== undefined && typeof body.trustHooks !== 'boolean') throw new HttpError(400, 'trustHooks must be true or false');
+  const trust = body.trustHooks === true;
   const token = body.token === undefined || body.token === null || body.token === '' ? null : body.token;
   if (token !== null) github.validateToken(token);
 
   const key = `${owner}/${repo}`.toLowerCase();
-  const settings = { prompt: prompt || '', token: token || '' };
+  const settings = { prompt: prompt || '', token: token || '', trust };
   const running = inFlight.get(key);
   if (running) {
-    if (running.prompt !== settings.prompt || running.token !== settings.token) {
+    if (running.prompt !== settings.prompt || running.token !== settings.token || running.trust !== settings.trust) {
       throw new HttpError(409, 'a request for this repo is already in progress with different settings');
     }
     return running.job; // identical request: shares the first call's result
@@ -136,8 +138,9 @@ async function addProject(body, deps) {
       if (!canPush) warning = 'token cannot push';
       (deps.saveToken || github.saveToken)({ owner, token });
     }
-    const op = await deps.runOp({ argv: ['ccd-onboard', `${owner}/${repo}`] });
+    const op = await deps.runOp({ argv: ['ccd-onboard', ...(trust ? ['--trust-hooks'] : []), `${owner}/${repo}`] });
     if (op.timedOut) throw new HttpError(504, 'clone timed out', { log: op.log });
+    refuseHooks(op);
     if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'clone refused', { log: op.log });
     if (op.rc !== 0) throw new HttpError(502, 'clone failed', { log: op.log });
     const session = await startSession({ runFile: deps.runFile, name: repo, prompt });
@@ -145,6 +148,14 @@ async function addProject(body, deps) {
   })();
   inFlight.set(key, { job, ...settings });
   try { return await job; } finally { if (inFlight.get(key)?.job === job) inFlight.delete(key); }
+}
+
+// ccd-onboard / ccd-project exit 5: the repo defines hooks and was not trusted. Only event names leave
+// the container (`hooks: A,B`), never the commands.
+function refuseHooks(op) {
+  if (op.rc !== 5) return;
+  const m = /^hooks: ([A-Za-z0-9_?,]+)$/m.exec(op.log || '');
+  throw new HttpError(409, 'repo-has-hooks', { hooks: m ? m[1].split(',').filter(Boolean) : [] });
 }
 
 const lastLine = (log) => String(log || '').trim().split('\n').pop().trim();
@@ -166,6 +177,7 @@ async function pullProject({ name, deps }) {
     const claude = stateOf(name, { workspace: deps.workspace, panes: await deps.panes(), table: deps.procTable() }).state === 'claude';
     const op = await deps.runOp({ argv: ['ccd-onboard', rec.repo], timeoutMs: 5 * 60 * 1000 });
     if (op.timedOut) throw new HttpError(504, 'pull timed out', { log: op.log });
+    refuseHooks(op);
     if (op.rc === 3) throw new HttpError(409, lastLine(op.log) || 'pull refused', { log: op.log });
     const full = /^head ([0-9a-f]{40,64})$/m.exec(op.log || '');
     const unborn = op.rc === 0 && !full && /^nothing to pull yet/m.test(op.log || '');

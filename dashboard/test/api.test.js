@@ -341,6 +341,23 @@ test('POST /api/projects: clone failure -> 502 with log, no session started; tim
   assert.strictEqual((await r2.json()).log, 'slow');
 });
 
+test('POST /api/projects: a repo with hooks -> 409 repo-has-hooks with event names only; trustHooks passes --trust-hooks', async (t) => {
+  const ops = [];
+  const svc = h.fakeServices({
+    runOp: async (o) => { ops.push(o.argv); return o.argv.includes('--trust-hooks') ? { rc: 0, log: '' } : { rc: 5, log: 'this repo defines hooks (PostToolUse,Stop)\nhooks: PostToolUse,Stop\n' }; },
+  });
+  const s = await h.authed(svc);
+  t.after(s.stop);
+  const r = await post(s, '/api/projects', { repo: 'o/r' });
+  assert.strictEqual(r.status, 409);
+  assert.deepStrictEqual(await r.json(), { error: 'repo-has-hooks', hooks: ['PostToolUse', 'Stop'] });
+  assert.deepStrictEqual(svc.calls.runFile, []); // no session for a refused repo
+  const ok = await post(s, '/api/projects', { repo: 'o/r', trustHooks: true });
+  assert.strictEqual(ok.status, 200);
+  assert.deepStrictEqual(ops, [['ccd-onboard', 'o/r'], ['ccd-onboard', '--trust-hooks', 'o/r']]);
+  for (const bad of ['yes', 1, null, 'true']) assert.strictEqual((await post(s, '/api/projects', { repo: 'o/r', trustHooks: bad })).status, 400);
+});
+
 test('POST /api/projects: the same repo twice at once shares ONE clone and one session start', async (t) => {
   let release;
   const gate = new Promise((r) => { release = r; });

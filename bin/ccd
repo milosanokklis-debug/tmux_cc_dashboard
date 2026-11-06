@@ -3,12 +3,16 @@ set -euo pipefail
 # $D may contain spaces (e.g. "sudo docker"); it is left unquoted on purpose.
 D=${CCDASH_DOCKER:-docker}
 run() { local t=-i; [ -t 0 ] && t=-it; $D exec $t -u ccd ccdash "$@"; }
-usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone <owner/repo> | pull <project> | identity <name> <email> | identity --from-host | login | passwd [--totp|--no-totp]" >&2; exit 2; }
+usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] <owner/repo> | pull <project> | identity <name> <email> | identity --from-host | login | passwd [--totp|--no-totp]" >&2; exit 2; }
 case "${1:-}" in
   ls) run ccd-session ls ;;
   attach) [ $# -eq 2 ] || usage; run ccd-session attach "$2" ;;
   wake) [ $# -eq 2 ] || usage; run ccd-session wake "$2" ;;
-  clone) [ $# -eq 2 ] || usage; run ccd-onboard "$2" ;;
+  clone | onboard)
+    shift
+    [ "${1:-}" != --trust-hooks ] || { trust=--trust-hooks; shift; }
+    [ $# -eq 1 ] || usage
+    run ccd-onboard ${trust:+"$trust"} "$1" ;;
   pull) [ $# -eq 2 ] || usage; run ccd-project pull "$2" ;;
   identity)
     if [ $# -eq 2 ] && [ "$2" = --from-host ]; then

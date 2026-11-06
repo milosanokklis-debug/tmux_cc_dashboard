@@ -8,6 +8,8 @@ services:
     image: ccdash:${CCDASH_VERSION:?set CCDASH_VERSION in .env}
     container_name: ccdash
     restart: unless-stopped
+    # gVisor: off unless CCDASH_RUNTIME=runsc is set in .env; `ccd doctor --live` decides (NOTES.md, Phase F: gVisor)
+    runtime: ${CCDASH_RUNTIME:-}
     read_only: true
     environment:
       CCDASH_ORIGIN: ${CCDASH_ORIGIN:-}

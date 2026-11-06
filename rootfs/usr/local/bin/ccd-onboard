@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# ccd-onboard <owner/repo>: clone, or pull when the folder is already that repo, then record
-# {repo, head, ts} (no head for an empty repo) in $CCDASH_PROJECTS/<project>.json (existing keys are kept).
+# ccd-onboard [--trust-hooks] <owner/repo>: clone, or pull when the folder is already that repo, then record
+# {repo, head, ts[, trustHooks]} (no head for an empty repo) in $CCDASH_PROJECTS/<project>.json (existing keys are kept).
 set -euo pipefail
 WS=${CCDASH_WS:-/workspace} # overridden only by the tests
 PROJECTS=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}
-[ $# -eq 1 ] || { echo "usage: ccd-onboard <owner/repo>" >&2; exit 2; }
+# A repo that defines hooks in .claude/settings*.json is refused (exit 5, "hooks: <events>" on stdout)
+# unless --trust-hooks is given or an earlier onboarding was trusted (trustHooks in the record).
+trust=0
+if [ "${1:-}" = --trust-hooks ]; then trust=1; shift; fi
+[ $# -eq 1 ] || { echo "usage: ccd-onboard [--trust-hooks] <owner/repo>" >&2; exit 2; }
 repo=$1
 if ! [[ $repo =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || [[ $repo == *..* ]] || [[ ${repo#*/} == .* ]]; then
   echo "invalid repo" >&2; exit 2
@@ -12,6 +16,10 @@ fi
 proj=${repo#*/}
 dir=$WS/$proj
 cp=$(dirname "$0")/ccd-project
+rec=$PROJECTS/$proj.json
+if [ "$trust" = 0 ] && [ -e "$dir/.git" ] && [ "$(jq -r '.trustHooks // false' "$rec" 2>/dev/null || true)" = true ]; then trust=1; fi
+CCDASH_TRUST_HOOKS=$trust
+export CCDASH_TRUST_HOOKS
 if [ -e "$dir/.git" ]; then
   origin=$(git -C "$dir" config --get remote.origin.url 2>/dev/null || true)
   norm=${origin%/}; norm=${norm%.git}; norm=${norm%/}
@@ -28,7 +36,8 @@ f=$PROJECTS/$proj.json
 cur=$(jq -c 'if type == "object" then . else {} end' "$f" 2>/dev/null) || cur='{}'
 [ -n "$cur" ] || cur='{}'
 tmp=$f.tmp.$$
-jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" \
-  '$cur + {repo: $repo, ts: $ts} | if $head == "" then del(.head) else .head = $head end' > "$tmp"
+jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" --argjson trust "$trust" \
+  '$cur + {repo: $repo, ts: $ts} | if $head == "" then del(.head) else .head = $head end
+   | if $trust == 1 then .trustHooks = true else . end' > "$tmp"
 mv "$tmp" "$f"
 [ -z "$head" ] || echo "head $head"
