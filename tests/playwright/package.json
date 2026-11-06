@@ -1,0 +1,13 @@
+{
+  "name": "ccdash-playwright-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Phone-viewport browser tests for the ccdash test stack (tests/stack/phase-c.sh runs them in a container). playwright must match the tag of the base image in the Dockerfile.",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 specs/ui.test.js specs/push.test.js"
+  },
+  "dependencies": {
+    "http_ece": "1.2.0",
+    "playwright": "1.65.0"
+  }
+}

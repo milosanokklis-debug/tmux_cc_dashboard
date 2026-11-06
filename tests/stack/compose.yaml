@@ -2,6 +2,9 @@
 # prebuilt image with the fake claude, a loopback port (@IMAGE@ and @PORT@ are filled in by the script,
 # because sudo does not pass environment variables on to Docker) and its own volumes
 # (compose prefixes them with the project name, ccdashtest-*). Never the live ccdash volumes.
+# Lines ending in "# phase-c" are only for phase-c.sh (approval and close waits, a fast reconciler, and
+# the test push service's CA as a compose config file, so the read-only dashboard trusts it); phase-b.sh
+# deletes them. The WAIT placeholder is CCDASH_APPROVAL_WAIT, the CA one the path of the CA certificate.
 services:
   ccdash:
     image: @IMAGE@
@@ -10,6 +13,10 @@ services:
       FAKE_CLAUDE_TIMEOUT: "5"
       CCDASH_QUIET_AFTER: "5"
       CCDASH_IDLE_FLAG: "5"
+      CCDASH_APPROVAL_WAIT: "@WAIT@" # phase-c
+      CCDASH_CLOSE_WAIT: "3" # phase-c
+      CCDASH_RECONCILE_MS: "500" # phase-c
+      NODE_EXTRA_CA_CERTS: /etc/ccdash-test/push-ca.pem # phase-c
     tmpfs:
       - /run:mode=0755,exec
       - /tmp:mode=1777
@@ -20,10 +27,16 @@ services:
       - git:/var/lib/ccdash-git
     ports:
       - "127.0.0.1:@PORT@:7690"
+    configs: # phase-c
+      - source: pushca # phase-c
+        target: /etc/ccdash-test/push-ca.pem # phase-c
     cap_drop: [ALL]
     cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER, KILL]
     security_opt:
       - no-new-privileges:true
+configs: # phase-c
+  pushca: # phase-c
+    file: @CA@ # phase-c
 volumes:
   home:
   workspace:

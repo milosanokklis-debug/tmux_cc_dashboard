@@ -5,6 +5,13 @@
 # loaded before web ever connects; otherwise web's first client is refused.
 export HOME=/home/ccd
 export CCDASH_TMUX=/run/ccdash/tmux.sock
+# s6 services start without the container environment. The hooks inside Claude read
+# CCDASH_APPROVAL_WAIT (permission.sh), so pass on that one variable; not the whole environment,
+# because every command Claude runs inherits it.
+if [ -r /run/s6/container_environment/CCDASH_APPROVAL_WAIT ]; then
+  CCDASH_APPROVAL_WAIT=$(cat /run/s6/container_environment/CCDASH_APPROVAL_WAIT)
+  export CCDASH_APPROVAL_WAIT
+fi
 (
   i=0
   while [ "$i" -lt 300 ]; do
