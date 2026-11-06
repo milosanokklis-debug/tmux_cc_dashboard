@@ -27,6 +27,8 @@ jobs:
           node-version: 22
       - name: dashboard tests
         run: cd dashboard && npm ci && npm test
+      - name: docs check
+        run: tests/docs-check.sh
       - name: replay fixtures
         run: tests/replay-fixtures.sh
       - name: build main image

@@ -30,3 +30,28 @@ setup() { ROOT=$(cd "$BATS_TEST_DIRNAME/../.." && pwd); }
   [ "$status" -ne 0 ]
   [[ $output == *"FAIL Stop"* ]]
 }
+
+@test "replay fails and prints a diff when an expected file changed" {
+  cp -r "$ROOT/tests/replay/expected" "$BATS_TEST_TMPDIR/exp"
+  echo "extra line" >>"$BATS_TEST_TMPDIR/exp/state.txt"
+  REPLAY_EXPECTED=$BATS_TEST_TMPDIR/exp run "$ROOT/tests/replay-fixtures.sh"
+  [ "$status" -ne 0 ]
+  [[ $output == *"FAIL state diff: state.txt"* ]]
+  [[ $output == *"+extra line"* || $output == *"-extra line"* ]]
+}
+
+@test "replay fails when the expected file is missing" {
+  mkdir "$BATS_TEST_TMPDIR/exp"
+  REPLAY_EXPECTED=$BATS_TEST_TMPDIR/exp run "$ROOT/tests/replay-fixtures.sh"
+  [ "$status" -ne 0 ]
+  [[ $output == *"FAIL state diff"* ]]
+}
+
+@test "REPLAY_UPDATE=1 regenerates the expected file, which then passes" {
+  export REPLAY_EXPECTED=$BATS_TEST_TMPDIR/exp
+  REPLAY_UPDATE=1 run "$ROOT/tests/replay-fixtures.sh"
+  [ "$status" -eq 0 ]
+  cmp "$ROOT/tests/replay/expected/state.txt" "$BATS_TEST_TMPDIR/exp/state.txt"
+  run "$ROOT/tests/replay-fixtures.sh"
+  [ "$status" -eq 0 ]
+}

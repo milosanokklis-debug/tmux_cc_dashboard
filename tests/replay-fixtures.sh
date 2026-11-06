@@ -7,6 +7,7 @@ fixtures=${FIXTURES_DIR:-$root/tests/fixtures/2.1.317}
 settings=${SETTINGS:-$root/rootfs/etc/claude-code/managed-settings.json}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+expected=${REPLAY_EXPECTED:-$root/tests/replay/expected}
 # Hooks write only under $HOME/.ccdash; TMUX_PANE stays unset so they never touch tmux.
 export HOME=$tmp/home CCDASH_TMUX=$tmp/none.sock CLAUDE_PROJECT_DIR=/workspace/_h2probe
 unset TMUX_PANE
@@ -42,4 +43,23 @@ for f in "$fixtures"/*.json; do
 done
 # the real SessionStart payload must have produced an agents record
 if [ -z "$(ls "$HOME/.ccdash/agents" 2>/dev/null)" ]; then echo "FAIL no agent record written"; fail=1; fi
+# State diff: one snapshot of $HOME/.ccdash per run (sorted paths, volatile values normalised),
+# compared with the committed tests/replay/expected/state.txt. REPLAY_UPDATE=1 rewrites it.
+snap() {
+  (cd "$HOME/.ccdash" && find . -type f | LC_ALL=C sort | while IFS= read -r x; do
+    echo "== $x"
+    sed -E -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z/<ISO-TS>/g' \
+      -e 's/("ts": )[0-9]+/\1<TS>/g' -e "s#$tmp#<TMP>#g" "$x"
+  done)
+}
+if [ "${REPLAY_UPDATE:-}" = 1 ]; then
+  mkdir -p "$expected" && snap >"$expected/state.txt" && echo "updated $expected/state.txt"
+elif [ ! -f "$expected/state.txt" ]; then
+  echo "FAIL state diff: $expected/state.txt (missing expected file; REPLAY_UPDATE=1 creates it)"; fail=1
+else
+  snap >"$tmp/state.txt"
+  if ! d=$(diff -u "$expected/state.txt" "$tmp/state.txt"); then
+    echo "FAIL state diff: state.txt"; echo "$d"; fail=1
+  fi
+fi
 exit $fail
