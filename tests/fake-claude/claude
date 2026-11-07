@@ -222,7 +222,7 @@ long_turn() {
     [ "$rc" -gt 128 ] && continue
     [ "$rc" -eq 0 ] || return 1
     [ "$c" = $'\e' ] || continue
-    IFS= read -rsn1 -t 0.1 n || return 0 # nothing follows the ESC: a real Esc key
+    IFS= read -rsn1 -t 0.25 n || return 0 # nothing follows the ESC: a real Esc key
     [ "$n" = "[" ] || continue
     seq=
     while IFS= read -rsn1 -t 0.1 n; do seq+=$n; [[ $n == [A-Za-z~] ]] && break; done
