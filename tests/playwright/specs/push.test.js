@@ -95,6 +95,15 @@ async function untilStatus(project, status) {
   }, `${project} is ${status}`);
 }
 
+// Clicks Interrupt and waits for the /interrupt POST, asserting it succeeded; the status check follows separately.
+async function interrupt(project) {
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => /\/interrupt$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST', { timeout: 15000 }),
+    card(page, project).getByTestId('interrupt').click(),
+  ]);
+  assert.ok(res.ok(), `interrupt POST returned ${res.status()} ${await res.text().catch(() => '')}`);
+}
+
 test('enabling notifications in the settings dialog subscribes this browser', async () => {
   await eventually(async () => assert.equal(await card(page, 'pc').getByTestId('prompt').isDisabled(), false), 'pc waiting');
   await openSettings();
@@ -138,7 +147,7 @@ test('a finished turn (working to waiting) produces exactly one push and one not
   await sendPrompt(page, 'pc', `/long ${SECRET}`);
   await untilStatus('pc', 'working');
   await sleep(1500); // let the reconciler see "working" before the turn ends
-  await card(page, 'pc').getByTestId('interrupt').click();
+  await interrupt('pc');
   await eventually(async () => assert.ok(received.length > before), 'push for the finished turn');
   await sleep(2500);
   assert.equal(received.length, before + 1, 'exactly one push for the finished turn');
@@ -162,13 +171,14 @@ test('a pref switched off in the UI stops that push', async () => {
   assert.deepEqual((await config()).prefs, { approval: true, error: true, finished: false });
   await page.locator('#notif-close').click();
   const before = received.length;
+  await untilStatus('pc', 'waiting'); // the server's view, not just the UI, before sending
   await eventually(async () => assert.equal(await card(page, 'pc').getByTestId('prompt').isDisabled(), false), 'pc waiting');
   await sendPrompt(page, 'pc', `/long ${SECRET}`);
   await untilStatus('pc', 'working');
-  await sleep(1500);
-  await card(page, 'pc').getByTestId('interrupt').click();
+  await sleep(1500); // let the reconciler see "working" before the turn ends (as in the test above)
+  await interrupt('pc');
   await untilStatus('pc', 'waiting');
-  await sleep(3000);
+  await sleep(3000); // negative check: a push, if one were wrongly sent, would arrive within this window
   assert.equal(received.length, before, 'no push for a finished turn once that pref is off');
 });
 
