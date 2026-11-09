@@ -8,11 +8,18 @@ setup() {
 
 pin() { sed -n "s/^$2=//p" "$1" | head -1; }
 
-@test "KIT_REF is the same full commit in Dockerfile, .env.example and compose.build.yaml" {
+@test "AC-1.1 KIT_REF is 18ad921e (kit 0.14.0) and the same in Dockerfile, .env.example and compose.build.yaml" {
   e=$(pin "$ROOT/.env.example" KIT_REF)
+  [ "$e" = 18ad921ec9d8b74e295350f876bf5cf1e7f15636 ]
   [[ $e =~ ^[0-9a-f]{40}$ ]]
   [ "$(sed -n 's/^ARG KIT_REF=//p' "$ROOT/Dockerfile")" = "$e" ]
   grep -q "KIT_REF: \${KIT_REF:-$e}" "$ROOT/compose.build.yaml"
+}
+
+@test "AC-1.2 image has gitleaks pinned: GITLEAKS_VERSION ARG and a sha256 check of the download" {
+  v=$(sed -n 's/^ARG GITLEAKS_VERSION=//p' "$ROOT/Dockerfile")
+  [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  grep -qi 'gitleaks.*sha256sum\|sha256sum.*gitleaks\|GITLEAKS_SHA256' "$ROOT/Dockerfile"
 }
 
 @test "SEMGREP_VERSION is the same in Dockerfile, .env.example and compose.build.yaml, and setup.sh copies it" {
