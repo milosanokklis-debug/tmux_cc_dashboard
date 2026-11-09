@@ -75,7 +75,8 @@ RUN chmod 0755 /usr/local/bin/ccd-doctor /usr/local/bin/ccd-session /usr/local/b
  && git config --system credential.useHttpPath true \
  && git config --system --add safe.directory /opt/agent-kit
 
-COPY --from=dashboard-build /opt/ccdash/dashboard /opt/ccdash/dashboard
+# rootless Docker can only map IDs 0-65535, and npm ci in the builder keeps tarball owners (huge uid/gid)
+COPY --from=dashboard-build --chown=0:0 /opt/ccdash/dashboard /opt/ccdash/dashboard
 
 ENV DISABLE_AUTOUPDATER=1 LANG=C.UTF-8 CCDASH_TMUX=/run/ccdash/tmux.sock S6_READ_ONLY_ROOT=1
 ENTRYPOINT ["/init"]

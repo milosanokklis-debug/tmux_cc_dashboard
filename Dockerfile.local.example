@@ -10,7 +10,7 @@
 # and run:
 #   docker compose -f compose.yaml -f compose.local.yaml up -d --build
 # (compose.yaml supplies the image name, so the local build is tagged and run under it).
-ARG CCDASH_VERSION=0.1.0
+ARG CCDASH_VERSION=0.1.1
 FROM ghcr.io/milosanokklis-debug/ccdash:${CCDASH_VERSION}
 
 # The base image has no USER line: it runs as root (s6-overlay /init) and s6 drops privileges per

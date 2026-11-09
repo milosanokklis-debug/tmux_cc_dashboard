@@ -412,6 +412,11 @@ Files: `dashboard/lib/audit.js`, `lib/sessions.js`, `lib/app.js` (sessions route
 - `CCDASH_APPROVAL_WAIT` is passed through from `.env` (`${CCDASH_APPROVAL_WAIT:-}`). An empty value already means 120 everywhere (`broker.js` accepts only positive integers, `permission.sh` uses `:-120`), so no code change. Commented line in `.env.example`.
 - Deferred to Phase I: the real publish (tag `v0.1.0`), making the ghcr package public, and `setup.sh` using the pulled image.
 
+## Release 0.1.1 (rootless Docker owners)
+- Dashboard files are copied with `COPY --chown=0:0`, so they belong to root. Without it, `npm ci` in the builder kept tarball owners with huge uid/gid, and rootless Docker (which maps only 0-65535) could not pull the image.
+- `.github/workflows/image.yml` dry-run has a "Check file owners (rootless Docker)" step: it fails if any file in the smoke image has uid or gid above 65535.
+- Pins bumped to `0.1.1` in `.env.example`, the `Dockerfile.local.example` ARG default and the image.yml header comment.
+
 ## Handoff 2 Phase H (part 1): shared Basic Memory, kit checkout, start gate
 - Pinned `basic-memory==1.0.0` (PyPI latest on 2026-11-06, requires Python >= 3.12; trixie ships 3.13). `BASIC_MEMORY_VERSION` in `.env.example`, build arg in the Dockerfile, compose.build.yaml, CI and tests/stack scripts. Installed in a venv at `/opt/basic-memory` (`python3-venv` added to apt); binary `/opt/basic-memory/bin/basic-memory`.
 - Tool names, read from the 1.0.0 wheel (`@mcp.tool(name=...)` in `basic_memory/mcp/tools/`): `bm_project`, `bm_project_delete`, `bm_search`, `bm_read`, `bm_write`, `bm_edit`, `bm_delete`, `bm_schema`, `bm_find`, `bm_man`, `bm_move`, `bm_list`, `bm_context`. So the Phase A list of `bm_*` names is confirmed, and `bm_move`, `bm_delete`, `bm_schema`, `bm_man` do exist; `bm_project_delete` was missing from it. Ids are `mcp__basic-memory__<tool>`.
