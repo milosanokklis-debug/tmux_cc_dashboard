@@ -34,7 +34,7 @@ for f in "$fixtures"/*.json; do
   ok=1
   while IFS= read -r cmd; do
     # the installed path /usr/local/lib/ccdash is rootfs/usr/local/lib/ccdash in the repo
-    [ -e /usr/local/lib/ccdash ] || cmd=${cmd//\/usr\/local\/lib\/ccdash/$root/rootfs/usr/local/lib/ccdash}
+    [ -e /usr/local/lib/ccdash/hooks ] || cmd=${cmd//\/usr\/local\/lib\/ccdash/$root/rootfs/usr/local/lib/ccdash}
     if ! timeout "${REPLAY_TIMEOUT:-10}" bash -c "$cmd" <"$f" >"$tmp/out" 2>&1; then
       echo "FAIL $name: '$cmd' exited nonzero"; cat "$tmp/out"; ok=0
     fi
