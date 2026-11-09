@@ -5,6 +5,7 @@
 # "<model> · ctx <used_percentage or ?>%". Must never fail Claude: every path exits 0.
 # A hidden helper Claude (CCDASH_HIDDEN=1) records nothing.
 set -uo pipefail
+# shellcheck source=/dev/null
 . "${CCDASH_ACCOUNTS_LIB:-${BASH_SOURCE[0]%/*}/..}/accounts.sh" 2>/dev/null || account_of_config_dir() { echo default; }
 umask 027
 base=${HOME:-/tmp}/.ccdash

@@ -2,6 +2,7 @@
 # Records the conversation state (working, needs_approval, waiting, error, ended) per session id
 # in ~/.ccdash/sessions/<sid>.json. Must never block or fail Claude: every path exits 0.
 set -uo pipefail
+# shellcheck source=/dev/null
 . "${CCDASH_ACCOUNTS_LIB:-${BASH_SOURCE[0]%/*}/..}/accounts.sh" 2>/dev/null || account_of_config_dir() { echo default; }
 # a hidden helper Claude (CCDASH_HIDDEN=1, the /usage fallback) is not a conversation
 if [ "${CCDASH_HIDDEN:-}" = 1 ]; then cat >/dev/null; exit 0; fi
