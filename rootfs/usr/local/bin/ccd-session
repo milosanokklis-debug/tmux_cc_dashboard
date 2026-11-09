@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 WS=${CCDASH_WS:-/workspace} # overridden only by the tests
+# shellcheck source=/dev/null
+. "${CCDASH_ACCOUNTS_LIB:-/usr/local/lib/ccdash}/accounts.sh"
+# shellcheck source=/dev/null
+. "${CCDASH_KIT_LIB:-${CCDASH_ACCOUNTS_LIB:-/usr/local/lib/ccdash}}/kit.sh"
+PROJECTS=${CCDASH_PROJECTS:-${HOME:-/home/ccd}/.ccdash/projects}
 t() { tmux -S "${CCDASH_TMUX:-/run/ccdash/tmux.sock}" "$@"; }
 name_for() { local b=${1##*/}; printf 'claude-%s' "${b//[^[:alnum:]_-]/_}"; }
 # `--` ends option parsing so a prompt beginning with "-" is never read as a claude flag
@@ -16,7 +21,7 @@ tmux_args() { local a; targs=(); for a in "$@"; do [ -n "$a" ] || continue; [[ $
 # ("Failed to connect", "Disconnected", "Not connected", "Needs authentication", "Pending") is refused.
 mcp_gate() {
   local out l status
-  out=$(timeout "${CCDASH_MCP_TIMEOUT:-20}" claude mcp list 2>&1 </dev/null || true)
+  out=$( (account_env "$1" && timeout "${CCDASH_MCP_TIMEOUT:-20}" claude mcp list 2>&1 </dev/null) || true)
   while IFS= read -r l; do
     [[ $l == 'basic-memory: '* && $l == *' - '* ]] || continue
     status=${l##* - }
@@ -27,10 +32,17 @@ mcp_gate() {
   exit 7
 }
 # Prints the project's tmux session name, creating the session if it is missing. $1 project,
-# $2 dir, $3 "window" to add a window when the session exists (wake), then the command to run.
+# $2 dir, $3 "window" to always add a window when the session exists (wake), $4 account, then the
+# command to run. With the default mode a live session gets a new window only for an account that has
+# none yet. Windows carry the account in the window option @account (none counts as default).
 launch() {
-  local proj=$1 dir=$2 mode=$3 name existing
-  shift 3
+  local proj=$1 dir=$2 mode=$3 acct=$4 name existing cdir wid w a have=0 haveid=
+  local -a env=()
+  shift 4
+  cdir=$(account_config_dir "$acct")
+  # Set per command, never with tmux -e: -e on new-session lands in the session environment and a
+  # later window for another account (or default) would inherit it. default explicitly unsets it.
+  if [ -n "$cdir" ]; then env=(env "CLAUDE_CONFIG_DIR=$cdir"); else env=(env -u CLAUDE_CONFIG_DIR); fi
   name=$(name_for "$proj")
   if t has-session -t "=$name" 2>/dev/null; then
     # name_for is lossy (a.b and a_b collide): never attach one project to another's session
@@ -44,16 +56,48 @@ launch() {
       echo "session name $name is already used by ${existing:-another project}; rename the project" >&2
       exit 1
     fi
-    # a start on a live session launches nothing, so it needs no gate
-    if [ "$mode" = window ]; then mcp_gate; t new-window -t "=$name:" -c "$dir" "$@"; fi
+    if [ "$mode" != window ]; then
+      while read -r w a; do
+        if [ "${a:-default}" = "$acct" ] && [ "$have" = 0 ]; then have=1; haveid=$w; fi
+      done < <(t list-windows -t "=$name:" -F '#{window_id} #{@account}' 2>/dev/null || true)
+    fi
+    # a start on an account that already has a window launches nothing, so it needs no gate
+    if [ "$have" = 0 ]; then
+      mcp_gate "$acct"
+      kit_recheck_project "$proj" "$acct"
+      wid=$(t new-window -P -F '#{window_id}' -t "=$name:" -c "$dir" "${env[@]}" "$@")
+      t set -w -t "$wid" @account "$acct"
+    else
+      t select-window -t "$haveid" # attaching lands on that account's window
+    fi
   else
-    mcp_gate
-    t new-session -d -s "$name" -c "$dir" "$@"
+    mcp_gate "$acct"
+    kit_recheck_project "$proj" "$acct"
+    t new-session -d -s "$name" -c "$dir" "${env[@]}" "$@"
     t set -t "=$name:" @project_dir "$dir"
+    t set -w -t "=$name:" @account "$acct"
   fi
   echo "$name"
 }
-usage() { echo "usage: ccd-session start <project> [prompt] | wake <session-id> | attach <project> | ls" >&2; exit 2; }
+# split_account <args...>: sets acct and rest[] from leading `--account NAME`.
+# Only that position is read; everything else (a prompt, even one starting with "-") stays in rest.
+split_account() {
+  acct=default
+  if [ "${1:-}" = --account ]; then
+    [ $# -ge 2 ] || { echo "--account needs a name" >&2; exit 2; }
+    acct=$2; shift 2
+  fi
+  account_valid "$acct" || { echo "invalid account name: $acct" >&2; exit 2; }
+  rest=("$@")
+}
+# known_account NAME: `default` or an existing real directory (not a symlink) under the accounts dir.
+known_account() {
+  local d
+  [ "$1" = default ] && return 0
+  d=$(account_config_dir "$1")
+  [ -d "$d" ] && [ ! -L "$d" ] || { echo "unknown account: $1 (create it with: ccd login --account $1)" >&2; exit 1; }
+}
+usage() { echo "usage: ccd-session start <project> [--account name] [prompt] | wake <session-id> | attach <project> [--account name] | ls | kit-recheck" >&2; exit 2; }
 
 sub=${1:-}
 [ $# -gt 0 ] && shift
@@ -63,9 +107,13 @@ case "$sub" in
     proj=$1; shift
     [[ $proj =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] && [[ $proj != *..* ]] || { echo "invalid project name" >&2; exit 2; }
     dir=$WS/$proj
+    # `_login` is the dashboard's login window for a new account: claude in ccd's home, not a project
+    [ "$proj" != _login ] || dir=${CCDASH_LOGIN_DIR:-/home/ccd}
     [ -d "$dir" ] || { echo "no such project: $proj" >&2; exit 1; }
-    tmux_args "$@"
-    launch "$proj" "$dir" keep "${cmd[@]}" ${targs[@]+"${targs[@]}"}
+    split_account "$@"
+    known_account "$acct"
+    tmux_args ${rest[@]+"${rest[@]}"}
+    launch "$proj" "$dir" keep "$acct" "${cmd[@]}" ${targs[@]+"${targs[@]}"}
     ;;
   wake)
     # Resumes a stopped conversation (claude --resume) in the project's tmux session. The old state
@@ -80,22 +128,33 @@ case "$sub" in
       echo "conversation project is not an existing directory under $WS" >&2
       exit 1
     fi
+    acct=$(jq -r '.account // "default"' "$rec" 2>/dev/null || echo default)
+    account_valid "$acct" || { echo "conversation account is invalid: $acct" >&2; exit 1; }
+    known_account "$acct"
     rel=${dir#"$WS"/}
     proj=${rel%%/*}
     [[ $proj =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || { echo "invalid project name" >&2; exit 1; }
     # --resume goes before any `--`; the id was validated above. CCDASH_RESUMED_FROM is set for the
     # claude process only, so later windows of the same tmux session do not inherit it.
     # shellcheck disable=SC2016 # $1 is expanded by the inner bash, on purpose
-    launch "$proj" "$WS/$proj" window bash -lc 'CCDASH_RESUMED_FROM="$1" claude --resume "$1"; exec bash -l' _ "$sid"
+    launch "$proj" "$WS/$proj" window "$acct" bash -lc 'CCDASH_RESUMED_FROM="$1" claude --resume "$1"; exec bash -l' _ "$sid"
     ;;
   attach)
-    [ $# -eq 1 ] || usage
-    name=$("$0" start "$1")
+    [ $# -eq 1 ] || { [ $# -eq 3 ] && [ "$2" = --account ]; } || usage
+    name=$("$0" start "$@")
     if [ -n "${TMUX:-}" ]; then
       t switch-client -t "=$name"
     else
       t attach -t "=$name"
     fi
+    ;;
+  kit-recheck)
+    # every opted-in project under every account, one after the other; kit_recheck_project never fails
+    for f in "$PROJECTS"/*.json; do
+      [ -e "$f" ] || continue
+      p=$(basename "$f" .json)
+      while read -r a; do kit_recheck_project "$p" "$a"; done < <(account_list)
+    done
     ;;
   ls)
     out=$(t list-sessions -F '#{session_name}' 2>/dev/null | grep '^claude-' || true)

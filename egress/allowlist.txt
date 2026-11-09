@@ -22,6 +22,9 @@ registry.npmjs.org
 pypi.org
 files.pythonhosted.org
 
+# Agent kit MCP server (motion, HTTP; installed by the kit-design plugin)
+mcp.motion.dev
+
 # Web Push services (the only endpoints the dashboard accepts for subscriptions)
 fcm.googleapis.com
 updates.push.services.mozilla.com

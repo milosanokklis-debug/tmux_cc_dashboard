@@ -1,7 +1,7 @@
 'use strict';
 // Project list screen and the "Add project" dialog.
 (function () {
-  const { api, h, notice, chip } = window.ccdash;
+  const { api, h, notice, chip, accounts } = window.ccdash;
   const $ = (id) => document.getElementById(id);
 
   const STATES = {
@@ -24,40 +24,40 @@
     const status = h('div', { class: 'card-result', role: 'status', 'aria-live': 'polite' });
     const failure = h('div', { class: 'card-result is-error', role: 'alert' });
     const results = h('div', { class: 'card-results' }, [status, failure]);
-    // Kit line: version, pack chips, memory chip. "No kit" when the project was never onboarded.
-    const kit = h('div', { class: 'card-kit' });
-    // Pack editor: a collapsible so the card stays compact. The Apply button is enabled only when the boxes differ from the current packs.
-    const id = 'packs-' + p.name.replace(/[^A-Za-z0-9_-]/g, '_');
-    const packDesign = h('input', { type: 'checkbox', id: id + '-design', name: 'design' });
-    const packCode = h('input', { type: 'checkbox', id: id + '-code', name: 'code' });
-    // Not-dirty is aria-disabled, not disabled: a disabled control would drop focus to body after a successful apply.
-    const apply = h('button', { type: 'button', class: 'btn btn-primary card-apply', text: 'Apply', 'aria-disabled': 'true', 'aria-describedby': id + '-hint' });
-    const packsBox = h('fieldset', { class: 'packs-fields' }, [
-      h('legend', { text: 'Packs for ' + p.name }),
-      h('p', { class: 'packs-core' }, [h('span', { 'aria-hidden': 'true', text: '✓' }), document.createTextNode(' Core (always on)')]),
-      h('label', { class: 'check', for: id + '-design' }, [packDesign, document.createTextNode(' Design pack')]),
-      h('label', { class: 'check', for: id + '-code' }, [packCode, document.createTextNode(' Code pack')]),
-    ]);
-    const packs = h('details', { class: 'card-packs' }, [
-      h('summary', { text: 'Packs' }),
-      h('div', { class: 'packs-body' }, [
-        packsBox,
-        h('p', { id: id + '-hint', class: 'hint', text: 'Applying reruns onboarding. It can take a few minutes and does not restart Claude.' }),
-        apply,
-      ]),
-    ]);
-    const li = h('li', { class: 'card' }, [h('h3', { class: 'card-name', text: p.name }), meta, kit, packs, results, button]);
-    const c = { li, chip: null, state: null, button, meta, head, pull, status, alert: failure, repo: null, kit, packs, packDesign, packCode, packsBox, apply, base: null, memOffline: false, lastKit: undefined };
+    // Kit line: on/off switch, version, memory chip, warning badge.
+    const id = 'kit-' + p.name.replace(/[^A-Za-z0-9_-]/g, '_');
+    const toggle = h('button', { type: 'button', role: 'switch', 'aria-checked': 'false', class: 'btn kit-toggle', id: id + '-toggle', 'data-testid': 'kit-toggle', 'aria-labelledby': id + '-toggle-text' });
+    const toggleText = h('span', { class: 'kit-toggle-text', id: id + '-toggle-text', text: 'Agent kit for ' + p.name + ': off' });
+    toggle.append(h('span', { class: 'kit-switch', 'aria-hidden': 'true' }), toggleText);
+    const kitInfo = h('span', { class: 'card-kit-info' });
+    const warning = h('span', { class: 'chip chip-kit-warn', 'data-testid': 'kit-warning', hidden: true });
+    const kit = h('div', { class: 'card-kit' }, [toggle, kitInfo, warning]);
+    // Account choice for Open: shown only when more than one account exists.
+    const acctSelect = h('select', { id: id + '-account', 'data-testid': 'account-select-open' });
+    const acct = h('label', { class: 'card-account', hidden: true }, [document.createTextNode('Account'), acctSelect]);
+    acctSelect.addEventListener('change', () => accounts.setLast(p.name, acctSelect.value));
+    const li = h('li', { class: 'card' }, [h('h3', { class: 'card-name', text: p.name }), meta, kit, results, acct, button]);
+    const c = { li, acct, acctSelect, name: p.name, chip: null, state: null, button, meta, head, pull, status, alert: failure, repo: null, kit, toggle, toggleText, kitInfo, warning, memOffline: false, lastKit: undefined, kitBusy: false };
     button.addEventListener('click', () => openProject(p.name, button));
+    syncAccount(c);
     pull.addEventListener('click', () => pullProject(p.name, c));
-    const changed = () => syncApply(c);
-    packDesign.addEventListener('change', changed);
-    packCode.addEventListener('change', changed);
-    apply.addEventListener('click', () => applyPacks(p.name, c));
+    toggle.addEventListener('click', () => toggleKit(p.name, c));
     return c;
   }
 
+  function syncAccount(c) {
+    c.acct.hidden = !accounts.multi();
+    if (!accounts.multi()) return;
+    const sel = c.acctSelect;
+    // refill only when the list changed, and never under a select the user has open
+    const same = sel.options.length === accounts.names().length && accounts.names().every((n, i) => sel.options[i].value === n);
+    if (same || document.activeElement === sel) return;
+    accounts.fill(sel, sel.options.length ? sel.value : accounts.last(c.name));
+  }
+  accounts.onChange(() => { for (const c of cards.values()) syncAccount(c); syncAddAccount(); });
+
   function updateCard(c, p) {
+    syncAccount(c);
     if (c.state !== p.state) {
       const next = chip(STATES, p.state);
       if (c.chip) c.chip.replaceWith(next); else c.meta.before(next);
@@ -80,7 +80,7 @@
     c.pull.setAttribute('aria-label', 'Pull latest for ' + p.name);
     c.meta.hidden = !(c.repo || c.head.textContent);
     c.pull.hidden = !c.repo;
-    renderKit(c, p.kit);
+    renderKit(c, p);
   }
 
   const MEMORY = {
@@ -89,50 +89,38 @@
     unknown: { label: 'Memory unknown', icon: '?', cls: 'warn' },
     offline: { label: 'Memory offline', icon: '!', cls: 'warn' },
   };
-  const PACK_LABELS = { 'kit-core': 'Core', 'kit-design': 'Design', 'kit-code': 'Code' };
 
-  // Apply is enabled only when the boxes differ from the server's packs and no apply is running.
-  function syncApply(c) {
-    if (c.apply.getAttribute('aria-busy') === 'true') return;
-    if (packsDirty(c)) c.apply.removeAttribute('aria-disabled');
-    else c.apply.setAttribute('aria-disabled', 'true');
-  }
-
-  function renderKit(c, kit) {
-    c.lastKit = kit;
-    const sig = JSON.stringify(kit || null);
+  function renderKit(c, p) {
+    c.lastKit = p;
+    if (c.kitBusy) return; // the toggle response is fresher than a poll that began before it
+    const on = !!p.kitEnabled;
+    const kit = p.kit || null;
+    const err = p.kitError || null;
+    const sig = JSON.stringify([on, kit, err, c.memOffline]);
     if (c.kitSig === sig) return;
     c.kitSig = sig;
-    if (!kit) {
-      c.kit.replaceChildren(h('span', { class: 'chip chip-nokit' }, [
-        h('span', { class: 'chip-icon', 'aria-hidden': 'true', text: '–' }),
-        h('span', { text: 'No kit' }),
-      ]));
-      c.packs.hidden = true;
-      c.base = null;
-      return;
+    c.toggle.setAttribute('aria-checked', on ? 'true' : 'false');
+    c.toggleText.textContent = 'Agent kit for ' + c.name + (on ? ': on' : ': off');
+    const kids = [];
+    if (on) {
+      kids.push(h('span', { class: 'kit-version', text: kit && kit.version ? 'kit ' + kit.version : 'kit pending' }));
+      if (kit) {
+        const m = c.memOffline ? MEMORY.offline : (MEMORY[kit.memory] || MEMORY.unknown);
+        kids.push(h('span', { class: 'chip chip-mem-' + m.cls }, [
+          h('span', { class: 'chip-icon', 'aria-hidden': 'true', text: m.icon }),
+          h('span', { text: m.label }),
+        ]));
+      }
     }
-    const kids = [h('span', { class: 'kit-version', text: 'kit ' + (kit.version || '?') })];
-    for (const pk of kit.packs || []) kids.push(h('span', { class: 'chip chip-pack', text: PACK_LABELS[pk] || pk, title: pk }));
-    const m = c.memOffline ? MEMORY.offline : (MEMORY[kit.memory] || MEMORY.unknown);
-    kids.push(h('span', { class: 'chip chip-mem-' + m.cls }, [
-      h('span', { class: 'chip-icon', 'aria-hidden': 'true', text: m.icon }),
-      h('span', { text: m.label }),
-    ]));
-    c.kit.replaceChildren(...kids);
-    c.packs.hidden = false;
-    // Refresh the boxes from the server unless the user has edited them or an apply is running.
-    const wasDirty = packsDirty(c);
-    c.base = { design: (kit.packs || []).includes('kit-design'), code: (kit.packs || []).includes('kit-code') };
-    if (c.apply.getAttribute('aria-busy') !== 'true' && !wasDirty) {
-      c.packDesign.checked = c.base.design;
-      c.packCode.checked = c.base.code;
-    }
-    syncApply(c);
-  }
-
-  function packsDirty(c) {
-    return !!c.base && (c.packDesign.checked !== c.base.design || c.packCode.checked !== c.base.code);
+    c.kitInfo.replaceChildren(...kids);
+    c.warning.hidden = !err;
+    if (err) {
+      const msg = String(err.message || err.code || 'Kit problem');
+      c.warning.replaceChildren(
+        h('span', { class: 'chip-icon', 'aria-hidden': 'true', text: '!' }),
+        h('span', { text: 'Kit warning: ' + msg }));
+      c.warning.title = msg;
+    } else c.warning.replaceChildren();
   }
 
   // Memory offline shows on the card's warning border and on its memory chip. Clearing re-renders the chip.
@@ -156,11 +144,9 @@
         h('div', { role: 'group', 'aria-label': opts.logName || 'Log' }, [h('pre', { tabindex: '0', text: String(opts.log) })]),
       ]));
     }
-    if (opts.retry) kids.push(opts.retry);
     const region = opts.error ? c.alert : c.status;
     (opts.error ? c.status : c.alert).replaceChildren();
     region.replaceChildren(...kids);
-    if (opts.retry) opts.retry.focus();
     setMemoryOffline(c, !!opts.offline);
   }
 
@@ -173,40 +159,41 @@
     setMemoryOffline(c, false);
   }
 
-  async function applyPacks(name, c) {
-    const btn = c.apply;
-    if (btn.getAttribute('aria-busy') === 'true' || !packsDirty(c)) return;
-    const want = { design: c.packDesign.checked, code: c.packCode.checked };
-    btn.setAttribute('aria-disabled', 'true');
-    btn.setAttribute('aria-busy', 'true');
-    btn.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), document.createTextNode('Applying…'));
-    c.packDesign.disabled = c.packCode.disabled = true;
-    clearResults(c, btn);
-    showResult(c, 'Applying packs… this can take a few minutes.', {});
+  async function toggleKit(name, c) {
+    if (c.kitBusy) return;
+    const want = c.toggle.getAttribute('aria-checked') !== 'true';
+    const was = !want;
+    c.kitBusy = true;
+    c.toggle.setAttribute('aria-disabled', 'true'); // aria-disabled keeps focus on the switch
+    c.toggle.setAttribute('aria-busy', 'true');
+    c.toggle.setAttribute('aria-checked', want ? 'true' : 'false');
+    c.toggleText.textContent = (want ? 'Installing kit for ' : 'Removing kit for ') + c.name + '…';
+    clearResults(c, c.toggle);
+    let next = null;
     try {
-      const r = await api('/api/projects/' + encodeURIComponent(name) + '/packs', { method: 'POST', body: want });
+      const r = await api('/api/projects/' + encodeURIComponent(name) + '/kit', { method: 'POST', body: { enabled: want } });
       const d = r.data || {};
       if (r.ok) {
-        showResult(c, d.message || 'Packs updated.', {});
-        const kit = d.kit || null;
-        if (kit) { c.kitSig = null; renderKit(c, kit); }
-        if (active) load();
+        next = { kitEnabled: typeof d.kitEnabled === 'boolean' ? d.kitEnabled : want, kit: d.kit || null, kitError: d.kitError || null };
+        if (d.message) showResult(c, d.message, {});
       } else if (d.error === 'kit-failed') {
-        const retry = h('button', { type: 'button', class: 'btn card-retry', text: 'Try again', 'aria-label': 'Try again applying packs for ' + name });
-        retry.addEventListener('click', () => applyPacks(name, c));
-        showResult(c, d.message || 'The kit failed (code ' + d.code + ').', { error: true, log: d.log, open: true, logName: 'Kit log for ' + name, retry });
+        showResult(c, d.message || 'The kit failed (code ' + d.code + ').', { error: true, log: d.log, open: true, logName: 'Kit log for ' + name });
       } else if (d.error === 'memory-offline') {
         showMemoryOffline(c, d);
       } else {
-        showResult(c, d.error || 'Could not change packs (HTTP ' + r.status + ').', { error: true });
+        showResult(c, d.message || d.error || 'Could not change the agent kit (HTTP ' + r.status + ').', { error: true });
       }
     } catch (e) {
       if (e.message !== 'unauthorized') showResult(c, 'Network error: ' + e.message, { error: true });
     } finally {
-      btn.removeAttribute('aria-busy');
-      btn.textContent = 'Apply';
-      c.packDesign.disabled = c.packCode.disabled = false;
-      syncApply(c);
+      c.kitBusy = false;
+      c.toggle.removeAttribute('aria-disabled');
+      c.toggle.removeAttribute('aria-busy');
+      c.kitSig = null;
+      const base = c.lastKit || {};
+      // On failure revert to what the server last said (the switch goes back to `was`).
+      renderKit(c, next ? { ...base, ...next } : { ...base, kitEnabled: base.kitEnabled === undefined ? was : base.kitEnabled });
+      if (active) load();
     }
   }
 
@@ -285,7 +272,9 @@
     const own = cards.get(name);
     if (own) clearResults(own, null);
     try {
-      const r = await api('/api/projects/' + encodeURIComponent(name) + '/open', { method: 'POST' });
+      const sel = own && !own.acct.hidden ? own.acctSelect.value : null;
+      const r = await api('/api/projects/' + encodeURIComponent(name) + '/open', { method: 'POST', body: sel ? { account: sel } : undefined });
+      if (sel && r.ok) accounts.setLast(name, sel);
       const d = r.data || {};
       if (!r.ok && cards.has(name) && (d.error === 'memory-offline' || d.error === 'kit-failed')) {
         const c = cards.get(name);
@@ -417,8 +406,15 @@
     if (!on && progressHadFocus) $('add-repo').focus();
   }
 
+  function syncAddAccount() {
+    $('add-account-field').hidden = !accounts.multi();
+    if (accounts.multi()) accounts.fill($('add-account'), $('add-account').value);
+  }
+
   function openDialog() {
     lastOpener = document.activeElement;
+    syncAddAccount();
+    accounts.load();
     resetFeedback();
     loadDraft();
     updateCounter();
@@ -456,8 +452,9 @@
     if (token) body.token = token;
     if (prompt.trim()) body.prompt = prompt;
     if (!$('add-trust-field').hidden && $('add-trust').checked) body.trustHooks = true;
-    if ($('add-design').checked) body.design = true;
-    if ($('add-code').checked) body.code = true;
+    body.kit = $('add-kit').checked;
+    const acct = !$('add-account-field').hidden ? $('add-account').value : null;
+    if (acct) body.account = acct;
     setBusy(true);
     try {
       const r = await api('/api/projects', { method: 'POST', body });
@@ -473,6 +470,7 @@
         return;
       }
       const { project, warning } = r.data;
+      if (acct) accounts.setLast(project, acct);
       setBusy(false);
       form.reset(); // success: nothing to keep, and never keep the token around
       clearDraft();
@@ -505,6 +503,8 @@
       active = true;
       sigs.tree = sigs.state = undefined;
       load();
+      for (const c of cards.values()) syncAccount(c);
+      accounts.load();
       offs = [
         events.on('tree', (m) => onPush('tree', treeSig(m))),
         events.on('state', (m) => onPush('state', JSON.stringify(m.states || {}))),

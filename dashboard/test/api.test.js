@@ -98,7 +98,9 @@ const ROUTES = [
   ['POST', '/api/projects', { repo: 'o/r' }],
   ['POST', '/api/projects/demo/open'],
   ['POST', '/api/projects/demo/pull'],
-  ['POST', '/api/projects/demo/packs', { design: true, code: false }],
+  ['POST', '/api/projects/demo/kit', { enabled: true }],
+  ['GET', '/api/kit'],
+  ['POST', '/api/kit/update', {}],
   ['GET', '/api/git-identity'],
   ['POST', '/api/git-identity', { name: 'A', email: 'a@b.co' }],
   ['POST', '/api/conversations/00000000-0000-4000-8000-000000000001/wake'],
@@ -212,11 +214,11 @@ test('GET /api/projects: claude / shell / none; dotfiles, files, web-* and _ops 
   const { projects } = await r.json();
   const byName = Object.fromEntries(projects.map((p) => [p.name, p]));
   assert.deepStrictEqual(Object.keys(byName).sort(), ['a.b', 'a_b', 'afterclaude', 'justshell', 'nosession', 'withclaude']);
-  assert.deepStrictEqual(byName.withclaude, { name: 'withclaude', session: 'claude-withclaude', state: 'claude', repo: null, head: null, kit: null });
-  assert.deepStrictEqual(byName.justshell, { name: 'justshell', session: 'claude-justshell', state: 'shell', repo: null, head: null, kit: null });
-  assert.deepStrictEqual(byName.nosession, { name: 'nosession', session: null, state: 'none', repo: null, head: null, kit: null });
-  assert.deepStrictEqual(byName.a_b, { name: 'a_b', session: 'claude-a_b', state: 'shell', repo: null, head: null, kit: null });
-  assert.deepStrictEqual(byName['a.b'], { name: 'a.b', session: null, state: 'none', repo: null, head: null, kit: null });
+  assert.deepStrictEqual(byName.withclaude, { name: 'withclaude', session: 'claude-withclaude', state: 'claude', repo: null, head: null, kit: null, kitEnabled: false, kitCheck: null, kitError: null });
+  assert.deepStrictEqual(byName.justshell, { name: 'justshell', session: 'claude-justshell', state: 'shell', repo: null, head: null, kit: null, kitEnabled: false, kitCheck: null, kitError: null });
+  assert.deepStrictEqual(byName.nosession, { name: 'nosession', session: null, state: 'none', repo: null, head: null, kit: null, kitEnabled: false, kitCheck: null, kitError: null });
+  assert.deepStrictEqual(byName.a_b, { name: 'a_b', session: 'claude-a_b', state: 'shell', repo: null, head: null, kit: null, kitEnabled: false, kitCheck: null, kitError: null });
+  assert.deepStrictEqual(byName['a.b'], { name: 'a.b', session: null, state: 'none', repo: null, head: null, kit: null, kitEnabled: false, kitCheck: null, kitError: null });
   assert.strictEqual(byName.afterclaude.state, 'shell');
 });
 
@@ -240,7 +242,7 @@ test('POST /api/projects/:proj/open validates the name and folder, runs ccd-sess
   const ok = await post(s, '/api/projects/demo/open');
   assert.strictEqual(ok.status, 200);
   assert.deepStrictEqual(await ok.json(), { session: 'claude-demo' });
-  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'demo']]);
+  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'demo', '--account', 'default']]);
   for (const [p, status] of [['/api/projects/missing/open', 404], ['/api/projects/bad%3Bname/open', 400],
     ['/api/projects/..%2Fx/open', 400], ['/api/projects/.hidden/open', 400],
     ['/api/projects/%E0%A4%A/open', 400]]) {
@@ -303,7 +305,7 @@ test('POST /api/projects: a 4000 char prompt is accepted and passed as ONE argv 
   assert.strictEqual(r.status, 200);
   assert.deepStrictEqual(await r.json(), { project: 'hello', session: 'claude-hello' });
   assert.deepStrictEqual(svc.calls.runOp, [['ccd-onboard', 'octo/hello']]);
-  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'hello', prompt]]);
+  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'hello', '--account', 'default', prompt]]);
 });
 
 test('POST /api/projects: without token no GitHub call and no token file', async (t) => {

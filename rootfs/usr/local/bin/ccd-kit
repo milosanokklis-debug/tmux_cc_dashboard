@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# ccd-kit status | check | update [<ref>|--reset]: which agent kit is active, what is newest upstream, and updating it.
+# Stable stdout lines (sha = 40 hex, version `-` when unknown):
+#   status: `active <sha> <ver>`, `image <sha>`     check: those + `newest <sha>` (or `newest-error <msg>`, exit 1)
+#   update: `project <name> ok|changed|failed <message>` per opted-in project, then (last; the dashboard reads a log tail) `updated <oldsha> <newsha>`, `version <old> <new>`
+# The kit script is only read as text (kit_version), never run here; ccd-onboard runs it.
+# Env: KIT_REPO (owner/repo, default: origin of the image kit), CCDASH_KIT_HOME (checkouts + `current`),
+# CCDASH_KIT_IMAGE (/opt/agent-kit), CCDASH_LOCK_DIR (/run/ccdash, else $HOME/.ccdash/locks), CCDASH_PROJECTS,
+# CCDASH_KIT_LOCK_WAIT (600 s). Locks: kit.lock (check and update, whole run), kit-<project>.lock (also taken by ccd-onboard's kit step).
+set -euo pipefail
+# shellcheck source=/dev/null
+. "${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}/kit.sh"
+KIT_HOME=${CCDASH_KIT_HOME:-/home/ccd/.ccdash/kit}
+IMAGE=${CCDASH_KIT_IMAGE:-/opt/agent-kit}
+PROJECTS=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}
+WAIT=${CCDASH_KIT_LOCK_WAIT:-600}
+here=$(dirname "$0")
+usage() { echo "usage: ccd-kit status | check | update [<ref>|--reset]" >&2; exit 2; }
+
+image_sha() { git -C "$IMAGE" rev-parse HEAD 2> /dev/null || echo -; }
+# active_sha: the sha of $KIT_HOME/current when it holds a valid-looking kit, else the image sha
+active_dir() {
+  if [ -f "$KIT_HOME/current/agent-kit.sh" ]; then readlink -f "$KIT_HOME/current"; else printf '%s\n' "$IMAGE"; fi
+}
+active_sha() {
+  local d; d=$(active_dir)
+  if [ "$d" = "$IMAGE" ]; then image_sha; else basename "$d"; fi
+}
+ver_of() { kit_version "$1/agent-kit.sh" || echo -; }
+print_status() { local d; d=$(active_dir); echo "active $(active_sha) $(ver_of "$d")"; echo "image $(image_sha)"; }
+
+repo_name() {
+  local r=${KIT_REPO:-} u
+  if [ -z "$r" ]; then
+    u=$(git -C "$IMAGE" config --get remote.origin.url 2> /dev/null || true)
+    case $u in git@github.com:* | https://github.com/*) r=${u#git@github.com:}; r=${r#https://github.com/}; r=${r%.git}; r=${r%/} ;; esac
+  fi
+  [[ $r =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] && [[ $r != *..* ]] || { echo "ccd-kit: unknown kit repo (set KIT_REPO=owner/repo)" >&2; return 1; }
+  printf '%s\n' "$r"
+}
+remote_url() { printf 'https://github.com/%s\n' "$1"; }
+
+global_lock() {
+  LOCKDIR=$(kit_lock_dir)
+  exec 8> "$LOCKDIR/kit.lock"
+  flock -w "$WAIT" 8 || { echo "ccd-kit: another kit check or update is running (waited ${WAIT}s)" >&2; exit 1; }
+}
+
+cmd_check() {
+  local rc=0 repo out
+  global_lock
+  print_status
+  if ! repo=$(repo_name 2> /dev/null); then echo "newest-error unknown kit repo"; exit 1; fi
+  if out=$(GIT_TERMINAL_PROMPT=0 timeout 30 git ls-remote "$(remote_url "$repo")" HEAD 2> /dev/null </dev/null) && [[ ${out%%[[:space:]]*} =~ ^[0-9a-f]{40}$ ]]; then
+    echo "newest ${out%%[[:space:]]*}"
+  else rc=1; echo "newest-error cannot read $(remote_url "$repo")"; fi
+  return "$rc"
+}
+
+valid_ref() {
+  local r=$1
+  [[ $r =~ ^[0-9a-f]{7,40}$ ]] && return 0
+  [[ $r =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && [[ $r != *..* ]] && [[ $r != *//* ]] && [[ $r != */ ]] && [[ $r != *.lock ]]
+}
+
+# recheck_projects: ccd-onboard --kit-only for every opted-in project, with the active kit
+recheck_projects() {
+  local f name repo out rc line
+  [ -d "$PROJECTS" ] || return 0
+  for f in "$PROJECTS"/*.json; do
+    [ -e "$f" ] || continue
+    jq -e 'if type != "object" then false elif .kitEnabled == true then true elif .kitEnabled == false then false else (.kit != null and .kit != false) end' "$f" > /dev/null 2>&1 || continue
+    name=$(basename "$f" .json)
+    repo=$(jq -r '.repo // empty' "$f" 2> /dev/null || true)
+    if [ -z "$repo" ]; then echo "project $name failed no repo in the record"; continue; fi
+    (
+      exec 9> "$LOCKDIR/kit-$name.lock"
+      flock -w "$WAIT" 9 || { echo "project $name failed project lock timeout"; exit 0; }
+      rc=0
+      out=$(CCDASH_KIT_LOCKED=1 "$here/ccd-onboard" --kit-only "$repo" 2>&1 < /dev/null) || rc=$?
+      line=$(printf '%s\n' "$out" | grep -m1 -E '^kit(-error)? ' || true)
+      [ -n "$line" ] || line=$(printf '%s\n' "$out" | grep -m1 . || true)
+      line=$(printf '%s' "$line" | tr -d '[:cntrl:]' | cut -c1-200)
+      if [ "$rc" != 0 ]; then echo "project $name failed ${line:-exit $rc}"
+      elif [[ $line == "kit "*" changed"* ]]; then echo "project $name changed $line"
+      else echo "project $name ok ${line:-no kit line}"; fi
+    )
+  done
+}
+
+report() { # old new oldver
+  local d; d=$(active_dir)
+  local ver; ver=$(ver_of "$d")
+  recheck_projects
+  echo "updated $1 $2"
+  echo "version $3 $ver"
+}
+
+cmd_update() {
+  local ref='' reset=0 old oldver new repo tmp
+  case $# in
+    0) ;;
+    1) if [ "$1" = --reset ]; then reset=1; else ref=$1; valid_ref "$ref" || { echo "ccd-kit: invalid ref" >&2; exit 2; }; fi ;;
+    *) usage ;;
+  esac
+  global_lock
+  old=$(active_sha); oldver=$(ver_of "$(active_dir)")
+  mkdir -p "$KIT_HOME"
+  # sweep stale temp checkouts left by an interrupted run (read-only git objects need u+w to delete)
+  for d in "$KIT_HOME"/.tmp-*; do
+    [ -d "$d" ] && [ ! -L "$d" ] || continue # a stale .tmp-link-* symlink is not a checkout: never follow it
+    chmod -R u+w "$d" 2> /dev/null || true; rm -rf "$d"
+  done
+  if [ "$reset" = 1 ]; then
+    rm -f "$KIT_HOME/current"
+    report "$old" "$(image_sha)" "$oldver"
+    return 0
+  fi
+  repo=$(repo_name) || exit 1
+  tmp=$KIT_HOME/.tmp-$$
+  # shellcheck disable=SC2064
+  trap "chmod -R u+w '$tmp' '$KIT_HOME/.tmp-link-$$' 2> /dev/null || true; rm -rf '$tmp' '$KIT_HOME/.tmp-link-$$'" EXIT
+  chmod -R u+w "$tmp" 2> /dev/null || true; rm -rf "$tmp"
+  GIT_TERMINAL_PROMPT=0 timeout 600 git clone -q "$(remote_url "$repo")" "$tmp" > /dev/null 2>&1 < /dev/null || { echo "ccd-kit: cannot clone $(remote_url "$repo")" >&2; exit 1; }
+  if [ -n "$ref" ]; then
+    new=$(git -C "$tmp" rev-parse --verify -q "$ref^{commit}" 2> /dev/null || git -C "$tmp" rev-parse --verify -q "refs/remotes/origin/$ref^{commit}" 2> /dev/null || true)
+    [[ $new =~ ^[0-9a-f]{40}$ ]] || { echo "ccd-kit: unknown ref $ref" >&2; exit 1; }
+  else
+    new=$(git -C "$tmp" rev-parse HEAD)
+  fi
+  git -C "$tmp" checkout -q --detach "$new" > /dev/null 2>&1 || { echo "ccd-kit: cannot check out $new" >&2; exit 1; }
+  if [ ! -f "$tmp/agent-kit.sh" ] || ! kit_version "$tmp/agent-kit.sh" > /dev/null; then
+    echo "ccd-kit: $new is not a valid kit (no agent-kit.sh with a KIT_VERSION line)" >&2; exit 1
+  fi
+  if [ -f "$KIT_HOME/$new/agent-kit.sh" ] && kit_version "$KIT_HOME/$new/agent-kit.sh" > /dev/null; then chmod -R u+w "$tmp" 2> /dev/null || true; rm -rf "$tmp"
+  else
+    chmod -R u+w "${KIT_HOME:?}/$new" 2> /dev/null || true; rm -rf "${KIT_HOME:?}/$new"
+    chmod -R a-w "$tmp"; mv "$tmp" "$KIT_HOME/$new"
+  fi
+  ln -sfn "$new" "$KIT_HOME/.tmp-link-$$"
+  mv -T "$KIT_HOME/.tmp-link-$$" "$KIT_HOME/current"
+  # keep the new current and the previous active one
+  local d b
+  for d in "$KIT_HOME"/*/; do
+    b=$(basename "$d")
+    [[ $b =~ ^[0-9a-f]{40}$ ]] || continue
+    [ "$b" != "$new" ] && [ "$b" != "$old" ] || continue
+    chmod -R u+w "$d" 2> /dev/null || true; rm -rf "$d"
+  done
+  report "$old" "$new" "$oldver"
+}
+
+case "${1:-}" in
+  status) [ $# -eq 1 ] || usage; print_status ;;
+  check) [ $# -eq 1 ] || usage; cmd_check ;;
+  update) shift; cmd_update "$@" ;;
+  *) usage ;;
+esac

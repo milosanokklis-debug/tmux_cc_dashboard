@@ -1,0 +1,28 @@
+#!/bin/sh
+# npx with the MCP packages the image fetched at build time. /opt/npm-cache is read-only at runtime and npm writes to its
+# cache even for a hit, so the seed is copied to a writable cache in $HOME. Safe for several simultaneous starts: one
+# process holds an atomic mkdir lock and copies into a temp dir that is renamed into place; the others wait for it.
+# .seed-stamp records which seed was copied, so a new image reseeds. Pinned packages then start with no network.
+seed=${CCDASH_NPM_SEED:-/opt/npm-cache}
+dst=${HOME:-/home/ccd}/.cache/ccdash-npm
+if [ -d "$seed" ]; then
+  stamp=$(find "$seed/_npx" -mindepth 1 -maxdepth 1 ! -name '.*' -printf '%f\n' 2>/dev/null | sort | tr '\n' ' ')
+  parent=$(dirname "$dst")
+  mkdir -p "$parent" 2>/dev/null
+  waited=0
+  while [ "$(cat "$dst/.seed-stamp" 2>/dev/null)" != "$stamp" ] && [ "$waited" -lt 120 ]; do
+    if mkdir "$dst.lock" 2>/dev/null; then
+      find "$parent" -maxdepth 1 \( -name "$(basename "$dst").tmp.*" -o -name "$(basename "$dst").old" \) -mmin +5 -exec rm -rf {} + 2>/dev/null
+      tmp=$(mktemp -d "$dst.tmp.XXXXXX") && cp -a "$seed/." "$tmp/" && printf '%s' "$stamp" >"$tmp/.seed-stamp" \
+        && { [ ! -d "$dst" ] || mv -T "$dst" "$dst.old"; } && mv -T "$tmp" "$dst"
+      rm -rf "$dst.old" "${tmp:-}"
+      rmdir "$dst.lock"
+      break
+    fi
+    # a lock left by a killed process: drop it after 5 minutes
+    [ -n "$(find "$dst.lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] && rmdir "$dst.lock" 2>/dev/null
+    sleep 1; waited=$((waited + 1))
+  done
+fi
+[ -d "$dst" ] && export npm_config_cache="$dst" npm_config_prefer_offline=true
+exec /usr/bin/npx "$@"

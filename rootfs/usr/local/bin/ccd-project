@@ -14,17 +14,21 @@ export GIT_TERMINAL_PROMPT=0
 # kit-code, taste-skill @ the marketplace whose repo is $KIT_REPO, or one of the upstream plugins the kit depends on
 # (agent-skills, superpowers, hallmark, design-and-refine) @ its own marketplace, which must also be listed.
 # Only .claude/settings.json is exempt (never settings.local.json); hooks, env, mcpServers etc. are still flagged.
+# The upstream marketplaces come from the active kit's UPSTREAM_MARKETPLACES (kit.sh; 0.9.2 list as fallback).
 KIT_REPO=${KIT_REPO:-}
+# shellcheck source=/dev/null
+. "${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}/kit.sh"
+UPSTREAM=$(kit_upstream_marketplaces | jq -Rn '[inputs | select(length > 0) | split("=") | {name: .[0], repo: .[1]}]')
 kit_manifest_ok() { # kit_manifest_ok <json text>: an object with a string kit_version
   jq -e 'type == "object" and (.kit_version | type == "string")' <<< "$1" > /dev/null 2>&1
 }
 settings_flags() { # settings_flags <json text> [kit_ok 0|1]: comma-separated hook events and risky key names; empty when clean
-  jq -r --argjson kit "${2:-0}" --arg kr "$KIT_REPO" 'def nonempty: . != null and . != false and . != "" and . != [] and . != {};
-    def upstream: ["addyosmani/agent-skills","obra/superpowers-marketplace","mattpocock/skills","nutlope/hallmark","0xdesign/design-plugin"];
+  jq -r --argjson kit "${2:-0}" --arg kr "$KIT_REPO" --argjson up "$UPSTREAM" 'def nonempty: . != null and . != false and . != "" and . != [] and . != {};
+    def upstream: [$up[].repo | ascii_downcase];
     def okrepo: ascii_downcase as $r | ($kr != "" and $r == ($kr | ascii_downcase)) or (upstream | index($r) != null);
     def kitmk: .extraKnownMarketplaces | type == "object" and length > 0 and all(.[]; type == "object" and keys == ["source"]
       and (.source | type == "object" and keys == ["repo","source"] and .source == "github" and (.repo | type == "string" and okrepo)));
-    def upkeys: ["agent-skills@addy-agent-skills","superpowers@superpowers-marketplace","hallmark@hallmark","design-and-refine@design-plugins"];
+    def upkeys: [$up[].name as $n | ({"addy-agent-skills":"agent-skills","superpowers-marketplace":"superpowers","hallmark":"hallmark","design-plugins":"design-and-refine"}[$n] // empty) + "@" + $n];
     def kitkeys: [.extraKnownMarketplaces | to_entries[] | select($kr != "" and (.value.source.repo | ascii_downcase) == ($kr | ascii_downcase))
       | .key as $n | ("kit-core","kit-design","kit-code","taste-skill") + "@" + $n];
     def kitep: ((.extraKnownMarketplaces | objects | keys) // []) as $mk | (kitkeys + upkeys) as $ok

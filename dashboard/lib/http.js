@@ -12,7 +12,7 @@ function send(res, status, body, type = 'application/json; charset=utf-8', extra
   res.end(data);
 }
 
-function readJson(req, max = 8 * 1024) {
+function readJson(req, max = 8 * 1024, emptyOk = false) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
@@ -23,7 +23,9 @@ function readJson(req, max = 8 * 1024) {
     });
     req.on('end', () => {
       try {
-        const v = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (emptyOk && text.trim() === '') return resolve({});
+        const v = JSON.parse(text);
         if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error('not an object');
         resolve(v);
       } catch { reject(new HttpError(400, 'invalid JSON')); }

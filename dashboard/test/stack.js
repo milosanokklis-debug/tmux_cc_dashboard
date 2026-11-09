@@ -31,7 +31,8 @@ function stack(extraEnv = {}) {
   const env = {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_CLAUDE_MCP: 'connected', HOME: home, CCDASH_WS: ws, CCDASH_TMUX: sock, CCDASH_STATE: stateDir,
     FAKE_CLAUDE_SETTINGS: settings, FAKE_CLAUDE_FIXTURES: path.join(ROOT, 'tests/fixtures/2.1.317'),
-    FAKE_CLAUDE_HOME: path.join(tmp, 'fake'), FAKE_CLAUDE_TIMEOUT: '5', ...extraEnv,
+    FAKE_CLAUDE_HOME: path.join(tmp, 'fake'), FAKE_CLAUDE_TIMEOUT: '5',
+    CCDASH_ACCOUNTS_LIB: path.join(ROOT, 'rootfs/usr/local/lib/ccdash'), CCDASH_ACCOUNTS_DIR: path.join(tmp, 'accounts'), ...extraEnv,
   };
   delete env.TMUX; delete env.TMUX_PANE;
   const tmux = createTmux({ sock });

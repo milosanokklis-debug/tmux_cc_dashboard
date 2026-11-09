@@ -45,10 +45,12 @@ else mv .claude/settings.json.new .claude/settings.json.tmp; fi
 rm -f .claude/settings.json.new; mv .claude/settings.json.tmp .claude/settings.json
 jq -n --arg v "$ver" --arg p "$csv" '{kit_version: $v, packs: ($p | split(","))}' > .claude/agent-kit.json
 # CLAUDE.md: replace the marker block, keep the rest
+if [ -z "${STUB_NO_CLAUDEMD:-}" ]; then # STUB_NO_CLAUDEMD=1: write only .claude/ (no CLAUDE.md)
 touch CLAUDE.md
 awk '/<!-- agent-kit:start -->/{skip=1} !skip{print} /<!-- agent-kit:end -->/{skip=0}' CLAUDE.md > CLAUDE.md.tmp
 printf '<!-- agent-kit:start -->\nagent-kit %s packs: %s\n<!-- agent-kit:end -->\n' "$ver" "$csv" >> CLAUDE.md.tmp
 mv CLAUDE.md.tmp CLAUDE.md
+fi
 if [ "$design" = 1 ]; then
   mkdir -p .claude/skills/web-design-guidelines
   echo '*' > .claude/skills/web-design-guidelines/.gitignore

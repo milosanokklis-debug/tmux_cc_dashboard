@@ -1,7 +1,7 @@
 'use strict';
 // Notifications settings: Web Push subscribe / unsubscribe and which events to notify about.
 (function () {
-  const { api, h, notice } = window.ccdash;
+  const { api, h, notice, accounts } = window.ccdash;
   const $ = (id) => document.getElementById(id);
   const KEYS = ['approval', 'error', 'finished'];
   const STATE_TEXT = {
@@ -141,6 +141,10 @@
     gidField(gidEmail, $('gid-email-err'), '');
     gidLoad();
     sessLoad();
+    acctReset();
+    $('kit-confirm').hidden = true;
+    if (kitSec.open) kitLoad();
+    accounts.load();
     load().then(focusFirst);
     $('notif-close').focus(); // until the state is known
   });
@@ -239,6 +243,76 @@
       }
     });
   }
+
+  // ---- Claude accounts ----
+  const acctName = $('acct-name');
+  const acctAdd = $('acct-add');
+  let acctBusy = false;
+
+  function acctPaint() {
+    $('acct-list').replaceChildren(...accounts.list().map((a) => h('li', { 'data-testid': 'account-row', 'data-account': a.name }, [
+      h('span', { class: 'acct-name', text: a.name }),
+      // Icon plus words, never colour alone.
+      h('span', { class: 'chip ' + (a.loggedIn ? 'chip-done' : 'chip-shell') }, [
+        h('span', { class: 'chip-icon', 'aria-hidden': 'true', text: a.loggedIn ? '✓' : '!' }),
+        h('span', { text: a.loggedIn ? 'logged in' : 'Not logged in. Use Add account to sign in.' }),
+      ]),
+    ])));
+  }
+  accounts.onChange(acctPaint);
+  acctPaint();
+
+  function acctProblem(name) {
+    if (!name) return '';
+    if (name === 'default') return '“default” is reserved. Choose another name.';
+    if (!accounts.RULE.test(name)) return 'Use lowercase letters, digits, - and _ (up to 32), starting with a letter or digit.';
+    if (accounts.names().includes(name)) return 'That account already exists.';
+    return '';
+  }
+  function acctSync() { acctAdd.disabled = acctBusy; }
+  // Show (or clear) the name problem; typing only clears it, blur and submit show it.
+  function acctCheck(show) {
+    const msg = acctProblem(acctName.value.trim());
+    if (show || !msg) { $('acct-name-err').textContent = msg; if (msg) acctName.setAttribute('aria-invalid', 'true'); else acctName.removeAttribute('aria-invalid'); }
+    return msg;
+  }
+  function acctError(msg) { $('acct-error').textContent = msg || ''; }
+  function acctReset() { acctName.value = ''; acctError(''); acctCheck(false); acctBusy = false; acctSync(); }
+  acctName.addEventListener('input', () => { acctError(''); acctCheck(false); });
+  acctName.addEventListener('blur', () => { if (acctName.value.trim()) acctCheck(true); });
+
+  $('acct-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const name = acctName.value.trim();
+    if (acctBusy) return;
+    if (!name || acctCheck(true)) {
+      if (!name) { $('acct-name-err').textContent = 'Enter a name for the account.'; acctName.setAttribute('aria-invalid', 'true'); }
+      acctName.focus();
+      return;
+    }
+    acctBusy = true;
+    acctError('');
+    acctSync();
+    try {
+      const r = await api('/api/accounts', { method: 'POST', body: { name } });
+      const d = r.data || {};
+      if (!r.ok) {
+        const msg = d.error || 'Could not add the account (HTTP ' + r.status + ').';
+        if (r.status === 400) { $('acct-name-err').textContent = msg; acctName.setAttribute('aria-invalid', 'true'); acctName.focus(); }
+        else acctError(msg);
+        return;
+      }
+      acctReset();
+      opener = null; // the terminal takes over; do not hand focus back to the Settings button
+      dlg.close();
+      window.ccdash.go(d.project || '_login', d.account || name);
+      accounts.load().catch(() => {}); // in the background: the new account shows up in the pickers when it arrives
+    } catch (e) {
+      if (e.message !== 'unauthorized') acctError('Network error: ' + e.message);
+    } finally {
+      acctBusy = false; acctSync();
+    }
+  });
 
   // ---- Signed-in devices ----
   const sessList = $('sess-list');
@@ -339,6 +413,125 @@
       btn.disabled = false;
       btn.textContent = 'Yes, log out everywhere';
     }
+  });
+
+  // ---- Agent kit ----
+  // GET /api/kit runs only when the section opens or the user presses Check; update and reset can run up to 10 minutes.
+  const kitSec = $('kit-section');
+  let kitState = null;
+  let kitBusy = false;
+
+  const short = (sha) => (sha ? String(sha).slice(0, 7) : '');
+  function kitSetStatus(msg, isError) {
+    const el = $('kit-status');
+    el.textContent = msg || '';
+    el.classList.toggle('is-error', !!isError);
+  }
+  function kitSync() {
+    const s = kitState;
+    // aria-disabled (not disabled) keeps focus on the button while busy; handlers guard.
+    const set = (id, off) => $(id).setAttribute('aria-disabled', off ? 'true' : 'false');
+    set('kit-check', kitBusy);
+    set('kit-reset', kitBusy);
+    set('kit-update', kitBusy || !(s && s.updateAvailable));
+    set('kit-reset-yes', kitBusy);
+  }
+  function kitPaint() {
+    const s = kitState;
+    const act = s && s.active;
+    $('kit-active').textContent = act ? (act.version || 'unknown version') + (act.sha ? ' (' + short(act.sha) + ')' : '') : 'Unknown';
+    const img = s && s.image && s.image.sha;
+    $('kit-image').textContent = img && (!act || act.sha !== img) ? short(img) : (img ? 'Same as active' : '');
+    $('kit-image').closest('div').hidden = !img;
+    const nw = s && s.newest && s.newest.sha;
+    $('kit-newest').textContent = nw ? short(nw) + (s.updateAvailable ? ' (update available)' : ' (up to date)') : (s ? 'Unknown' : '');
+    const err = $('kit-error');
+    err.textContent = s && s.error ? String(s.error) : '';
+    err.hidden = !(s && s.error);
+    kitSync();
+  }
+  function kitProblem(r, what) {
+    const d = r.data || {};
+    if (r.status === 409) return 'The kit is busy (another update or check is running). Try again in a moment.';
+    if (r.status === 504) return what + ' timed out. It may still finish; check again in a few minutes.';
+    if (r.status === 502 && what === 'The check') return what + ' failed: the kit source could not be reached' + (d.error ? ' (' + d.error + ')' : '') + '.';
+    return what + ' failed: ' + (d.message || d.error || 'HTTP ' + r.status) + '.';
+  }
+  async function kitLoad() {
+    if (kitBusy) return;
+    kitBusy = true;
+    kitSync();
+    kitSetStatus('Checking…');
+    $('kit-status').prepend(h('span', { class: 'spinner', 'aria-hidden': 'true' }));
+    try {
+      const r = await api('/api/kit');
+      if (!r.ok || !r.data) kitSetStatus(kitProblem(r, 'The check'), true);
+      else { kitState = r.data; kitSetStatus(''); }
+    } catch (e) {
+      if (e.message !== 'unauthorized') kitSetStatus('Network error: ' + e.message, true);
+    } finally { kitBusy = false; kitPaint(); }
+  }
+  function kitShowFailed(list, truncated) {
+    const ul = $('kit-failed');
+    const bad = (Array.isArray(list) ? list : []).filter((p) => p && p.status === 'failed');
+    const rows = bad.map((p) => h('li', {}, [h('strong', { text: String(p.name) }), document.createTextNode(': ' + String(p.message || p.status))]));
+    if (truncated) rows.push(h('li', { text: 'The list was truncated; more projects may have failed.' }));
+    ul.replaceChildren(...rows);
+    ul.hidden = !rows.length;
+  }
+  async function kitRun(body, what, running, done) {
+    if (kitBusy) return;
+    kitBusy = true;
+    kitSync();
+    $('kit-failed').hidden = true;
+    kitSetStatus(running + ' This can take up to 10 minutes.');
+    $('kit-status').prepend(h('span', { class: 'spinner', 'aria-hidden': 'true' }));
+    let ok = false;
+    try {
+      // No client timeout: the server enforces the 10 minute limit and answers 504.
+      const r = await api('/api/kit/update', { method: 'POST', body });
+      const d = r.data || {};
+      if (!r.ok) {
+        kitSetStatus(kitProblem(r, what), true);
+      } else {
+        ok = true;
+        const failed = (d.projects || []).filter((p) => p && p.status === 'failed').length;
+        kitSetStatus(done + (d.new ? ' Active kit is now ' + (d.versions && d.versions.new ? d.versions.new : '') + ' (' + short(d.new) + ').' : '')
+          + (failed ? ' ' + failed + ' project' + (failed === 1 ? '' : 's') + ' failed.' : ''), failed > 0);
+        kitShowFailed(d.projects, d.truncated);
+      }
+    } catch (e) {
+      if (e.message !== 'unauthorized') kitSetStatus('Network error: ' + e.message, true);
+    }
+    // Only a successful update/reset refreshes state; busy stays true until it is done so clicks cannot overlap.
+    try {
+      if (ok) {
+        const keep = $('kit-status').textContent;
+        const keepErr = $('kit-status').classList.contains('is-error');
+        try {
+          const r = await api('/api/kit');
+          if (r.ok && r.data) kitState = r.data;
+        } catch { /* keep the last state */ }
+        kitPaint();
+        kitSetStatus(keep, keepErr);
+      }
+    } finally {
+      kitBusy = false;
+      kitPaint();
+    }
+  }
+
+  kitSec.addEventListener('toggle', () => { if (kitSec.open) kitLoad(); });
+  $('kit-check').addEventListener('click', () => { if (kitBusy) return; $('kit-confirm').hidden = true; kitLoad(); });
+  $('kit-update').addEventListener('click', () => $('kit-update').getAttribute('aria-disabled') !== 'true' && kitRun({}, 'The update', 'Updating the kit…', 'Kit updated.'));
+  $('kit-reset').addEventListener('click', () => { if (kitBusy) return; $('kit-confirm').hidden = false; $('kit-reset-no').focus(); });
+  $('kit-reset-no').addEventListener('click', () => { $('kit-confirm').hidden = true; $('kit-reset').focus(); });
+  $('kit-confirm').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); $('kit-reset-no').click(); } });
+  $('kit-reset-yes').addEventListener('click', async () => {
+    if (kitBusy) return;
+    $('kit-confirm').hidden = true;
+    $('kit-reset').focus();
+    await kitRun({ reset: true }, 'The reset', 'Going back to the image version…', 'Back on the image version.');
   });
 
   // Register the worker early when the user already opted in, so pushes arrive even before the panel is opened.

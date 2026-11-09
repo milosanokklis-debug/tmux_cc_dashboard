@@ -8,12 +8,15 @@
 //   {op:"read", path, offset, length}        -> {ok, data(base64), offset, size, inode}
 // Every path is resolved with realpath and must be a regular file inside ROOT (compared with a
 // trailing separator, so projects-evil is not projects). Errors never repeat a path.
-// Standard library only. Env: CCDASH_READER_SOCK, CCDASH_READER_ROOT (overridable for tests).
+// Allowed roots: the default root plus <accounts>/<name>/projects for every real (non-symlink) account
+// directory, found on each request so a new account needs no restart. A path must resolve inside one of them.
+// Standard library only. Env: CCDASH_READER_SOCK, CCDASH_READER_ROOT, CCDASH_ACCOUNTS_DIR (overridable for tests).
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 
 const DEFAULT_ROOT = '/home/ccd/.claude/projects';
+const DEFAULT_ACCOUNTS = '/home/ccd/.claude-accounts';
 const DEFAULT_SOCK = '/run/ccdash/reader.sock';
 const MAX_LENGTH = 1024 * 1024; // bytes per read/tail
 const MAX_REQUEST = 8 * 1024; // bytes per request line
@@ -24,21 +27,42 @@ class ReadError extends Error {
   constructor(code) { super(code); this.code = code; }
 }
 
-// Real path of `p` when it names an existing entry inside `root`; throws ReadError('not_found')
+const ACCOUNT_NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+const isRealDir = (d) => { try { return fs.lstatSync(d).isDirectory(); } catch { return false; } };
+
+// Roots of the extra accounts. An account dir or its projects dir that is a symlink is skipped, so a
+// link cannot point the reader at some other directory.
+function accountRoots(base = process.env.CCDASH_ACCOUNTS_DIR || DEFAULT_ACCOUNTS) {
+  let names;
+  try { names = fs.readdirSync(base); } catch { return []; }
+  const out = [];
+  for (const n of names.sort()) {
+    if (!ACCOUNT_NAME.test(n) || n === 'default') continue;
+    const d = path.join(base, n);
+    const projects = path.join(d, 'projects');
+    if (isRealDir(d) && isRealDir(projects)) out.push(projects);
+  }
+  return out;
+}
+const defaultRoots = (root = process.env.CCDASH_READER_ROOT || DEFAULT_ROOT) => [root, ...accountRoots()];
+// `root` is a path, a list of paths or a function returning one of those
+const rootList = (root) => [].concat(typeof root === 'function' ? root() : root);
+
+// Real path of `p` when it names an existing entry inside one of `roots`; throws ReadError('not_found')
 // for everything else (relative, NUL, missing, outside, symlink escape), so a caller cannot
 // tell a file outside the root from one that does not exist.
-function resolveInside(root, p) {
+function resolveInside(roots, p) {
   if (typeof p !== 'string' || p.length === 0 || p.length > 4096 || p.includes('\0') || !path.isAbsolute(p)) {
     throw new ReadError('bad_path');
   }
-  let base;
   let real;
-  try {
-    base = fs.realpathSync(root);
-    real = fs.realpathSync(p);
-  } catch { throw new ReadError('not_found'); }
-  if (!real.startsWith(base.endsWith(path.sep) ? base : base + path.sep)) throw new ReadError('not_found');
-  return real;
+  try { real = fs.realpathSync(p); } catch { throw new ReadError('not_found'); }
+  for (const root of rootList(roots)) {
+    let base;
+    try { base = fs.realpathSync(root); } catch { continue; }
+    if (real.startsWith(base.endsWith(path.sep) ? base : base + path.sep)) return real;
+  }
+  throw new ReadError('not_found');
 }
 
 const int = (v, min, max, dflt) => {
@@ -101,7 +125,7 @@ function handle(root, req) {
   }
 }
 
-function serve({ sock = DEFAULT_SOCK, root = DEFAULT_ROOT, log = console.error } = {}) {
+function serve({ sock = DEFAULT_SOCK, root = defaultRoots, log = console.error } = {}) {
   try { fs.unlinkSync(sock); } catch { /* none */ }
   let open = 0;
   const server = net.createServer((c) => {
@@ -139,8 +163,8 @@ function serve({ sock = DEFAULT_SOCK, root = DEFAULT_ROOT, log = console.error }
   return server;
 }
 
-module.exports = { handle, serve, MAX_LENGTH };
+module.exports = { handle, serve, defaultRoots, MAX_LENGTH };
 
 if (require.main === module) {
-  serve({ sock: process.env.CCDASH_READER_SOCK || DEFAULT_SOCK, root: process.env.CCDASH_READER_ROOT || DEFAULT_ROOT });
+  serve({ sock: process.env.CCDASH_READER_SOCK || DEFAULT_SOCK });
 }

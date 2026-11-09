@@ -94,7 +94,7 @@ test('WS term: starts the session, spawns tmux argv with a pty, relays data both
   t.after(c.s.stop);
   const ws = await c.open('/term/demo?cols=100&rows=30');
   await c.tick();
-  assert.deepStrictEqual(c.svc.calls.runFile, [['ccd-session', 'start', 'demo']]);
+  assert.deepStrictEqual(c.svc.calls.runFile, [['ccd-session', 'start', 'demo', '--account', 'default']]);
   const sp = c.pty.spawns[0];
   assert.strictEqual(sp.file, 'tmux');
   assert.deepStrictEqual(sp.args.slice(0, 6), ['-S', '/tmp/fake.sock', 'new-session', '-t', '=claude-demo', '-s']);

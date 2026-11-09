@@ -77,6 +77,7 @@ req() { curl -s -o /dev/null -b "$jar" -X "$1" -H "Origin: $origin" -H 'X-CCDash
 tree() { api "$url/api/tree?all=1"; }
 live() { tree | jq -r --arg p "$1" '[.projects[] | select(.project == $p) | .conversations[] | select(.status != "ended" and .status != "sleeping")][0] | '"$2"; }
 sid_of() { live "$1" '.sid // empty'; }
+is_idle() { [ "$(live "$1" '.idle // empty')" = true ]; }
 is_status() { [ "$(live "$1" '.status // empty')" = "$2" ]; }
 start_conv() { # start_conv PROJECT
   ccd mkdir -p "/workspace/$1"
@@ -257,6 +258,8 @@ echo "     the /events client received $ev_n messages in all"
 
 echo "== browser (Playwright, headless Chromium at 390x844 and 1280x800)"
 for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 30 "l$i is waiting (quiet before the browser)" is_status "l$i" waiting; done
+# idle flips (waiting -> idle after CCDASH_IDLE_FLAG) push /events state changes that make the cards reload the list; let them all land first
+for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 30 "l$i is idle (flag flipped before the browser)" is_idle "l$i"; done
 sleep 8
 PW_RC=0
 $D rm -f "$PW_NAME" >/dev/null 2>&1 || true

@@ -350,7 +350,7 @@ write_env_and_start() {
   chown_if_root ccdash:ccdash "$e"
   chmod 600 "$e"
   local k v
-  for k in CCDASH_VERSION CLAUDE_CODE_VERSION S6_OVERLAY_VERSION BASIC_MEMORY_VERSION KIT_REPO KIT_REF; do
+  for k in CCDASH_VERSION CLAUDE_CODE_VERSION S6_OVERLAY_VERSION BASIC_MEMORY_VERSION SEMGREP_VERSION KIT_REPO KIT_REF; do
     v=$(get_env "$SRC/.env.example" "$k")
     if [ -n "$v" ] && [ -z "$(get_env "$e" "$k")" ]; then set_env "$e" "$k" "$v"; fi # never override a pinned value
   done

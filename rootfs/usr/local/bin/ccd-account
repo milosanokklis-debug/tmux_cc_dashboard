@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Runs as ccd in the container; bin/ccd calls it.
+#   ccd-account login [--account NAME]   create NAME if missing, register basic-memory (ccd-memory-init), run claude for it
+#   ccd-account create NAME    create NAME (not `default`) and register basic-memory for it; no claude is started (the dashboard's Add account)
+#   ccd-account list           "name<TAB>logged in|not logged in" per account; never prints credentials
+set -uo pipefail
+# shellcheck source=/dev/null
+. "${CCDASH_ACCOUNTS_LIB:-/usr/local/lib/ccdash}/accounts.sh"
+
+case ${1:-} in
+  login)
+    shift
+    name=default
+    if [ $# -eq 2 ] && [ "$1" = --account ]; then name=$2; elif [ $# -ne 0 ]; then echo "usage: ccd-account login [--account name]" >&2; exit 2; fi
+    account_valid "$name" || { echo "ccd: invalid account name (a-z, 0-9, _ and -, up to 32; starts with a letter or digit)" >&2; exit 2; }
+    if [ "$name" != default ] && [ ! -d "$(account_config_dir "$name")" ]; then
+      account_create "$name" || { echo "ccd: cannot create account $name" >&2; exit 1; }
+    fi
+    ccd-memory-init || true # idempotent; registers basic-memory for this account too
+    account_env "$name"
+    exec claude ;;
+  create)
+    [ $# -eq 2 ] || { echo "usage: ccd-account create name" >&2; exit 2; }
+    name=$2
+    account_valid "$name" && [ "$name" != default ] || { echo "ccd: invalid account name (a-z, 0-9, _ and -, up to 32; starts with a letter or digit; not default)" >&2; exit 2; }
+    account_create "$name" || { echo "ccd: cannot create account $name" >&2; exit 1; }
+    ccd-memory-init "$name" || true # registers basic-memory for this new account only
+    echo "$name" ;;
+  list)
+    while IFS= read -r name; do
+      if (account_env "$name" && timeout 30 claude auth status >/dev/null 2>&1 </dev/null); then s="logged in"; else s="not logged in"; fi
+      printf '%s\t%s\n' "$name" "$s"
+    done < <(account_list) ;;
+  *) echo "usage: ccd-account login [--account name] | create name | list" >&2; exit 2 ;;
+esac

@@ -65,3 +65,8 @@ selects the `list` output: `connected` (default) prints `basic-memory: /opt/basi
 (not real wording, a trap: a naive `grep connected` would pass it); `none` prints `No MCP servers configured`.
 `mcp add` appends its argv to `$FAKE_CLAUDE_HOME/mcp-add.log` and, after that, `list` shows basic-memory
 as connected even with `FAKE_CLAUDE_MCP=none` (so init idempotency can be tested). Other `mcp` subcommands exit 2.
+
+With `CLAUDE_CONFIG_DIR` set, the registry (`mcp-add.log`, `mcp-registered`) lives in
+`$FAKE_CLAUDE_HOME/accounts/<basename of the dir>/` instead; with it unset nothing changes.
+`claude auth status` prints `{"loggedIn": true}` and exits 0 if `logged-in` exists in that same state dir
+(touch it from a test), else prints `{"loggedIn": false}` and exits 1.

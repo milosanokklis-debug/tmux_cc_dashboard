@@ -2,6 +2,8 @@
 # Records the conversation state (working, needs_approval, waiting, error, ended) per session id
 # in ~/.ccdash/sessions/<sid>.json. Must never block or fail Claude: every path exits 0.
 set -uo pipefail
+# shellcheck source=/dev/null
+. "${CCDASH_ACCOUNTS_LIB:-${BASH_SOURCE[0]%/*}/..}/accounts.sh" 2>/dev/null || account_of_config_dir() { echo default; }
 # a hidden helper Claude (CCDASH_HIDDEN=1, the /usage fallback) is not a conversation
 if [ "${CCDASH_HIDDEN:-}" = 1 ]; then cat >/dev/null; exit 0; fi
 umask 027
@@ -28,15 +30,18 @@ if [ -n "${TMUX:-}" ]; then
   read -r srv start < <(tmux -S "${CCDASH_TMUX:-/run/ccdash/tmux.sock}" display -p -t "${TMUX_PANE:-}" '#{pid} #{start_time}' 2>/dev/null || true)
   [[ ${srv:-} =~ ^[0-9]+$ && ${start:-} =~ ^[0-9]+$ ]] || { srv=""; start=""; }
 fi
+# the account comes from the config dir: unset or anything else is `default`
+acct=$(account_of_config_dir)
 tmp=$(mktemp "$dir/.$sid.XXXXXX" 2>/dev/null) || exit 0
 # the payload goes in on stdin (an argv string is capped at 128 KB, and PostToolUse can be larger)
 if jq --argjson prev "$prev" --arg state "${1:-}" \
       --arg pane "${TMUX_PANE:-}" --arg srv "$srv" --arg start "$start" --arg proj "${CLAUDE_PROJECT_DIR:-}" \
-      --arg from "${CCDASH_RESUMED_FROM:-}" --argjson now "$(date +%s)" '
+      --arg acct "$acct" --arg from "${CCDASH_RESUMED_FROM:-}" --argjson now "$(date +%s)" '
   . as $in | $prev + {
     sid: $in.session_id,
     project: ($prev.project // (if $proj != "" then $proj else $in.cwd end)),
     transcript: $in.transcript_path,
+    account: $acct,
     state: $state, event: $in.hook_event_name, ts: $now,
     pane: (if $pane != "" then $pane else $prev.pane end),
     tmux_pid: (if $srv != "" then ($srv | tonumber) else $prev.tmux_pid end),
