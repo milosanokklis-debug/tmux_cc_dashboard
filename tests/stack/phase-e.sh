@@ -7,8 +7,8 @@
 # Chromium (tests/playwright/specs/phase-e.test.js) at 390x844 and 1280x800 that opens the Usage panel,
 # the tree and a subagent transcript, takes screenshots and checks that an idle cards view makes no HTTP
 # requests. Needs docker (or CCDASH_DOCKER, e.g. "sudo -n -u ccdash /usr/local/bin/ccdash-docker"), curl,
-# jq and tar. Own project and volumes (ccdashtest-e), removed at the end.
-# PHASE_E_PART=core|load runs half (CI runs them as two legs); unset or empty runs both. core: reader socket,
+# jq and tar. Own project and volumes (ccdashtest-e, or per part below), removed at the end.
+# PHASE_E_PART=core|load runs half (CI runs them as two legs, "stack (phase-e core)" and "stack (phase-e load)"); unset or empty runs both. core: reader socket,
 # usage gauges, subagent, refusals, token totals (project ccdashtest-e-core, port 7694); load: 10 conversations,
 # CPU/memory, browser (project ccdashtest-e-load, port 7695); both: project ccdashtest-e, port 7694.
 # Env: CCDASH_TEST_PORT (7694, or 7695 for load), CCDASH_IMAGE (ccdash:ci, built from the checkout if missing; remove it to
