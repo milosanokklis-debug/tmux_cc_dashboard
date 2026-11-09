@@ -70,8 +70,7 @@ if [ -n "$kit" ]; then
 fi
 if [ -n "$kit" ] && [ "$want" = 1 ]; then
   kitenabled=true
-  packs=(kit-core kit-design kit-code); words=(design code)
-  packs_csv=$(IFS=,; echo "${packs[*]}")
+  packs_csv='kit-core,kit-design,kit-code'
   if [ -z "${CCDASH_KIT_LOCKED:-}" ]; then # ccd-kit update already holds this lock when it calls us
     exec 9> "$(kit_lock_dir)/kit-$proj.lock"; flock -w "${CCDASH_KIT_LOCK_WAIT:-600}" 9 || { echo "kit-error 5 Kit busy (another kit run holds the project lock)"; exit 8; }
   fi
@@ -128,7 +127,7 @@ if [ -n "$kit" ] && [ "$want" = 1 ]; then
   if [ -L "$dir/.claude" ]; then # a symlinked .claude would make the kit write outside the checkout: do not run it
     echo ".claude is a symlink; the kit was not run" > "$log"; out=''; rc=6
   else
-    NO_COLOR=1 KIT_REPO="$kit_repo" TMPDIR=/tmp setsid "$kit" ensure "$dir" "${words[@]}" --json > "$bak/.kit-out" 2>> "$log" < /dev/null 9>&- &
+    NO_COLOR=1 KIT_REPO="$kit_repo" TMPDIR=/tmp setsid "$kit" ensure "$dir" design code --json > "$bak/.kit-out" 2>> "$log" < /dev/null 9>&- &
     kpid=$!
     wait "$kpid" && rc=0 || rc=$?
     kpid=''
@@ -156,12 +155,17 @@ if [ -n "$kit" ] && [ "$want" = 1 ]; then
     case $kmem in connected | missing) ;; *) kmem=unknown ;; esac
   fi
   if [ "$kerr" = 0 ] && [ "$kchanged" = true ] && [ -z "$pre_dirty" ]; then
-    git -C "$dir" add -A -- .claude CLAUDE.md > /dev/null 2>&1 || true
-    if ! git -C "$dir" diff --cached --quiet -- .claude CLAUDE.md 2> /dev/null; then
+    # pathspecs that match nothing (no CLAUDE.md) make git add and git commit fail: use only paths that exist
+    # or have staged changes
+    for f in .claude CLAUDE.md; do
+      if [ -e "$dir/$f" ] || [ -L "$dir/$f" ]; then git -C "$dir" add -A -- "$f" > /dev/null 2>&1 || true; fi
+    done
+    mapfile -t staged < <(git -C "$dir" diff --cached --name-only -- .claude CLAUDE.md 2> /dev/null)
+    if [ "${#staged[@]}" -gt 0 ]; then
       # pathspec commit (--only): the user's own staged files are never included
       if GIT_AUTHOR_NAME=ccdash GIT_AUTHOR_EMAIL=ccdash@localhost GIT_COMMITTER_NAME=ccdash GIT_COMMITTER_EMAIL=ccdash@localhost \
         git -C "$dir" -c user.name=ccdash -c user.email=ccdash@localhost -c core.hooksPath=/dev/null -c commit.gpgsign=false \
-        commit -q --no-verify -m "chore: agent-kit $kver" -- .claude CLAUDE.md >> "$log" 2>&1 < /dev/null; then
+        commit -q --no-verify -m "chore: agent-kit $kver" -- "${staged[@]}" >> "$log" 2>&1 < /dev/null; then
         committed=1
       else
         git -C "$dir" reset -q -- .claude CLAUDE.md >> "$log" 2>&1 || true

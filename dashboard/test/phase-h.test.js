@@ -28,12 +28,15 @@ test('GET /api/projects carries kit {version, packs, memory}; null without a rec
   const svc = setup({ repo: 'octo/demo', head: HEAD, kit: { ...KIT, memory: 'weird' } });
   fs.mkdirSync(path.join(svc.workspace, 'bad'));
   fs.writeFileSync(path.join(svc.projectsDir, 'bad.json'), JSON.stringify({ repo: 'o/bad', kit: { version: 'x y', packs: ['kit-core'] } }));
+  fs.mkdirSync(path.join(svc.workspace, 'old'));
+  fs.writeFileSync(path.join(svc.projectsDir, 'old.json'), JSON.stringify({ repo: 'o/old', kit: { version: '0.9.2', packs: ['kit-core', 'kit-legacy'] } }));
   fs.mkdirSync(path.join(svc.workspace, 'plain'));
   const s = await h.authed(svc);
   t.after(s.stop);
   const by = Object.fromEntries((await (await get(s, '/api/projects')).json()).projects.map((p) => [p.name, p]));
   assert.deepStrictEqual(by.demo.kit, { version: '0.9.2', packs: ['kit-core', 'kit-design'], memory: 'unknown' });
   assert.strictEqual(by.bad.kit, null);
+  assert.deepStrictEqual(by.old.kit, { version: '0.9.2', packs: ['kit-core'], memory: 'unknown' }); // unknown pack dropped
   assert.strictEqual(by.plain.kit, null);
 });
 

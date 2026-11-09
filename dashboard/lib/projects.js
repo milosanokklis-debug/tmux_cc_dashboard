@@ -57,9 +57,9 @@ const KIT_PACKS = ['kit-core', 'kit-design', 'kit-code'];
 function readKit(k) {
   if (k === null || typeof k !== 'object' || Array.isArray(k)) return null;
   if (typeof k.version !== 'string' || !KIT_VERSION_RE.test(k.version)) return null;
-  if (!Array.isArray(k.packs) || !k.packs.every((p) => KIT_PACKS.includes(p))) return null;
+  const packs = Array.isArray(k.packs) ? k.packs : []; // unknown values are dropped, not fatal
   const memory = k.memory === 'connected' || k.memory === 'missing' ? k.memory : 'unknown';
-  return { version: k.version, packs: KIT_PACKS.filter((p) => k.packs.includes(p)), memory };
+  return { version: k.version, packs: KIT_PACKS.filter((p) => packs.includes(p)), memory };
 }
 
 const CTRL_RE = /[\u0000-\u001f\u007f-\u009f]/g;

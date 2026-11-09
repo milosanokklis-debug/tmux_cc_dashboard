@@ -57,6 +57,15 @@ subjects() { git -C "$D" log --format=%s; }
   [ -s "$HOME/.ccdash/kit-demo.log" ]
 }
 
+@test "kit that writes only .claude/ (no CLAUDE.md): the commit still succeeds" {
+  STUB_NO_CLAUDEMD=1 run "$BIN/ccd-onboard" --kit octo/demo
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$D" log -1 --format=%s)" = 'chore: agent-kit 0.9.2' ]
+  [ "$(git -C "$D" diff-tree --no-commit-id --name-only -r HEAD | paste -sd' ')" = ".claude/agent-kit.json .claude/settings.json" ]
+  [ -z "$(git -C "$D" status --porcelain)" ]
+  [ "$(jq -r 'has("kitError")' "$REC")" = false ]
+}
+
 @test "second onboard: nothing changes, no commit, tree clean" {
   "$BIN/ccd-onboard" --kit octo/demo
   before=$(state)
