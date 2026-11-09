@@ -87,7 +87,7 @@ if [ -n "$kit" ] && { [ "$want" = 1 ] || [ "$detach" = 1 ]; }; then
   bak=$(mktemp -d "${TMPDIR:-/tmp}/ccd-kit.XXXXXX")
   trap 'rm -rf "$bak"' EXIT
   gitdir=$(git -C "$dir" rev-parse --absolute-git-dir 2> /dev/null || echo "$dir/.git")
-  kitpaths=(.claude/settings.local.json .claude/agent-kit.json .claude/agents CLAUDE.local.md .claude/skills/web-design-guidelines)
+  kitpaths=(.claude/settings.local.json .claude/agent-kit.json .claude/agents CLAUDE.local.md .claude/skills/web-design-guidelines .claude/skills/writing-guidelines)
   gitpaths=(info/exclude agent-kit) # relative to the git dir
   had_claude=0; had_skills=0; had_hp=0
   [ ! -e "$dir/.claude" ] || had_claude=1
@@ -109,6 +109,8 @@ if [ -n "$kit" ] && { [ "$want" = 1 ] || [ "$detach" = 1 ]; }; then
     local f
     [ ! -L "$dir/.claude" ] || return 0 # never write or delete through a symlinked .claude
     for f in "${kitpaths[@]}"; do
+      # skip paths below a symlinked .claude/skills or .claude/agents: rm -rf would reach outside the checkout
+      case $f in .claude/skills/*) [ ! -L "$dir/.claude/skills" ] || continue ;; .claude/agents*) [ ! -L "$dir/.claude/agents" ] || continue ;; esac
       rm -rf "${dir:?}/$f"
       if [ -e "$bak/w/$f" ] || [ -L "$bak/w/$f" ]; then mkdir -p "$dir/$(dirname "$f")"; cp -a "$bak/w/$f" "$dir/$f"; fi
     done
