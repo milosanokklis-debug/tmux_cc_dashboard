@@ -89,7 +89,9 @@ ccd kit update [<ref>]
 ccd kit update --reset
 ```
 
-`on` and `off` take the project name. `off` stops the checks but leaves the kit files in the repo, because kit 0.9.2 has no remove path. `status` shows the active kit version, `check` compares it with the newest upstream, `update` switches to a newer one, and `update --reset` goes back to the version in the image.
+`on` and `off` take the project name. `status` shows the active kit version, `check` compares it with the newest upstream, `update` switches to a newer one, and `update --reset` goes back to the version in the image.
+
+The image ships kit 0.14.0. With the kit on, the project is attached to the kit, and no kit files are committed or pushed. The kit's files stay out of git through `.git/info/exclude`. Files the repo already tracks stay tracked. A push needs a logged-in account, because the kit's pre-push hook runs a Claude review. With the kit off, nothing is filtered, and agent files go through git like any other file. Turning the kit off on a project that is attached detaches it. The image includes gitleaks and uv, which attach needs.
 
 For a private repo, or to push, add a fine-grained token in the dashboard first. The shell commands have no token option. Make the token fine-grained and limit it to that one repository. Give it Contents read/write and Metadata read. Never use a classic token. A classic token can reach every repo you can access.
 
