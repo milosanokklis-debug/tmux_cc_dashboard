@@ -1,16 +1,22 @@
 name: test
 on:
   push:
+    branches: [main]
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  test:
+  checks:
+    name: checks (shellcheck, dashboard, docs, fixtures)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y bats shellcheck jq tmux
+        run: sudo apt-get update && sudo apt-get install -y shellcheck jq tmux
       - name: shellcheck
         run: |
           files=$(git ls-files '*.sh')
@@ -20,38 +26,73 @@ jobs:
           done
           # shellcheck disable=SC2086
           shellcheck $files
-      - name: bats
-        run: bats tests/bats
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
       - name: dashboard tests
         run: cd dashboard && npm ci && npm test
       - name: docs check
         run: tests/docs-check.sh
       - name: replay fixtures
         run: tests/replay-fixtures.sh
-      - name: build main image
+
+  bats:
+    name: bats
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y bats jq tmux shellcheck parallel
+      - name: bats (parallel)
+        run: bats --jobs "$(nproc)" tests/bats
+
+  stack:
+    name: stack (${{ matrix.script }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        script: [phase-b, phase-c, phase-d, phase-e, phase-g, egress]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pinned versions
         run: |
-          set -a; . ./.env.example; set +a
-          docker build \
-            --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION" \
-            --build-arg "S6_OVERLAY_VERSION=$S6_OVERLAY_VERSION" \
-            --build-arg "BASIC_MEMORY_VERSION=$BASIC_MEMORY_VERSION" \
-            --build-arg "KIT_REPO=$KIT_REPO" \
-            --build-arg "KIT_REF=$KIT_REF" \
-            -t ccdash:ci .
-      - name: stack test (compose restart, wake)
-        run: tests/stack/phase-b.sh
-      - name: stack test (controls, approvals, push; headless Chromium at a phone viewport)
-        run: tests/stack/phase-c.sh
-      - name: stack test (re-onboarding, pull, git identity)
-        run: tests/stack/phase-d.sh
-      - name: stack test (reader service, gauges, tokens, load, headless Chromium)
-        run: tests/stack/phase-e.sh
-      - name: stack test (backup, volume delete, restore)
-        run: tests/stack/phase-g.sh
-      - name: stack test (egress allowlist proxy, internal network, push and git through it)
-        run: tests/stack/egress.sh
-      - name: build test image
-        run: docker build -f tests/Dockerfile.fake-claude -t ccdash-fake-claude:ci .
+          set -eu
+          grep -E '^(CLAUDE_CODE_VERSION|S6_OVERLAY_VERSION|BASIC_MEMORY_VERSION|KIT_REPO|KIT_REF)=' .env.example >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - name: Build main image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ccdash:ci
+          cache-from: type=gha,scope=image-amd64
+          cache-to: type=gha,mode=max,scope=image-amd64
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
+            S6_OVERLAY_VERSION=${{ env.S6_OVERLAY_VERSION }}
+            BASIC_MEMORY_VERSION=${{ env.BASIC_MEMORY_VERSION }}
+            KIT_REPO=${{ env.KIT_REPO }}
+            KIT_REF=${{ env.KIT_REF }}
+      - name: Stack test
+        run: tests/stack/${{ matrix.script }}.sh
+
+  fake-claude-image:
+    name: build fake-claude test image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/Dockerfile.fake-claude
+          load: true
+          tags: ccdash-fake-claude:ci
+          cache-from: type=gha,scope=fake-claude
+          cache-to: type=gha,mode=max,scope=fake-claude
