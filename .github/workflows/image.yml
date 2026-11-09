@@ -1,7 +1,7 @@
 name: image
 # Tag v0.1.1 publishes ghcr.io/milosanokklis-debug/ccdash:0.1.1 and :latest (multi-arch).
 # The tag keeps its "v" in git; the image tag drops it, because compose uses CCDASH_VERSION=0.1.1.
-# Every run first builds one leg per architecture with a smoke test (no push); publish needs both legs to pass.
+# Every run first builds one leg per architecture (arm64 on a native runner) with a smoke test (no push); publish needs both legs to pass.
 # Tags with a '-' (v1.0.0-rc1) are not published.
 on:
   push:
@@ -17,22 +17,31 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   IMAGE: ghcr.io/milosanokklis-debug/ccdash
 jobs:
   dry-run:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - name: Read pinned versions
         run: |
           set -eu
           grep -E '^(CLAUDE_CODE_VERSION|S6_OVERLAY_VERSION|BASIC_MEMORY_VERSION|KIT_REPO|KIT_REF)=' .env.example >> "$GITHUB_ENV"
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build (no push)
         uses: docker/build-push-action@v6
@@ -42,6 +51,8 @@ jobs:
           push: false
           load: true
           tags: ccdash:smoke
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.arch }}
           build-args: |
             CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
             S6_OVERLAY_VERSION=${{ env.S6_OVERLAY_VERSION }}
@@ -55,7 +66,7 @@ jobs:
           set -eu
           docker run --rm --platform "$PLATFORM" --entrypoint sh ccdash:smoke -c \
             'uname -m; node --version; claude --version'
-      # Does the dashboard come up and answer /healthz (also under QEMU for arm64)?
+      # Does the dashboard come up and answer /healthz (natively on each runner, including arm64)?
       - name: Smoke test (/healthz)
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -103,6 +114,7 @@ jobs:
     # pre-release tags such as v1.0.0-rc1 match the glob but are not published
     if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -125,6 +137,9 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          cache-from: |
+            type=gha,scope=image-amd64
+            type=gha,scope=image-arm64
           tags: |
             ${{ env.IMAGE }}:${{ env.VERSION }}
             ${{ env.IMAGE }}:latest
