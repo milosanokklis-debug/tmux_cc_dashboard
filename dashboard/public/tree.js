@@ -53,8 +53,9 @@
   }
 
   // Model and in/out token totals under a node's header row. Null tokens (transcript not read yet) show nothing.
-  function metaLine(n) {
+  function metaLine(n, account) {
     const bits = [];
+    if (account) bits.push(h('span', { class: 'conv-account', 'data-testid': 'account-label', text: 'account ' + account }));
     if (n.model) bits.push(h('span', { class: 'meta-model', 'data-testid': 'node-model', text: n.model }));
     const t = n.tokens;
     if (t && typeof t === 'object') {
@@ -148,7 +149,7 @@
         chip(CONV, c.status),
         elapsed(c.startedTs, c.endedTs, running),
       ]),
-      metaLine(c),
+      metaLine(c, window.ccdash.accounts.multi() ? (c.account || 'default') : null),
     ].filter(Boolean));
     const flags = FLAGS.filter(([k]) => c[k]);
     if (flags.length) {
@@ -291,6 +292,8 @@
       if (el.textContent !== t) el.textContent = t;
     }
   }
+
+  window.ccdash.accounts.onChange(() => { if (lastData) render(lastData); });
 
   function refresh() { lastJson = null; if (current != null) load(); }
   controls.setOnChange((opts) => {

@@ -49,6 +49,56 @@
     ]);
   };
 
+  // Claude accounts. `list` is the last /api/accounts answer (default first); it starts as just "default",
+  // so until a second account is known nothing account-related is shown. Refreshed on start, when a dialog
+  // that needs it opens, and after an account is added; a failed refresh keeps the last known list.
+  ns.accounts = (function () {
+    const RULE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+    const KEY = 'ccdash.account.';
+    let list = [{ name: 'default', loggedIn: true }];
+    let fetched = false;
+    let viewing = null; // account of the terminal in view, null elsewhere
+    const subs = new Set();
+    const names = () => list.map((a) => a.name);
+    const multi = () => list.length > 1;
+    function notify() { for (const fn of subs) { try { fn(); } catch (e) { console.error('accounts handler failed', e); } } }
+    async function load() {
+      try {
+        const r = await ns.api('/api/accounts');
+        if (r.ok && r.data && Array.isArray(r.data.accounts) && r.data.accounts.length) {
+          const next = r.data.accounts.map((a) => ({ name: String(a.name), loggedIn: !!a.loggedIn }));
+          const changed = JSON.stringify(next) !== JSON.stringify(list);
+          list = next;
+          fetched = true;
+          if (changed) notify();
+        }
+      } catch { /* keep the last known list; api() redirects a 401 itself */ }
+      return list;
+    }
+    function last(project) {
+      let v = null;
+      try { v = localStorage.getItem(KEY + project); } catch { /* storage off */ }
+      return v && RULE.test(v) && (!fetched || names().includes(v)) ? v : 'default';
+    }
+    function setLast(project, name) {
+      try { if (name && name !== 'default') localStorage.setItem(KEY + project, name); else localStorage.removeItem(KEY + project); } catch { /* storage off */ }
+    }
+    // Fill a <select> with the known accounts, keeping `value` (or the current choice) selected.
+    function fill(select, value) {
+      const want = value || select.value || 'default';
+      select.replaceChildren(...names().map((n) => ns.h('option', { value: n, text: n })));
+      select.value = names().includes(want) ? want : 'default';
+    }
+    return {
+      RULE, load, names, multi, last, setLast, fill,
+      list: () => list,
+      loaded: () => fetched,
+      onChange(fn) { subs.add(fn); },
+      view: () => viewing,
+      setView(name) { viewing = name; },
+    };
+  })();
+
   ns.fmtDuration = function fmtDuration(sec) {
     sec = Math.max(0, Math.floor(sec));
     if (sec < 60) return sec + 's';

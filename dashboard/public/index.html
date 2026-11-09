@@ -45,6 +45,7 @@
   <div class="term-bar">
     <a href="#/" id="back" class="btn btn-ghost"><span aria-hidden="true">&larr;</span> Back<span class="back-more"> to projects</span></a>
     <span id="term-title" class="term-title"></span>
+    <label id="term-account-wrap" class="account-pick" hidden>Account <select id="term-account" data-testid="account-select-term"></select></label>
     <span class="term-actions">
       <button type="button" id="copy" class="btn" disabled aria-keyshortcuts="Control+Shift+C" title="Copy the selected terminal text (Ctrl+Shift+C)">Copy selection</button>
       <button type="button" id="paste" class="btn" aria-keyshortcuts="Control+Shift+V" title="Paste from the clipboard (Ctrl+Shift+V)">Paste</button>
@@ -57,6 +58,7 @@
     <section class="term-pane" aria-label="Terminal">
       <button type="button" id="skip-agents" class="btn skip-link">Skip to agents</button>
       <div id="term" class="term"></div>
+      <p id="login-hint" class="term-hint login-hint" role="status" data-testid="login-hint" hidden>Run /login in this window. Claude asks once whether to trust the folder.</p>
       <p id="term-hint" class="term-hint"><kbd>Tab</kbd> stays in the terminal. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&uarr;</kbd> leaves it for the agent panel, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&darr;</kbd> returns. Drag to select and copy (tmux). Hold <kbd>Shift</kbd> while dragging to select with the browser instead.</p>
     </section>
     <aside class="tree-pane" aria-labelledby="tree-title">
@@ -118,6 +120,22 @@
         </div>
       </form>
     </section>
+    <section class="settings-section" aria-labelledby="acct-h" data-testid="settings-accounts">
+      <h3 id="acct-h">Claude accounts</h3>
+      <ul id="acct-list" class="acct-list" aria-labelledby="acct-h" data-testid="account-list"></ul>
+      <form id="acct-form" class="fields" novalidate>
+        <div class="field">
+          <label for="acct-name">New account name</label>
+          <input id="acct-name" name="name" type="text" maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="acct-hint acct-name-err" data-testid="account-add-name">
+          <p id="acct-hint" class="hint">Lowercase letters, digits, - and _. Up to 32 characters, starting with a letter or digit. Adding it opens a terminal where you sign in.</p>
+          <p id="acct-name-err" class="field-error"></p>
+        </div>
+        <p id="acct-error" class="inline-error" role="alert"></p>
+        <div class="dialog-actions dialog-actions-start">
+          <button type="submit" id="acct-add" class="btn" data-testid="account-add-submit">Add account</button>
+        </div>
+      </form>
+    </section>
     <section class="settings-section" aria-labelledby="sess-h" data-testid="sessions">
       <h3 id="sess-h">Signed-in devices</h3>
       <p id="sess-hint" class="hint">Every browser that is signed in to this dashboard. Revoke one you do not recognise.</p>
@@ -149,6 +167,7 @@
     </div>
     <section class="settings-section" aria-labelledby="usage-limits-h">
       <h3 id="usage-limits-h">Plan limits</h3>
+      <p id="usage-account" class="hint" data-testid="usage-account" hidden></p>
       <div id="usage-error" class="usage-error" role="status" hidden></div>
       <div id="usage-gauges" class="gauges"></div>
       <p id="usage-source" class="hint" data-testid="usage-source"></p>
@@ -208,6 +227,10 @@
         <label for="add-token">Fine-grained token <span class="optional">(optional)</span></label>
         <input id="add-token" name="token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="add-token-hint">
         <p id="add-token-hint" class="hint">Needed for private repos or to push. It is never shown again after you submit. Scope it to this repository only: Contents read/write and Metadata read.</p>
+      </div>
+      <div class="field" id="add-account-field" hidden>
+        <label for="add-account">Account</label>
+        <select id="add-account" name="account" data-testid="account-select-add"></select>
       </div>
       <div class="field">
         <label for="add-prompt">First prompt <span class="optional">(optional)</span></label>

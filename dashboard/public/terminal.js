@@ -2,6 +2,7 @@
 // Terminal view: xterm.js bound to /term/<project> over a WebSocket.
 (function () {
   const $ = (id) => document.getElementById(id);
+  const accounts = window.ccdash.accounts;
 
   // Colours live in CSS (--term-*) so the page and the terminal share one palette.
   const ANSI = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
@@ -69,6 +70,7 @@
   let ws = null;
   let ro = null;
   let project = null;
+  let account = 'default';
   let raf = 0;
   let disposables = [];
   let onTheme = null;
@@ -267,7 +269,8 @@
     closeSocket();
     setState('connecting');
     const url = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host +
-      '/term/' + encodeURIComponent(project) + '?cols=' + term.cols + '&rows=' + term.rows;
+      '/term/' + encodeURIComponent(project) + '?cols=' + term.cols + '&rows=' + term.rows +
+      (account !== 'default' ? '&account=' + encodeURIComponent(account) : '');
     const sock = new WebSocket(url);
     ws = sock;
     sock.binaryType = 'arraybuffer';
@@ -310,9 +313,36 @@
     return ev.key === key && ev.ctrlKey && ev.shiftKey && !ev.altKey && !ev.metaKey;
   }
 
-  function open(proj) {
+  // Header account picker: visible only when more than one account exists.
+  function syncAccountPick() {
+    const show = project != null && accounts.multi();
+    $('term-account-wrap').hidden = !show;
+    if (show) accounts.fill($('term-account'), account);
+  }
+  accounts.onChange(syncAccountPick);
+  $('term-account').addEventListener('change', () => {
+    const next = $('term-account').value;
+    if (!term || next === account) return;
+    account = next;
+    accounts.setView(account);
+    if (project === '_login') window.ccdash.retarget(project, account);
+    else accounts.setLast(project, account);
+    // Same project, other account: a fresh attach with ?account=NAME.
+    term.reset();
+    fitNow();
+    connect();
+    term.focus();
+  });
+
+  function open(proj, acct) {
     close();
     project = proj;
+    account = acct || accounts.last(proj);
+    if (account !== 'default' && accounts.loaded() && !accounts.names().includes(account)) account = 'default';
+    accounts.setView(account);
+    accounts.load();
+    syncAccountPick();
+    $('login-hint').hidden = proj !== '_login';
     $('term-title').textContent = proj;
     term = new window.Terminal({
       fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim(),
@@ -391,6 +421,9 @@
     fit = null;
     $('term').replaceChildren();
     project = null;
+    accounts.setView(null);
+    $('term-account-wrap').hidden = true;
+    $('login-hint').hidden = true;
   }
 
   $('reconnect').addEventListener('click', () => {
@@ -418,7 +451,7 @@
   });
 
   window.ccdash.terminal = {
-    open(proj) { setTreeOpen(!mobile.matches); open(proj); },
+    open(proj, acct) { setTreeOpen(!mobile.matches); open(proj, acct); },
     close,
   };
 })();

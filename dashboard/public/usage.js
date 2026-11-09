@@ -4,7 +4,7 @@
 // payload on open. Every server string goes through textContent. Dollar figures are always shown with
 // the "API-price estimate, not billing" label.
 (function () {
-  const { api, h, fmtNum, fmtUsd, fmtDuration } = window.ccdash;
+  const { api, h, fmtNum, fmtUsd, fmtDuration, accounts } = window.ccdash;
   const events = window.ccdash.events;
   const $ = (id) => document.getElementById(id);
   const SOURCE = { statusline: 'Claude Code statusline', 'usage-command': '/usage command (fallback)' };
@@ -58,11 +58,22 @@
     }
   }
 
+  // The readings for the account in view: the terminal's account when there are several, else the default
+  // (top-level fields). An account with no reading yet gives {}: every gauge then shows "unknown".
+  function viewAccount() { return accounts.multi() && accounts.view() ? accounts.view() : 'default'; }
+  function readings() {
+    if (!usage) return usage;
+    const a = viewAccount();
+    if (a === 'default') return usage;
+    return (usage.accounts && Object.hasOwn(usage.accounts, a) && usage.accounts[a]) || {};
+  }
+
   function levelOf(p) { return p >= 90 ? 'high' : p >= 70 ? 'mid' : 'low'; }
 
   function paintGauge(name) {
     const g = gauges[name];
-    const w = usage && usage[name];
+    const src = readings();
+    const w = src && src[name];
     g.data = w || null;
     const ok = w && w.status === 'ok' && Number.isFinite(w.used_percentage);
     g.root.dataset.status = ok ? 'ok' : 'unknown';
@@ -115,9 +126,10 @@
 
   function paintSource() {
     const el = $('usage-source');
-    if (!usage || !usage.source) { el.textContent = usage ? 'Source: none yet.' : ''; return; }
-    const age = Number.isFinite(usage.ts) ? ' Updated ' + fmtDuration(nowSec() - usage.ts) + ' ago.' : '';
-    el.textContent = 'Source: ' + (SOURCE[usage.source] || usage.source) + '.' + age;
+    const src = readings();
+    if (!src || !src.source) { el.textContent = src ? 'Source: none yet.' : ''; return; }
+    const age = Number.isFinite(src.ts) ? ' Updated ' + fmtDuration(nowSec() - src.ts) + ' ago.' : '';
+    el.textContent = 'Source: ' + (SOURCE[src.source] || src.source) + '.' + age;
   }
 
   function tick() {
@@ -260,6 +272,9 @@
   // ---------------------------------------------------------------- data + open/close
 
   function paintUsage() {
+    const who = $('usage-account');
+    who.hidden = !accounts.multi();
+    who.textContent = 'Account: ' + viewAccount();
     paintLoadError('usage');
     for (const [name] of WINDOWS) paintGauge(name);
     paintSource();

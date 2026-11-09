@@ -5,11 +5,19 @@
   const $ = (id) => document.getElementById(id);
   let view = null;
   let lastProject = null;
+  let lastKey = null;
+
+  // #/term/<project> or #/term/<project>?account=NAME (the account sign-in terminal carries its account here).
+  const key = (proj, account) => proj + '\n' + (account || '');
+  const termHash = (proj, account) => '#/term/' + encodeURIComponent(proj) + (account ? '?account=' + encodeURIComponent(account) : '');
 
   function parse() {
-    const m = /^#\/term\/(.+)$/.exec(location.hash);
+    const m = /^#\/term\/([^?]+)(?:\?account=([^&]*))?$/.exec(location.hash);
     if (!m) return null;
-    try { return decodeURIComponent(m[1]); } catch { return null; }
+    try {
+      const account = m[2] ? decodeURIComponent(m[2]) : null;
+      return { proj: decodeURIComponent(m[1]), account: account && window.ccdash.accounts.RULE.test(account) ? account : null };
+    } catch { return null; }
   }
 
   function showList() {
@@ -26,8 +34,10 @@
     if (returning) projects.focusProject(lastProject);
   }
 
-  function showTerminal(proj) {
-    if (view === 'term' && lastProject === proj) return;
+  function showTerminal(proj, account) {
+    const k = key(proj, account);
+    if (view === 'term' && lastKey === k) return;
+    lastKey = k;
     terminal.close();
     projects.stop();
     view = 'term';
@@ -36,18 +46,24 @@
     $('view-projects').hidden = true;
     $('view-terminal').hidden = false;
     document.title = 'ccdash: ' + proj;
-    terminal.open(proj);
+    terminal.open(proj, account);
     tree.start(proj);
   }
 
   function route() {
-    const proj = parse();
-    if (proj) showTerminal(proj); else showList();
+    const t = parse();
+    if (t) showTerminal(t.proj, t.account); else showList();
   }
 
-  window.ccdash.go = function go(proj) {
-    const target = '#/term/' + encodeURIComponent(proj);
+  window.ccdash.go = function go(proj, account) {
+    const target = termHash(proj, account);
     if (location.hash === target) route(); else location.hash = target;
+  };
+
+  // The terminal header changed account in place: keep the URL (and the same-route check) in step.
+  window.ccdash.retarget = function retarget(proj, account) {
+    lastKey = key(proj, account);
+    history.replaceState(null, '', termHash(proj, account));
   };
 
   $('logout').addEventListener('click', async () => {
