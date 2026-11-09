@@ -81,7 +81,7 @@ doctor_live() {
   jq -r 'if .ok then "selftest: all checks passed or skipped" else "selftest: \(.mismatches | length) warning(s), see '"$out"' (the install is not affected)" end' <<<"$json"
 }
 
-usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] <owner/repo> | pull <project> | identity <name> <email> | identity --from-host | login | passwd [--totp|--no-totp] | doctor --live" >&2; exit 2; }
+usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] <owner/repo> | pull <project> | identity <name> <email> | identity --from-host | login [--account <name>] | accounts | passwd [--totp|--no-totp] | doctor --live" >&2; exit 2; }
 case "${1:-}" in
   ls) run ccd-session ls ;;
   attach) [ $# -eq 2 ] || usage; run ccd-session attach "$2" ;;
@@ -104,7 +104,8 @@ case "${1:-}" in
     run git config --global user.email "$email"
     echo "git identity set to $name $email"
     ;;
-  login) run claude ;;
+  login) run ccd-account login "${@:2}" ;; # ccd-account parses [--account NAME]
+  accounts) [ $# -eq 1 ] || usage; run ccd-account list ;;
   passwd)
     if [ "$#" -le 2 ] && { [ "$#" -lt 2 ] || [ "$2" = --totp ] || [ "$2" = --no-totp ]; }; then
       $D exec -it -u web ccdash node /opt/ccdash/dashboard/ccdash-passwd.js "${@:2}"

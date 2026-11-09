@@ -8,28 +8,37 @@ export HOME=${CCDASH_MEMORY_HOME:-/home/ccd} # s6 may hand us root's HOME; CCDAS
 export BASIC_MEMORY_HOME=${BASIC_MEMORY_HOME:-$HOME/basic-memory}        # the notes
 export BASIC_MEMORY_CONFIG_DIR=${BASIC_MEMORY_CONFIG_DIR:-$HOME/.basic-memory} # config and index database
 log() { echo "ccd-memory-init: $*" >&2; }
+# shellcheck source=/dev/null
+. "${CCDASH_ACCOUNTS_LIB:-/usr/local/lib/ccdash}/accounts.sh"
 
-main() {
-  local list
-  mkdir -p "$BASIC_MEMORY_HOME" || { log "cannot create $BASIC_MEMORY_HOME"; return 1; }
+# register_account NAME: registers basic-memory in that account's config dir (CLAUDE_CONFIG_DIR; default: unset)
+register_account() ( # subshell: CLAUDE_CONFIG_DIR does not leak
+  account_env "$1" || { log "invalid account $1"; return 1; }
   if timeout 30 claude mcp list 2>&1 </dev/null | grep -Eiqw 'basic-memory'; then
-    log "basic-memory already registered"
+    log "basic-memory already registered ($1)"
   else
     # name first: -e takes several values, so it must not sit right before the name
     claude mcp add --scope user basic-memory \
       -e "BASIC_MEMORY_HOME=$BASIC_MEMORY_HOME" -e "BASIC_MEMORY_CONFIG_DIR=$BASIC_MEMORY_CONFIG_DIR" \
-      -- "$BM" mcp </dev/null || { log "claude mcp add failed"; return 1; }
-    log "registered basic-memory"
+      -- "$BM" mcp </dev/null || { log "claude mcp add failed ($1)"; return 1; }
+    log "registered basic-memory ($1)"
   fi
+)
+
+main() {
+  local list a rc=0
+  mkdir -p "$BASIC_MEMORY_HOME" || { log "cannot create $BASIC_MEMORY_HOME"; return 1; }
+  while IFS= read -r a; do register_account "$a" || rc=1; done < <(account_list)
   list=$("$BM" project list --json 2>/dev/null </dev/null) || { log "project list failed"; return 1; }
   if jq -e '.projects[]? | select(.name == "main" and .is_default == true)' >/dev/null 2>&1 <<<"$list"; then
-    return 0
+    return "$rc"
   elif jq -e '.projects[]? | select(.name == "main")' >/dev/null 2>&1 <<<"$list"; then
     "$BM" project default main </dev/null || { log "project default failed"; return 1; }
   else
     "$BM" project add main "$BASIC_MEMORY_HOME" --default </dev/null || { log "project add failed"; return 1; }
   fi
   log "project main is the default"
+  return "$rc"
 }
 
 main || log "memory setup incomplete; sessions will be refused until basic-memory is connected"

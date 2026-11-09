@@ -19,6 +19,7 @@ tmo=${FAKE_CLAUDE_TIMEOUT:-5}
 # and, unless FAKE_CLAUDE_MCP=none is overridden by a test, registers basic-memory for later lists.
 if [ "${1:-}" = mcp ]; then
   mhome=${FAKE_CLAUDE_HOME:-${HOME:-/tmp}/.fake-claude}
+  [ -z "${CLAUDE_CONFIG_DIR:-}" ] || mhome=$mhome/accounts/$(basename "$CLAUDE_CONFIG_DIR") # per-account state
   mkdir -p "$mhome"
   case ${2:-} in
     list)
@@ -38,6 +39,15 @@ if [ "${1:-}" = mcp ]; then
     *) echo "fake-claude: unsupported mcp command: $*" >&2; exit 2 ;;
   esac
   exit 0
+fi
+
+# `claude auth status`: logged in (exit 0) only if $mhome/logged-in exists; state is per CLAUDE_CONFIG_DIR as for mcp.
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
+  mhome=${FAKE_CLAUDE_HOME:-${HOME:-/tmp}/.fake-claude}
+  [ -z "${CLAUDE_CONFIG_DIR:-}" ] || mhome=$mhome/accounts/$(basename "$CLAUDE_CONFIG_DIR")
+  if [ -f "$mhome/logged-in" ]; then echo '{"loggedIn": true}'; exit 0; fi
+  echo '{"loggedIn": false}'
+  exit 1
 fi
 
 sid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)

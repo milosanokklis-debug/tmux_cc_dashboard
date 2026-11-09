@@ -14,6 +14,7 @@ setup() {
   export FAKE_CLAUDE_FIXTURES=$ROOT/tests/fixtures/2.1.317
   export FAKE_CLAUDE_MCP=connected
   export CCDASH_MCP_TIMEOUT=5
+  export CCDASH_ACCOUNTS_LIB=$ROOT/rootfs/usr/local/lib/ccdash CCDASH_ACCOUNTS_DIR=$BATS_TEST_TMPDIR/accounts
   mkdir -p "$HOME/bin" "$CCDASH_WS/demo" "$CCDASH_STATE"
   ln -s "$ROOT/tests/fake-claude/claude" "$HOME/bin/claude"
   export PATH=$HOME/bin:$PATH

@@ -30,7 +30,8 @@ EOS
   run "$UVX" basic-memory mcp --project demo
   [ "$status" -eq 0 ]
   grep -qx "project add demo /home/ccd/basic-memory-projects/demo" "$FAKE_BM_LOG"
-  ! grep -q default "$FAKE_BM_LOG"
+  run grep -q default "$FAKE_BM_LOG"
+  [ "$status" -ne 0 ]
   [ "$(tail -1 "$FAKE_BM_LOG")" = "mcp --project demo" ]
 }
 
@@ -43,13 +44,15 @@ EOS
 @test "no creation when the project exists" {
   FAKE_BM_LIST='{"projects":[{"name":"demo"}]}' run "$UVX" basic-memory mcp --project demo
   [ "$status" -eq 0 ]
-  ! grep -q 'project add' "$FAKE_BM_LOG"
+  run grep -q 'project add' "$FAKE_BM_LOG"
+  [ "$status" -ne 0 ]
 }
 
 @test "invalid project name is not created, bm still runs" {
   run "$UVX" basic-memory mcp --project '../evil'
   [ "$status" -eq 0 ]
-  ! grep -q 'project' "$FAKE_BM_LOG"
+  run grep -q '^project' "$FAKE_BM_LOG"
+  [ "$status" -ne 0 ]
   [ "$(tail -1 "$FAKE_BM_LOG")" = "mcp --project ../evil" ]
 }
 
