@@ -82,13 +82,14 @@ done
 echo "== AC-4.2 what a push would send, and the leak guard"
 kitre='^\.claude/\|^CLAUDE\.local\.md$\|^AGENTS\.md$\|^docs/handoff/'
 ccd bash -ec "cd $W && echo two > g && git add g && git ${ID[*]} commit -qm two && git fetch -q origin"
-eq "AC-4.2 HEAD tree has no kit path" "$(ccd git -C $W ls-tree -r --name-only HEAD | grep -c "$kitre" || true)" 0
-eq "AC-4.2 commits ahead of origin/main touch no kit path" "$(ccd git -C $W log --name-only --format= origin/main..HEAD | grep -c "$kitre" || true)" 0
+if head_tree=$(ccd git -C $W ls-tree -r --name-only HEAD); then eq "AC-4.2 HEAD tree has no kit path" "$(grep -c "$kitre" <<<"$head_tree" || true)" 0; else bad "AC-4.2 HEAD tree listing failed"; fi
+if ahead=$(ccd git -C $W log --name-only --format= origin/main..HEAD); then eq "AC-4.2 commits ahead of origin/main touch no kit path" "$(grep -c "$kitre" <<<"$ahead" || true)" 0; else bad "AC-4.2 commits-ahead listing failed"; fi
 if ccd git -C $W log --name-only --format= origin/main..HEAD | grep -qx g; then ok "AC-4.2 the new file is among the commits to push"; else bad "AC-4.2 g not in the commits to push"; fi
 head_before=$(ccd git -C $W rev-parse HEAD)
 ccd bash -ec "cd $W && mkdir -p docs/handoff && echo leak > docs/handoff/leak-test.md && git add -f docs/handoff/leak-test.md"
 if ccd git -C $W diff --cached --name-only | grep -qx 'docs/handoff/leak-test.md'; then ok "AC-4.2 kit path force-added"; else bad "AC-4.2 force-add did not stage the kit path"; fi
-if ccd git -C $W "${ID[@]}" commit -qm leak >/dev/null 2>&1; then bad "AC-4.2 force-added kit path was committed"; else ok "AC-4.2 leak guard refused the commit"; fi
+if commit_out=$(ccd git -C $W "${ID[@]}" commit -qm leak 2>&1); then commit_rc=0; else commit_rc=$?; fi
+if [ "$commit_rc" -ne 0 ] && grep -qF 'kit-private paths found' <<<"$commit_out"; then ok "AC-4.2 leak guard refused the commit"; else bad "AC-4.2 leak guard did not refuse the commit (rc $commit_rc): $commit_out"; fi
 eq "AC-4.2 nothing was committed" "$(ccd git -C $W rev-parse HEAD)" "$head_before"
 ccd bash -ec "cd $W && git reset -q && rm -f docs/handoff/leak-test.md" >/dev/null 2>&1 || true
 
