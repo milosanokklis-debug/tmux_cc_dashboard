@@ -221,7 +221,7 @@ uninstall() {
 preflight() {
   step "1/12 Preflight"
   if ! is_root && [ "${CCDASH_SETUP_ALLOW_NONROOT:-0}" != 1 ]; then die "run with sudo: sudo ./setup.sh"; fi
-  [ -n "$INVOKER" ] && [ "$INVOKER" != root ] || die "run it with sudo from your normal account (SUDO_USER is empty or root)"
+  if [ -z "$INVOKER" ] || [ "$INVOKER" = root ]; then die "run it with sudo from your normal account (SUDO_USER is empty or root)"; fi
   [[ $INVOKER =~ ^[a-z_][a-z0-9_-]*$ ]] || die "unsupported user name: $INVOKER"
   have_user "$INVOKER" || die "user $INVOKER does not exist"
   local id="" ver=""
