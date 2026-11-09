@@ -233,7 +233,7 @@ preflight() {
   local free min=${CCDASH_SETUP_MIN_DISK_MB:-5120}
   mkdir -p "$R/var/lib" 2>/dev/null || true
   free=$(df -Pm "$R/var/lib" | awk 'NR==2 {print $4}')
-  [[ ${free:-0} =~ ^[0-9]+$ ]] && [ "$free" -ge "$min" ] || die "needs ${min} MB free under /var/lib (found ${free:-?})"
+  if ! [[ ${free:-0} =~ ^[0-9]+$ ]] || [ "$free" -lt "$min" ]; then die "needs ${min} MB free under /var/lib (found ${free:-?})"; fi
   if [ -n "$(ss -ltnH "sport = :$PORT" 2>/dev/null)" ]; then
     ccdash_paths
     if [ -n "$INSTALL_DIR" ] && [ -n "$("${DOCKER[@]}" ps -q --filter name=^ccdash\$ 2>/dev/null)" ]; then
@@ -286,7 +286,7 @@ ccdash_user() {
   fi
   ccdash_paths
   uid=$(pw_field ccdash 3)
-  [ -n "$uid" ] && [ -n "$CCDASH_HOME" ] || die "cannot read the ccdash account"
+  if [ -z "$uid" ] || [ -z "$CCDASH_HOME" ]; then die "cannot read the ccdash account"; fi
   if ! grep -q '^ccdash:' "$R/etc/subuid" 2>/dev/null || ! grep -q '^ccdash:' "$R/etc/subgid" 2>/dev/null; then
     usermod --add-subuids 200000-265535 --add-subgids 200000-265535 ccdash || die "cannot add subordinate ids for ccdash"
   fi
