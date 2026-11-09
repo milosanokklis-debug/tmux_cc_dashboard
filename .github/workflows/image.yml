@@ -1,6 +1,6 @@
 name: image
-# Tag v0.1.0 publishes ghcr.io/milosanokklis-debug/ccdash:0.1.0 and :latest (multi-arch).
-# The tag keeps its "v" in git; the image tag drops it, because compose uses CCDASH_VERSION=0.1.0.
+# Tag v0.1.1 publishes ghcr.io/milosanokklis-debug/ccdash:0.1.1 and :latest (multi-arch).
+# The tag keeps its "v" in git; the image tag drops it, because compose uses CCDASH_VERSION=0.1.1.
 # Every run first builds one leg per architecture with a smoke test (no push); publish needs both legs to pass.
 # Tags with a '-' (v1.0.0-rc1) are not published.
 on:
@@ -71,6 +71,19 @@ jobs:
           if [ "$ok" != 1 ]; then docker logs smoke || true; exit 1; fi
           echo "healthz ok on $PLATFORM"
           docker rm -f smoke >/dev/null
+      # Rootless Docker maps only uid/gid 0-65535, so any file owned above that breaks the pull.
+      - name: Check file owners (rootless Docker)
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -eu
+          bad=$(docker run --rm --platform "$PLATFORM" --entrypoint sh ccdash:smoke -c 'find / -xdev \( -uid +65535 -o -gid +65535 \) -print 2>/dev/null | head -20')
+          if [ -n "$bad" ]; then
+            echo "Files with uid/gid > 65535 (rootless Docker cannot pull these):"
+            echo "$bad"
+            exit 1
+          fi
+          echo "owners ok on $PLATFORM"
 
   publish:
     needs: dry-run
