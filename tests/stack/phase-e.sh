@@ -8,16 +8,25 @@
 # the tree and a subagent transcript, takes screenshots and checks that an idle cards view makes no HTTP
 # requests. Needs docker (or CCDASH_DOCKER, e.g. "sudo -n -u ccdash /usr/local/bin/ccdash-docker"), curl,
 # jq and tar. Own project and volumes (ccdashtest-e), removed at the end.
-# Env: CCDASH_TEST_PORT (7694), CCDASH_IMAGE (ccdash:ci, built from the checkout if missing; remove it to
+# PHASE_E_PART=core|load runs half (CI runs them as two legs); unset or empty runs both. core: reader socket,
+# usage gauges, subagent, refusals, token totals (project ccdashtest-e-core, port 7694); load: 10 conversations,
+# CPU/memory, browser (project ccdashtest-e-load, port 7695); both: project ccdashtest-e, port 7694.
+# Env: CCDASH_TEST_PORT (7694, or 7695 for load), CCDASH_IMAGE (ccdash:ci, built from the checkout if missing; remove it to
 # pick up changes), CCDASH_SHOTS (directory for the screenshots, default tests/stack/out, gitignored),
 # SAMPLE_SEC (CPU sampling window, default 35, at least 30 to count), ACTIVE_MAX_CPU (limit while the fake claudes are active, default 3), KEEP=1 (leave the stack up), DEBUG=1.
 # shellcheck disable=SC2329,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
-export CCDASH_TEST_PORT=${CCDASH_TEST_PORT:-7694}
+part=${PHASE_E_PART:-}
+case $part in
+  core) P=ccdashtest-e-core; defport=7694 ;;
+  load) P=ccdashtest-e-load; defport=7695 ;;
+  "") P=ccdashtest-e; defport=7694 ;;
+  *) echo "PHASE_E_PART must be core or load (or unset for both), got '$part'" >&2; exit 2 ;;
+esac
+export CCDASH_TEST_PORT=${CCDASH_TEST_PORT:-$defport}
 base=${CCDASH_IMAGE:-ccdash:ci}
-P=ccdashtest-e
 export CCDASH_TEST_IMAGE=ccdash-stack:$P
 PW_IMAGE=ccdash-playwright:$P
 PW_NAME=$P-playwright
@@ -92,13 +101,15 @@ fake_unset() { tm set-environment -gu "$1" || true; }
 lock_transcripts() { ccd sh -c 'find /home/ccd/.claude/projects -type d -exec chmod 700 {} + ; find /home/ccd/.claude/projects -type f -exec chmod 600 {} +'; }
 tfile() { ccd find /home/ccd/.claude/projects -name "$1.jsonl" -not -path '*/subagents/*'; }
 
-echo "== ccd-reader service in the image"
 ccd mkdir -p /home/ccd/.claude/projects
 ccd chmod 700 /home/ccd/.claude /home/ccd/.claude/projects
+fake_env FAKE_CLAUDE_TRANSCRIPTS /home/ccd/.claude/projects
+
+if [ "$part" != load ]; then
+echo "== ccd-reader service in the image"
 eq "reader.sock is ccd:ccd 660" "$(compose exec -T ccdash stat -c '%U:%G %a' /run/ccdash/reader.sock)" "ccd:ccd 660"
 eq "reader.sock is a socket" "$(compose exec -T ccdash stat -c %F /run/ccdash/reader.sock)" "socket"
 eq "the reader process runs as ccd" "$(compose exec -T ccdash ps -o user= -C node -o args= | grep -c '^ccd .*reader.js')" 1
-fake_env FAKE_CLAUDE_TRANSCRIPTS /home/ccd/.claude/projects
 
 echo "== usage gauges"
 fake_env FAKE_CLAUDE_RATE_LIMITS "62 17"
@@ -190,12 +201,14 @@ tok_match() { api "$url/api/tokens?conversation=$tok" | jq -e --argjson w "$want
 until_ok 20 "/api/tokens?conversation= equals the manual sum $(jq -c . <<<"$want")" tok_match
 if api "$url/api/tokens?conversation=$tok" | jq -e '.unpriced_models | index("mystery-model")' >/dev/null; then ok "the model with no price is listed as unpriced"; else bad "unpriced_models"; fi
 lock_transcripts
+fi # core
 
+if [ "$part" != core ]; then
 echo "== load: 10 conversations"
 fake_unset FAKE_CLAUDE_USAGE
 fake_env FAKE_CLAUDE_RATE_LIMITS none # the gauges stay "unknown" for the browser
 for i in 3 4 5 6 7 8; do start_conv "l$i"; done
-req POST "/api/conversations/$tok/close"; req POST "/api/conversations/$subp/close" # replaced below by fresh ones so ten are live
+if [ -z "$part" ]; then req POST "/api/conversations/$tok/close"; req POST "/api/conversations/$subp/close"; fi # (core ran) replaced below by fresh ones so ten are live
 start_conv l1; start_conv l2; start_conv l9; start_conv l10
 for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 20 "l$i is waiting" is_status "l$i" waiting; send "l$i" "hello $i"; done
 # one with a subagent for the browser to open
@@ -271,4 +284,5 @@ $D cp "$PW_NAME:/out/." - 2>/dev/null | tar -x -C "$tmp/shots" 2>/dev/null || tr
 $D rm -f "$PW_NAME" >/dev/null 2>&1 || true
 if [ "$PW_RC" = 0 ]; then ok "Playwright specs passed"; else bad "Playwright specs failed (exit $PW_RC)"; fi
 mkdir -p "$SHOTS" && cp "$tmp"/shots/*.png "$SHOTS"/ 2>/dev/null && echo "screenshots in $SHOTS: $(find "$SHOTS" -maxdepth 1 -name '*.png' -printf '%f ' | head -c 600)" || true
+fi # load
 exit $fail
