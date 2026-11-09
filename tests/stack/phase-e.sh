@@ -219,7 +219,7 @@ start_conv l1; start_conv l2; start_conv l9; start_conv l10
 for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 20 "l$i is waiting" is_status "l$i" waiting; send "l$i" "hello $i"; done
 # one with a subagent for the browser to open
 for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 20 "l$i is waiting again" is_status "l$i" waiting; done
-if [ "$run_ui" = 1 ]; then
+if [ "$run_cpu" = 1 ] || [ "$run_ui" = 1 ]; then
   send l1 "/sub"
   until_ok 15 "l1 is waiting after /sub" is_status l1 waiting
 fi
