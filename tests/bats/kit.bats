@@ -532,11 +532,11 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
 }
 
 # ---- the real kit (skipped on the CI runner: no /opt/agent-kit, no claude) -------------------------------------
-@test "real kit: ensure on a folder that is not a git root fails with exit 2 and the JSON failure line" {
+@test "real kit: attach on a folder that is not a git work tree fails with exit 1 and says so" {
   [ -x /opt/agent-kit/agent-kit.sh ] || skip "no /opt/agent-kit"
   command -v claude > /dev/null || skip "no claude"
   mkdir "$BATS_TEST_TMPDIR/nogit"
-  run /opt/agent-kit/agent-kit.sh ensure "$BATS_TEST_TMPDIR/nogit" --json
-  [ "$status" -eq 2 ]
-  [ "$(printf '%s\n' "$output" | tail -n 1 | jq -r '[.ok, .code] | join(",")')" = "false,2" ]
+  run /opt/agent-kit/agent-kit.sh attach "$BATS_TEST_TMPDIR/nogit"
+  [ "$status" -eq 1 ]
+  [[ $output == *"is not a git work tree"* ]]
 }
