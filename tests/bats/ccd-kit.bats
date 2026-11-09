@@ -162,7 +162,8 @@ notemp() { [ -z "$(ls -A "$CCDASH_KIT_HOME" | grep '^\.tmp' || true)" ]; }
   ! printf '%s\n' "${lines[@]}" | grep -q '^project off '
   [ "$(grep -c 'args=ensure' "$STUB_LOG")" -eq 2 ]
   run "$BIN/ccd-kit" update --reset
-  [[ ${lines[2]} == "project "* ]]
+  [[ ${lines[0]} == "project "* ]]
+  [[ ${lines[-2]} == "updated "* && ${lines[-1]} == "version "* ]]
 }
 
 @test "a failing project is reported, update still exits 0" {

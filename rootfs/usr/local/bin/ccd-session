@@ -5,7 +5,7 @@ WS=${CCDASH_WS:-/workspace} # overridden only by the tests
 . "${CCDASH_ACCOUNTS_LIB:-/usr/local/lib/ccdash}/accounts.sh"
 # shellcheck source=/dev/null
 . "${CCDASH_KIT_LIB:-${CCDASH_ACCOUNTS_LIB:-/usr/local/lib/ccdash}}/kit.sh"
-PROJECTS=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}
+PROJECTS=${CCDASH_PROJECTS:-${HOME:-/home/ccd}/.ccdash/projects}
 t() { tmux -S "${CCDASH_TMUX:-/run/ccdash/tmux.sock}" "$@"; }
 name_for() { local b=${1##*/}; printf 'claude-%s' "${b//[^[:alnum:]_-]/_}"; }
 # `--` ends option parsing so a prompt beginning with "-" is never read as a claude flag

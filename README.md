@@ -72,10 +72,24 @@ Add a repo in the dashboard with Add project, or from the shell:
 ```bash
 ccd clone owner/repo
 ccd clone --trust-hooks owner/repo
+ccd clone --kit owner/repo
 ccd pull repo
 ```
 
 `ccd pull` takes the project name, which is the repo name. Use `--trust-hooks` only for a repo you trust (see below).
+
+The agent kit (new_ai_setup) is off by default for each project. `--kit`, or the "Agent kit" checkbox in Add project, turns it on for that repo. Later you can change it per project:
+
+```bash
+ccd kit on repo
+ccd kit off repo
+ccd kit status
+ccd kit check
+ccd kit update [<ref>]
+ccd kit update --reset
+```
+
+`on` and `off` take the project name. `off` stops the checks but leaves the kit files in the repo, because kit 0.9.2 has no remove path. `status` shows the active kit version, `check` compares it with the newest upstream, `update` switches to a newer one, and `update --reset` goes back to the version in the image.
 
 For a private repo, or to push, add a fine-grained token in the dashboard first. The shell commands have no token option. Make the token fine-grained and limit it to that one repository. Give it Contents read/write and Metadata read. Never use a classic token. A classic token can reach every repo you can access.
 
@@ -148,6 +162,13 @@ The dashboard:
 - Checks Origin on changes and WebSocket connections, and X-CCDash on every POST.
 - Keeps an audit log of logins, approvals and other changes, without prompts or tokens.
 
+A project with the kit on also runs the kit's MCP servers: semgrep, playwright, chrome-devtools, context7, shadcn and motion. They run as `ccd`, with the same reach as Claude. Notes:
+
+- Chromium runs with `--no-sandbox`, because the container cannot start its sandbox. A bad page that exploits the browser runs as `ccd`.
+- "Update to newest version" in Settings runs whatever is on new_ai_setup's default branch, without review.
+- `mcp.motion.dev` is allowed out for the motion server. semgrep's registry rules need `semgrep.dev`, which is not allowed, so they do not load. Tested in the built image with no network, `semgrep mcp` exits at startup (it contacts semgrep.dev for OAuth discovery) and does not answer initialize, so the kit's semgrep MCP server does not work until semgrep.dev is allowed in `egress/allowlist.txt`, which is left to the user, and metrics and version check are switched off in the image (`SEMGREP_SEND_METRICS=off`, `SEMGREP_ENABLE_VERSION_CHECK=0`).
+- If a later kit adds a new upstream marketplace, the hook gate refuses it (fails closed). `ccd-project` maps a fixed set of eight plugin keys: the four kit plugins (kit-core, kit-design, kit-code, taste-skill) and four upstream plugins (agent-skills, superpowers, hallmark, design-and-refine). A plugin from a new marketplace in a later kit is refused (fail closed, hook gate exit 5).
+
 Setup also turns on two more controls:
 
 - TOTP, a one-time code from an authenticator app, at login.
@@ -203,6 +224,15 @@ To upgrade Claude Code on a local build:
 Add the same `-f` flags you use at install time, such as `-f compose.egress.yaml`.
 
 The published image on ghcr.io is private until the owner makes it public (package Settings on GitHub). Until then `docker compose pull` needs a login.
+
+To change the agent kit without a new image, use "Update to newest version" in Settings (Agent kit), or from the shell:
+
+```bash
+ccd kit update
+ccd kit update --reset
+```
+
+`ccd kit update` fetches the newest kit (or the given ref) and re-checks the projects that have the kit on. `--reset` drops the update and goes back to the version in the image.
 
 For a released image, set `CCDASH_VERSION` in `.env` to the new version, then run `docker compose pull` and `docker compose up -d`.
 

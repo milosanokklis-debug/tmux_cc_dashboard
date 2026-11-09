@@ -338,7 +338,7 @@ Server -> client (JSON text, one object per frame):
 - `{type:'tokens', tokens:{...}}`: body of `GET /api/tokens` (no `conversation` filter).
 - `{type:'preview', id:<sid>, text}`: last lines of the pane, only for watched ids, only when the text changed, at most once per second per card per connection.
 
-Client -> server: `{type:'watch', ids:[sid,...]}` (at most 50 per connection; ids that are not a UUID are ignored; the first preview follows at once) and `{type:'unwatch', ids:[...]}`. Anything else is ignored. Not covered by `/events`: `/api/projects` (still polled), "all time" tree, transcript view.
+Client -> server: `{type:'watch', ids:[sid,...]}` (at most 50 per connection; ids that are not a UUID are ignored; the first preview follows at once) and `{type:'unwatch', ids:[...]}`. Anything else is ignored. Not covered by `/events`: `/api/projects` (no longer polled; refreshed on load and on user actions), "all time" tree, transcript view.
 
 Tests: `dashboard/test/phase-e-events.test.js`.
 

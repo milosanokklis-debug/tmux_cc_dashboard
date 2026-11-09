@@ -58,6 +58,8 @@ RUN : "${SEMGREP_VERSION:?SEMGREP_VERSION build arg is empty}" \
  && /opt/semgrep/bin/pip install --no-cache-dir "semgrep==${SEMGREP_VERSION}" \
  && ln -s /opt/semgrep/bin/semgrep /usr/local/bin/semgrep \
  && semgrep --version >/dev/null
+# no usage metrics, no version check (neither host is on the egress allowlist)
+ENV SEMGREP_SEND_METRICS=off SEMGREP_ENABLE_VERSION_CHECK=0
 
 # Agent kit, pinned to a commit, root-owned and read-only (.git kept so the origin can be read)
 RUN git clone "https://github.com/${KIT_REPO}" /opt/agent-kit \

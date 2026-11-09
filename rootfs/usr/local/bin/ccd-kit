@@ -2,7 +2,7 @@
 # ccd-kit status | check | update [<ref>|--reset]: which agent kit is active, what is newest upstream, and updating it.
 # Stable stdout lines (sha = 40 hex, version `-` when unknown):
 #   status: `active <sha> <ver>`, `image <sha>`     check: those + `newest <sha>` (or `newest-error <msg>`, exit 1)
-#   update: `updated <oldsha> <newsha>`, `version <old> <new>`, then `project <name> ok|changed|failed <message>` per opted-in project
+#   update: `project <name> ok|changed|failed <message>` per opted-in project, then (last; the dashboard reads a log tail) `updated <oldsha> <newsha>`, `version <old> <new>`
 # The kit script is only read as text (kit_version), never run here; ccd-onboard runs it.
 # Env: KIT_REPO (owner/repo, default: origin of the image kit), CCDASH_KIT_HOME (checkouts + `current`),
 # CCDASH_KIT_IMAGE (/opt/agent-kit), CCDASH_LOCK_DIR (/run/ccdash, else $HOME/.ccdash/locks), CCDASH_PROJECTS,
@@ -63,7 +63,7 @@ valid_ref() {
   [[ $r =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && [[ $r != *..* ]] && [[ $r != *//* ]] && [[ $r != */ ]] && [[ $r != *.lock ]]
 }
 
-# recheck_projects: ccd-onboard --kit for every opted-in project, with the active kit
+# recheck_projects: ccd-onboard --kit-only for every opted-in project, with the active kit
 recheck_projects() {
   local f name repo out rc line
   [ -d "$PROJECTS" ] || return 0
@@ -77,7 +77,7 @@ recheck_projects() {
       exec 9> "$LOCKDIR/kit-$name.lock"
       flock -w "$WAIT" 9 || { echo "project $name failed project lock timeout"; exit 0; }
       rc=0
-      out=$(CCDASH_KIT_LOCKED=1 "$here/ccd-onboard" --kit "$repo" 2>&1 < /dev/null) || rc=$?
+      out=$(CCDASH_KIT_LOCKED=1 "$here/ccd-onboard" --kit-only "$repo" 2>&1 < /dev/null) || rc=$?
       line=$(printf '%s\n' "$out" | grep -m1 -E '^kit(-error)? ' || true)
       [ -n "$line" ] || line=$(printf '%s\n' "$out" | grep -m1 . || true)
       line=$(printf '%s' "$line" | tr -d '[:cntrl:]' | cut -c1-200)
@@ -90,9 +90,10 @@ recheck_projects() {
 
 report() { # old new oldver
   local d; d=$(active_dir)
-  echo "updated $1 $2"
-  echo "version $3 $(ver_of "$d")"
+  local ver; ver=$(ver_of "$d")
   recheck_projects
+  echo "updated $1 $2"
+  echo "version $3 $ver"
 }
 
 cmd_update() {

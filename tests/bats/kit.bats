@@ -67,6 +67,17 @@ subjects() { git -C "$D" log --format=%s; }
   [ "$(git -C "$D" rev-list --count HEAD)" -eq 2 ]
 }
 
+@test "kit paths already dirty: the kit runs but its commit is skipped" {
+  "$BIN/ccd-onboard" --kit octo/demo
+  head=$(git -C "$D" rev-parse HEAD)
+  echo mine >> "$D/CLAUDE.md"
+  STUB_VERSION=1.2.3 run "$BIN/ccd-onboard" --kit-only octo/demo
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$D" rev-parse HEAD)" = "$head" ]
+  [ "$(git -C "$D" log -1 --format=%s)" != "chore: agent-kit 1.2.3" ]
+  [ -n "$(git -C "$D" status --porcelain -- .claude CLAUDE.md)" ]
+}
+
 @test "memory missing and a different version are recorded" {
   STUB_MEMORY=missing STUB_VERSION=1.2.3 run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
