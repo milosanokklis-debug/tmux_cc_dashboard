@@ -19,8 +19,14 @@ ARG CLAUDE_CODE_VERSION
 ARG S6_OVERLAY_VERSION
 ARG BASIC_MEMORY_VERSION
 ARG KIT_REPO=milosanokklis-debug/new_ai_setup
-ARG KIT_REF=1099829fff8a692293f311751584983fc6821c15
+ARG KIT_REF=18ad921ec9d8b74e295350f876bf5cf1e7f15636
 ARG SEMGREP_VERSION=1.183.0
+ARG GITLEAKS_VERSION=8.30.1
+ARG GITLEAKS_SHA256_AMD64=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+ARG GITLEAKS_SHA256_ARM64=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
+ARG UV_VERSION=0.13.7
+ARG UV_SHA256_AMD64=c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
+ARG UV_SHA256_ARM64=71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc
 
 # Fixed ids so upgrades keep volume owners (web 999, ccd 1000). Created before the first package install: packages
 # that add system users would otherwise take these ids first.
@@ -49,6 +55,24 @@ RUN set -eux; \
       tar -C / -Jxpf /tmp/$f; \
     done; \
     rm -f /tmp/s6-overlay-*
+
+# gitleaks and uv (the kit's `attach` needs both on PATH), pinned with hard-coded sha256. Only the `uv` binary is installed:
+# /usr/local/bin/uvx stays the ccdash shim.
+RUN set -eux; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) gl=x64; gsha=$GITLEAKS_SHA256_AMD64; uvarch=x86_64; usha=$UV_SHA256_AMD64 ;; \
+      arm64) gl=arm64; gsha=$GITLEAKS_SHA256_ARM64; uvarch=aarch64; usha=$UV_SHA256_ARM64 ;; \
+      *) echo "unsupported TARGETARCH ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    cd /tmp; \
+    curl -fsSL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${gl}.tar.gz"; \
+    echo "${gsha}  gitleaks.tgz" | sha256sum -c -; \
+    tar -xzf gitleaks.tgz gitleaks; install -m 0755 gitleaks /usr/local/bin/gitleaks; \
+    curl -fsSL -o uv.tgz "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${uvarch}-unknown-linux-gnu.tar.gz"; \
+    echo "${usha}  uv.tgz" | sha256sum -c -; \
+    tar -xzf uv.tgz --strip-components=1 "uv-${uvarch}-unknown-linux-gnu/uv"; install -m 0755 uv /usr/local/bin/uv; \
+    rm -f gitleaks* uv*; \
+    gitleaks version; uv --version
 
 # Claude Code, pinned, system-wide
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force
