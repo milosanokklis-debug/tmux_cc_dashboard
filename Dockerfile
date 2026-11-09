@@ -19,11 +19,12 @@ ARG CLAUDE_CODE_VERSION
 ARG S6_OVERLAY_VERSION
 ARG BASIC_MEMORY_VERSION
 ARG KIT_REPO=milosanokklis-debug/new_ai_setup
-ARG KIT_REF=81532ea0037fc2dd5ecc0837e24738de35d00460
+ARG KIT_REF=1099829fff8a692293f311751584983fc6821c15
+ARG SEMGREP_VERSION=1.183.0
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      tmux ncurses-term jq git curl ca-certificates procps less nodejs npm python3 python3-venv xz-utils \
+      tmux ncurses-term jq git curl ca-certificates procps less nodejs npm python3 python3-venv xz-utils chromium fonts-liberation \
  && rm -rf /var/lib/apt/lists/*
 
 # s6-overlay: noarch + arch-specific tarballs
@@ -51,10 +52,25 @@ RUN : "${BASIC_MEMORY_VERSION:?BASIC_MEMORY_VERSION build arg is empty; pass --b
  && /opt/basic-memory/bin/pip install --no-cache-dir "basic-memory==${BASIC_MEMORY_VERSION}" \
  && /opt/basic-memory/bin/basic-memory --help >/dev/null
 
+# Semgrep, pinned (the kit's kit-code MCP server is `semgrep mcp`), in its own venv, on PATH
+RUN : "${SEMGREP_VERSION:?SEMGREP_VERSION build arg is empty}" \
+ && python3 -m venv /opt/semgrep \
+ && /opt/semgrep/bin/pip install --no-cache-dir "semgrep==${SEMGREP_VERSION}" \
+ && ln -s /opt/semgrep/bin/semgrep /usr/local/bin/semgrep \
+ && semgrep --version >/dev/null
+
 # Agent kit, pinned to a commit, root-owned and read-only (.git kept so the origin can be read)
 RUN git clone "https://github.com/${KIT_REPO}" /opt/agent-kit \
  && git -C /opt/agent-kit checkout --detach "${KIT_REF}" \
  && chown -R root:root /opt/agent-kit && chmod -R a-w /opt/agent-kit
+
+# The kit's npx MCP servers (pins as in the kit's plugin .mcp.json), fetched at build time so the first start does not
+# depend on npm. /opt is read-only at runtime, so /usr/local/bin/npx seeds a writable cache in $HOME from this one.
+RUN set -eux; \
+    for p in @playwright/mcp@0.0.84 chrome-devtools-mcp@1.12.0 @upstash/context7-mcp@4.4.4 shadcn@4.23.0; do \
+      npm_config_cache=/opt/npm-cache /usr/bin/npx -y -p "$p" node -e 0; \
+    done; \
+    rm -rf /opt/npm-cache/_logs; chmod -R a+rX /opt/npm-cache
 
 RUN useradd -m -s /bin/bash ccd \
  && useradd -r -M -s /usr/sbin/nologin -G ccd web \
@@ -66,7 +82,7 @@ RUN useradd -m -s /bin/bash ccd \
 COPY rootfs/ /
 # payload fixtures for `ccd doctor --live` (ccd-doctor compares real hook payloads with them)
 COPY tests/fixtures/2.1.317/ /usr/local/share/ccdash/fixtures/2.1.317/
-RUN chmod 0755 /usr/local/bin/ccd-doctor /usr/local/bin/ccd-session /usr/local/bin/ccd-project /usr/local/bin/ccd-onboard /usr/local/bin/ccd-ops /usr/local/bin/ccd-memory-init /usr/local/bin/ccd-account /usr/local/bin/uvx \
+RUN chmod 0755 /usr/local/bin/ccd-doctor /usr/local/bin/ccd-session /usr/local/bin/ccd-project /usr/local/bin/ccd-onboard /usr/local/bin/ccd-ops /usr/local/bin/ccd-memory-init /usr/local/bin/ccd-account /usr/local/bin/uvx /usr/local/bin/npx /opt/google/chrome/chrome \
       /usr/local/lib/ccdash/git-credential-ccdash /usr/local/lib/ccdash/hooks/agents.sh /usr/local/lib/ccdash/hooks/state.sh \
       /usr/local/lib/ccdash/hooks/permission.sh /usr/local/lib/ccdash/hooks/statusline.sh /usr/local/lib/ccdash/reader.js \
       /etc/s6-overlay/s6-rc.d/init-ccdash/up \
@@ -78,5 +94,7 @@ RUN chmod 0755 /usr/local/bin/ccd-doctor /usr/local/bin/ccd-session /usr/local/b
 # rootless Docker can only map IDs 0-65535, and npm ci in the builder keeps tarball owners (huge uid/gid)
 COPY --from=dashboard-build --chown=0:0 /opt/ccdash/dashboard /opt/ccdash/dashboard
 
-ENV DISABLE_AUTOUPDATER=1 LANG=C.UTF-8 CCDASH_TMUX=/run/ccdash/tmux.sock S6_READ_ONLY_ROOT=1
+# Chromium for the kit's browser MCP servers: playwright-mcp via env (it never downloads a browser when the path is set)
+ENV PLAYWRIGHT_MCP_EXECUTABLE_PATH=/opt/google/chrome/chrome PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    DISABLE_AUTOUPDATER=1 LANG=C.UTF-8 CCDASH_TMUX=/run/ccdash/tmux.sock S6_READ_ONLY_ROOT=1
 ENTRYPOINT ["/init"]

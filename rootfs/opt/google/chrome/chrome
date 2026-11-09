@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stand-in for Google Chrome at the path chrome-devtools-mcp (puppeteer, "stable" channel) looks for; the image has Debian
+# chromium instead. playwright-mcp points here too (PLAYWRIGHT_MCP_EXECUTABLE_PATH). --no-sandbox: the container cannot
+# start the Chromium sandbox (unprivileged, no user namespaces); /dev/shm is small, so shared memory goes to /tmp.
+exec "${CCDASH_CHROMIUM:-/usr/bin/chromium}" --no-sandbox --disable-dev-shm-usage --disable-gpu "$@"
