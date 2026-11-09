@@ -80,8 +80,8 @@ function fakeServices(over = {}) {
   return svc;
 }
 
-async function authed(services) {
-  const s = await start({ services });
+async function authed(services, opts = {}) {
+  const s = await start({ services, ...opts });
   const cookie = await loginCookie(s.base);
   return { ...s, cookie };
 }

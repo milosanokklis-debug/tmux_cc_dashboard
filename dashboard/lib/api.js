@@ -4,6 +4,7 @@
 const { HttpError, send, readJson } = require('./http');
 const { createTmux, readProcTable, runFile, runOp } = require('./tmux');
 const projects = require('./projects');
+const kit = require('./kit');
 const accounts = require('./accounts');
 const identity = require('./identity');
 const { buildTree, listConversations } = require('./tree');
@@ -132,7 +133,7 @@ function createApi(svc) {
       if (get) {
         const list = projects.listProjects({ ...svc, panes: await panes() });
         return send(res, 200, {
-          projects: list.map((p) => ({ name: p.name, session: p.session, state: p.state, repo: p.repo, head: p.head, kit: p.kit })),
+          projects: list.map((p) => ({ name: p.name, session: p.session, state: p.state, repo: p.repo, head: p.head, kit: p.kit, kitEnabled: p.kitEnabled, kitCheck: p.kitCheck, kitError: p.kitError })),
         });
       }
       if (req.method !== 'POST') return methodNotAllowed();
@@ -158,13 +159,28 @@ function createApi(svc) {
       try { name = decodeURIComponent(pull[1]); } catch { throw new HttpError(400, 'invalid project name'); }
       return send(res, 200, await audited('pull', ctx, { project: name }, () => projects.pullProject({ name, deps: { ...svc, panes } })));
     }
-    const packs = /^\/api\/projects\/([^/]+)\/packs$/.exec(pathname);
-    if (packs) {
+    const kitRoute = /^\/api\/projects\/([^/]+)\/kit$/.exec(pathname);
+    if (kitRoute) {
       if (req.method !== 'POST') return methodNotAllowed();
       let name;
-      try { name = decodeURIComponent(packs[1]); } catch { throw new HttpError(400, 'invalid project name'); }
+      try { name = decodeURIComponent(kitRoute[1]); } catch { throw new HttpError(400, 'invalid project name'); }
       const body = await readJson(req, MAX_ADD_BODY);
-      return send(res, 200, await audited('packs', ctx, { project: name }, () => projects.setPacks({ name, body, deps: { ...svc, panes } })));
+      return send(res, 200, await audited(body?.enabled === true ? 'kit.enable' : body?.enabled === false ? 'kit.disable' : 'kit.change', ctx, { project: name }, () => projects.setKit({ name, body, deps: { ...svc, panes } })));
+    }
+    if (pathname === '/api/kit') {
+      if (!get) return methodNotAllowed();
+      return send(res, 200, await kit.check(svc));
+    }
+    if (pathname === '/api/kit/update') {
+      if (req.method !== 'POST') return methodNotAllowed();
+      const body = await readJson(req, 1024, true);
+      const fields = {};
+      const r = await audited('kit.update', ctx, fields, async () => {
+        const out = await kit.update(body, svc);
+        fields.old = out.old; fields.new = out.new;
+        return out;
+      });
+      return send(res, 200, r);
     }
     if (pathname === '/api/accounts') {
       if (get) return send(res, 200, { accounts: await accounts.listAccounts(svc.runFile) }); // names and logged-in flags only
