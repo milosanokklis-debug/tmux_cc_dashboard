@@ -208,7 +208,7 @@ echo "== load: 10 conversations"
 fake_unset FAKE_CLAUDE_USAGE
 fake_env FAKE_CLAUDE_RATE_LIMITS none # the gauges stay "unknown" for the browser
 for i in 3 4 5 6 7 8; do start_conv "l$i"; done
-if [ -z "$part" ]; then req POST "/api/conversations/$tok/close"; req POST "/api/conversations/$subp/close"; fi # (core ran) replaced below by fresh ones so ten are live
+if [ -z "$part" ]; then req POST "/api/conversations/$tok/close"; req POST "/api/conversations/$subp/close"; fi # both mode: close core's conversations so ten are live
 start_conv l1; start_conv l2; start_conv l9; start_conv l10
 for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 20 "l$i is waiting" is_status "l$i" waiting; send "l$i" "hello $i"; done
 # one with a subagent for the browser to open
