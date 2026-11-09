@@ -61,7 +61,8 @@ jobs:
           - { name: stack (phase-c), script: phase-c }
           - { name: stack (phase-d), script: phase-d }
           - { name: stack (phase-e core), script: phase-e, part: core }
-          - { name: stack (phase-e load), script: phase-e, part: load }
+          - { name: stack (phase-e cpu), script: phase-e, part: cpu }
+          - { name: stack (phase-e ui), script: phase-e, part: ui }
           - { name: stack (phase-g), script: phase-g }
           - { name: stack (egress), script: egress }
     steps:
@@ -77,7 +78,7 @@ jobs:
           context: .
           load: true
           tags: ccdash:ci
-          # read-only: image.yml writes scope image-amd64 (avoids seven matrix legs racing the same cache write)
+          # read-only: image.yml writes scope image-amd64 (avoids the matrix legs racing the same cache write)
           cache-from: type=gha,scope=image-amd64
           build-args: |
             CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
