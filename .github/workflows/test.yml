@@ -70,8 +70,8 @@ jobs:
           context: .
           load: true
           tags: ccdash:ci
+          # read-only: image.yml writes scope image-amd64 (avoids six matrix legs racing the same cache write)
           cache-from: type=gha,scope=image-amd64
-          cache-to: type=gha,mode=max,scope=image-amd64
           build-args: |
             CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
             S6_OVERLAY_VERSION=${{ env.S6_OVERLAY_VERSION }}

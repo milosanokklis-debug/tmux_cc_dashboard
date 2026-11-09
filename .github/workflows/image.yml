@@ -3,8 +3,10 @@ name: image
 # The tag keeps its "v" in git; the image tag drops it, because compose uses CCDASH_VERSION=0.1.1.
 # Every run first builds one leg per architecture (arm64 on a native runner) with a smoke test (no push); publish needs both legs to pass.
 # Tags with a '-' (v1.0.0-rc1) are not published.
+# Main pushes only warm the gha build cache; publish runs only on v-tags.
 on:
   push:
+    branches: [main]
     tags: ['v[0-9]*.[0-9]*.[0-9]*']
   pull_request:
     paths:
@@ -114,7 +116,7 @@ jobs:
     # pre-release tags such as v1.0.0-rc1 match the glob but are not published
     if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
