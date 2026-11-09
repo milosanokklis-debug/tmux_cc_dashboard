@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { HttpError } = require('./http');
+const { parseAccount } = require('./accounts');
 const { hasClaude } = require('./tmux');
 const github = require('./github');
 const { readRegular } = require('./safefile');
@@ -28,7 +29,7 @@ function normalizeRepo(input) {
   const bad = () => new HttpError(400, 'repo must be owner/repo or a https://github.com/owner/repo URL');
   if (parts.length !== 2) throw bad();
   const [owner, repo] = parts;
-  if (!OWNER_RE.test(owner) || owner.length > 39 || !validProject(repo)) throw bad();
+  if (!OWNER_RE.test(owner) || owner.length > 39 || !validProject(repo) || repo === '_login') throw bad(); // _login is the terminal name of the account login window
   return { owner, repo };
 }
 
@@ -107,14 +108,14 @@ function memoryOffline(text) {
 }
 
 // ccd-session start <name> [prompt]: no-op when the session exists, never restarts claude.
-async function startSession({ runFile, name, prompt }) {
+async function startSession({ runFile, name, prompt, account }) {
   let out;
   try {
-    ({ stdout: out } = await runFile('ccd-session', ['start', name, '--account', 'default', ...(prompt ? [prompt] : [])], { timeout: START_TIMEOUT_MS }));
+    ({ stdout: out } = await runFile('ccd-session', ['start', name, '--account', account, ...(prompt ? [prompt] : [])], { timeout: START_TIMEOUT_MS }));
   } catch (e) {
     if (e.code === MEMORY_OFFLINE_RC) throw memoryOffline(e.stderr || e.stdout);
     const msg = (e.stderr || e.message).trim().split('\n')[0] || 'could not start session';
-    const status = /no such project/.test(msg) ? 404 : /already used/.test(msg) ? 409 : 500;
+    const status = /no such project|unknown account/.test(msg) ? 404 : /already used/.test(msg) ? 409 : 500;
     throw new HttpError(status, msg);
   }
   const session = out.trim();
@@ -122,10 +123,10 @@ async function startSession({ runFile, name, prompt }) {
   return session;
 }
 
-async function openProject({ workspace, runFile, name }) {
+async function openProject({ workspace, runFile, name, account }) {
   if (!validProject(name)) throw new HttpError(400, 'invalid project name');
   if (!isProjectDir(workspace, name)) throw new HttpError(404, 'no such project');
-  return startSession({ runFile, name });
+  return startSession({ runFile, name, account: parseAccount(account) });
 }
 
 const inFlight = new Map(); // "owner/repo" -> { job, prompt, token }: the same repo twice at once, with the same settings, shares one clone
@@ -138,6 +139,7 @@ const BUSY_MSG = 'another change to this project is in progress';
 async function addProject(body, deps) {
   const { owner, repo } = normalizeRepo(body.repo);
   const prompt = body.prompt;
+  const account = parseAccount(body.account);
   if (prompt !== undefined && prompt !== null) {
     if (typeof prompt !== 'string') throw new HttpError(400, 'prompt must be a string');
     if (prompt.length > MAX_PROMPT) throw new HttpError(400, `prompt is longer than ${MAX_PROMPT} characters`);
@@ -152,10 +154,10 @@ async function addProject(body, deps) {
   if (token !== null) github.validateToken(token);
 
   const key = `${owner}/${repo}`.toLowerCase();
-  const settings = { prompt: prompt || '', token: token || '', trust, design: body.design, code: body.code };
+  const settings = { account, prompt: prompt || '', token: token || '', trust, design: body.design, code: body.code };
   const running = inFlight.get(key);
   if (running) {
-    if (running.prompt !== settings.prompt || running.token !== settings.token || running.trust !== settings.trust
+    if (running.account !== settings.account || running.prompt !== settings.prompt || running.token !== settings.token || running.trust !== settings.trust
       || running.design !== settings.design || running.code !== settings.code) {
       throw new HttpError(409, 'a request for this repo is already in progress with different settings');
     }
@@ -174,7 +176,7 @@ async function addProject(body, deps) {
     const op = await deps.runOp({ argv: ['ccd-onboard', ...(trust ? ['--trust-hooks'] : []), ...(body.design === true ? ['--design'] : []), ...(body.code === true ? ['--code'] : []), `${owner}/${repo}`] });
     checkOnboard(op, { timeout: 'clone timed out', refused: 'clone refused' });
     if (op.rc !== 0) throw new HttpError(502, 'clone failed', { log: op.log });
-    const session = await startSession({ runFile: deps.runFile, name: repo, prompt });
+    const session = await startSession({ runFile: deps.runFile, name: repo, prompt, account });
     return { project: repo, session, ...(warning ? { warning } : {}) };
   })();
   inFlight.set(key, { job, ...settings });

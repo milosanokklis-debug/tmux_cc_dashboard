@@ -77,6 +77,16 @@ STUB
   [ "$(wc -l <"$FAKE_CLAUDE_HOME/accounts/work/mcp-add.log")" -eq 1 ]
 }
 
+@test "ccd-account create registers basic-memory for the new account only" {
+  . "$LIB/accounts.sh"
+  account_create work
+  run "$BIN/ccd-account" create alt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$FAKE_CLAUDE_HOME/accounts/alt/mcp-add.log" ]
+  [ ! -e "$FAKE_CLAUDE_HOME/accounts/work/mcp-add.log" ]
+  [ ! -e "$FAKE_CLAUDE_HOME/mcp-add.log" ]
+}
+
 @test "ccd-memory-init continues past a failing account, still sets up main, reports it" {
   . "$LIB/accounts.sh"
   account_create bad; account_create work
@@ -147,4 +157,20 @@ STUB
   run "$ROOT/bin/ccd" accounts
   [ "${lines[0]}" = $'default\tlogged in' ]
   [ "${lines[1]}" = $'other\tnot logged in' ]
+}
+
+@test "ccd-account create: makes the account dir and registers basic-memory, no claude started; refuses default and bad names" {
+  run ccd-account create work
+  [ "$status" -eq 0 ]
+  [ "$output" = work ] || [[ $output == *work ]]
+  [ -d "$CCDASH_ACCOUNTS_DIR/work" ]
+  [ "$(stat -c %a "$CCDASH_ACCOUNTS_DIR/work")" = 700 ]
+  run ccd-account create work
+  [ "$status" -eq 0 ]
+  for bad in default Work ../x ""; do
+    run ccd-account create "$bad"
+    [ "$status" -eq 2 ] || { echo "accepted: $bad"; false; }
+  done
+  run ccd-account create
+  [ "$status" -eq 2 ]
 }

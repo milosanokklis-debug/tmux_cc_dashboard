@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Claude Code statusLine command. Records {sid, ts, rate_limits, cost, context_window, model} in
-# ~/.ccdash/usage/<session_id>.json (atomic, umask 027) for the dashboard's usage gauges, then
+# ~/.ccdash/usage/<session_id>.json (account from CLAUDE_CONFIG_DIR, default when unset; atomic, umask 027) for the dashboard's usage gauges, then
 # prints the status line: $CCDASH_STATUSLINE_CMD (payload on its stdin) if set, else
 # "<model> · ctx <used_percentage or ?>%". Must never fail Claude: every path exits 0.
 # A hidden helper Claude (CCDASH_HIDDEN=1) records nothing.
@@ -13,14 +13,20 @@ in=$(cat)
 record() {
   [ "${CCDASH_HIDDEN:-}" = 1 ] && return 0
   command -v jq >/dev/null 2>&1 || return 0
-  local sid dir tmp
+  local sid dir tmp acct=default accounts=${CCDASH_ACCOUNTS_DIR:-/home/ccd/.claude-accounts}
+  # the account comes from the config dir: unset or anything else is `default`
+  case ${CLAUDE_CONFIG_DIR:-} in
+    "$accounts"/*)
+      acct=${CLAUDE_CONFIG_DIR#"$accounts"/}
+      [[ $acct =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]] || acct=default ;;
+  esac
   sid=$(jq -r '.session_id // empty' <<<"$in") || return 0
   [[ $sid =~ ^[A-Za-z0-9_-]+$ ]] || return 0
   dir=$base/usage
   mkdir -p "$dir" 2>/dev/null || return 0
   tmp=$(mktemp "$dir/.$sid.XXXXXX" 2>/dev/null) || return 0
-  if jq -c --argjson now "$(date +%s)" \
-        '{sid: .session_id, ts: $now, rate_limits: (.rate_limits // null), cost: (.cost // null),
+  if jq -c --arg acct "$acct" --argjson now "$(date +%s)" \
+        '{sid: .session_id, account: $acct, ts: $now, rate_limits: (.rate_limits // null), cost: (.cost // null),
           context_window: (.context_window // null), model: (.model // null)}' <<<"$in" >"$tmp" \
      && chmod 0640 "$tmp" && mv -f "$tmp" "$dir/$sid.json"; then
     :

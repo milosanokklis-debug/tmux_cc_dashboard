@@ -33,7 +33,7 @@ mcp_gate() {
 # command to run. With the default mode a live session gets a new window only for an account that has
 # none yet. Windows carry the account in the window option @account (none counts as default).
 launch() {
-  local proj=$1 dir=$2 mode=$3 acct=$4 name existing cdir wid a have=0
+  local proj=$1 dir=$2 mode=$3 acct=$4 name existing cdir wid w a have=0 haveid=
   local -a env=()
   shift 4
   cdir=$(account_config_dir "$acct")
@@ -52,8 +52,8 @@ launch() {
       exit 1
     fi
     if [ "$mode" != window ]; then
-      while read -r _ a; do
-        [ "${a:-default}" = "$acct" ] && have=1
+      while read -r w a; do
+        if [ "${a:-default}" = "$acct" ] && [ "$have" = 0 ]; then have=1; haveid=$w; fi
       done < <(t list-windows -t "=$name:" -F '#{window_id} #{@account}' 2>/dev/null || true)
     fi
     # a start on an account that already has a window launches nothing, so it needs no gate
@@ -61,6 +61,8 @@ launch() {
       mcp_gate "$acct"
       wid=$(t new-window -P -F '#{window_id}' -t "=$name:" -c "$dir" ${env[@]+"${env[@]}"} "$@")
       t set -w -t "$wid" @account "$acct"
+    else
+      t select-window -t "$haveid" # attaching lands on that account's window
     fi
   else
     mcp_gate "$acct"
@@ -98,6 +100,8 @@ case "$sub" in
     proj=$1; shift
     [[ $proj =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] && [[ $proj != *..* ]] || { echo "invalid project name" >&2; exit 2; }
     dir=$WS/$proj
+    # `_login` is the dashboard's login window for a new account: claude in ccd's home, not a project
+    [ "$proj" != _login ] || dir=${CCDASH_LOGIN_DIR:-/home/ccd}
     [ -d "$dir" ] || { echo "no such project: $proj" >&2; exit 1; }
     split_account "$@"
     known_account "$acct"

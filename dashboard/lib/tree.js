@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { hasClaude } = require('./tmux');
 const { readRegular } = require('./safefile');
+const { accountOfPath } = require('./accounts');
 
 const DAY = 24 * 3600 * 1000;
 const MAX_FIELD = 200;
@@ -53,13 +54,16 @@ function isRealDir(dir) {
 
 // First user message of a subagent transcript (JSONL), or null on any problem. Only files
 // under `root` are read, because the path comes from a hook payload. Cached by (path, mtime, size).
+// `root` is a directory, a list of them or a function returning either (default dir plus the accounts').
 function firstUserMessage(file, root) {
   try {
     if (typeof file !== 'string' || !file.endsWith('.jsonl')) return null;
-    if (!isRealDir(root)) return null;
     const real = fs.realpathSync(file);
-    const base = fs.realpathSync(root);
-    if (!real.startsWith(base + path.sep)) return null;
+    const inside = [].concat(typeof root === 'function' ? root() : root).some((r) => {
+      if (!isRealDir(r)) return false;
+      return real.startsWith(fs.realpathSync(r) + path.sep);
+    });
+    if (!inside) return null;
     const st = fs.statSync(real); // stat never blocks, even on a FIFO; readRegular rejects those below
     const key = `${st.mtimeMs}:${st.size}`;
     const hit = msgCache.get(real);
@@ -236,6 +240,7 @@ const LIVE = new Set(['running', 'working', 'needs_approval', 'waiting', 'error'
 // `transcript` is the reference for GET /api/transcript?conv=&agent=.
 function buildTree({ agentsDir, transcriptRoot, panes, table, now = Date.now(), all = false, states = null, tokens = null }) {
   const byProject = new Map();
+  const roots = [].concat(typeof transcriptRoot === 'function' ? transcriptRoot() : transcriptRoot);
   for (const [sid, events] of loadConversations(agentsDir)) {
     const folded = fold(sid, events, { panes, table });
     const c = folded.c;
@@ -254,7 +259,7 @@ function buildTree({ agentsDir, transcriptRoot, panes, table, now = Date.now(), 
         tokens: tokens?.forNode(sid, s.agent_id) ?? null,
         transcript: { conv: sid, agent: s.agent_id },
         elapsed: Math.max(0, (endTs ?? sec(now)) - sec(s.startTs)),
-        task: s.task || (s.transcript ? firstUserMessage(s.transcript, transcriptRoot) : null),
+        task: s.task || (s.transcript ? firstUserMessage(s.transcript, roots) : null),
         // a subagent cannot still run in a conversation that ended or vanished
         status: open ? 'done' : s.status,
         startTs: sec(s.startTs),
@@ -263,7 +268,7 @@ function buildTree({ agentsDir, transcriptRoot, panes, table, now = Date.now(), 
     });
     if (!byProject.has(project)) byProject.set(project, []);
     byProject.get(project).push({
-      sid, win: c.win, status, startedTs: sec(c.startedTs), endedTs: status === 'ended' ? sec(c.endedTs) : null, subagents,
+      sid, win: c.win, account: accountOfPath(st?.transcript), status, startedTs: sec(c.startedTs), endedTs: status === 'ended' ? sec(c.endedTs) : null, subagents,
       model: tokens?.modelOf(sid, 'main') ?? null,
       tokens: tokens?.forNode(sid) ?? null,
       transcript: { conv: sid, agent: 'main' },

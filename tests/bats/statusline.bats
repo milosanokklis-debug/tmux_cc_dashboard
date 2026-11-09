@@ -75,3 +75,15 @@ setup() {
   jq -e '.permissions.deny | index("Bash(tmux:*)") != null' "$f" >/dev/null
   jq -e '.hooks.PermissionRequest and .statusLine' "$f" >/dev/null
 }
+
+@test "records the account from CLAUDE_CONFIG_DIR; default when unset or not under the accounts dir" {
+  export CCDASH_ACCOUNTS_DIR=$BATS_TEST_TMPDIR/accts
+  "$SL" <"$FIX" >/dev/null
+  [ "$(jq -r '.account' "$U/$SID.json")" = default ]
+  CLAUDE_CONFIG_DIR=$CCDASH_ACCOUNTS_DIR/work "$SL" <"$FIX" >/dev/null
+  [ "$(jq -r '.account' "$U/$SID.json")" = work ]
+  CLAUDE_CONFIG_DIR=$CCDASH_ACCOUNTS_DIR/Bad "$SL" <"$FIX" >/dev/null
+  [ "$(jq -r '.account' "$U/$SID.json")" = default ]
+  CLAUDE_CONFIG_DIR=/elsewhere/work "$SL" <"$FIX" >/dev/null
+  [ "$(jq -r '.account' "$U/$SID.json")" = default ]
+}

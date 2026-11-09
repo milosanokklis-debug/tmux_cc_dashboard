@@ -4,6 +4,7 @@
 const { HttpError, send, readJson } = require('./http');
 const { createTmux, readProcTable, runFile, runOp } = require('./tmux');
 const projects = require('./projects');
+const accounts = require('./accounts');
 const identity = require('./identity');
 const { buildTree, listConversations } = require('./tree');
 const { createReader, ReaderError } = require('./reader');
@@ -31,7 +32,7 @@ function defaultServices() {
     workspace: '/workspace',
     agentsDir: '/home/ccd/.ccdash/agents',
     projectsDir: projects.DEFAULT_PROJECTS_DIR,
-    transcriptRoot: '/home/ccd/.claude',
+    transcriptRoot: accounts.transcriptRoots,
     tmux,
     procTable: readProcTable,
     runFile,
@@ -146,7 +147,8 @@ function createApi(svc) {
       if (req.method !== 'POST') return methodNotAllowed();
       let name;
       try { name = decodeURIComponent(open[1]); } catch { throw new HttpError(400, 'invalid project name'); }
-      const session = await audited('open', ctx, { project: name }, () => projects.openProject({ workspace: svc.workspace, runFile: svc.runFile, name }));
+      const body = /json/i.test(req.headers['content-type'] || '') ? (await readJson(req, 1024, true)) : {}; // optional { account }
+      const session = await audited('open', ctx, { project: name }, () => projects.openProject({ workspace: svc.workspace, runFile: svc.runFile, name, account: body?.account }));
       return send(res, 200, { session });
     }
     const pull = /^\/api\/projects\/([^/]+)\/pull$/.exec(pathname);
@@ -163,6 +165,13 @@ function createApi(svc) {
       try { name = decodeURIComponent(packs[1]); } catch { throw new HttpError(400, 'invalid project name'); }
       const body = await readJson(req, MAX_ADD_BODY);
       return send(res, 200, await audited('packs', ctx, { project: name }, () => projects.setPacks({ name, body, deps: { ...svc, panes } })));
+    }
+    if (pathname === '/api/accounts') {
+      if (get) return send(res, 200, { accounts: await accounts.listAccounts(svc.runFile) }); // names and logged-in flags only
+      if (req.method !== 'POST') return methodNotAllowed();
+      const body = await readJson(req, 1024);
+      const name = typeof body?.name === 'string' && accounts.validAccount(body.name) ? body.name : undefined; // only a valid name is logged
+      return send(res, 200, await audited('account.create', ctx, { account: name }, () => accounts.createAccount(svc.runFile, body)));
     }
     if (pathname === '/api/git-identity') {
       if (get) return send(res, 200, await identity.getIdentity(svc));

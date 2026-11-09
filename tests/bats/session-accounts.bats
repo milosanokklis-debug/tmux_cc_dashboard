@@ -67,6 +67,16 @@ started() { for _ in $(seq 50); do [ "$(wc -l <"$BATS_TEST_TMPDIR/started" 2>/de
   [ "$(nwin)" -eq 2 ]
 }
 
+@test "starting an account that has a window selects that window" {
+  "$S" start demo
+  "$S" start demo --account work
+  "$S" start demo
+  [ "$(tm display -p -t =claude-demo: '#{@account}')" = default ]
+  "$S" start demo --account work
+  [ "$(tm display -p -t =claude-demo: '#{@account}')" = work ]
+  [ "$(nwin)" -eq 2 ]
+}
+
 @test "the gate runs before a new window, and a refusal opens nothing" {
   "$S" start demo
   FAKE_CLAUDE_MCP=none run "$S" start demo --account work
@@ -184,4 +194,16 @@ wake_record() { # wake_record <json account fragment>
   run "$S" start demo --account lnk
   [ "$status" -eq 1 ]
   [[ $output == *"unknown account"* ]]
+}
+
+@test "start _login --account runs claude for that account in CCDASH_LOGIN_DIR, not a project" {
+  export CCDASH_LOGIN_DIR=$BATS_TEST_TMPDIR/loginhome
+  mkdir -p "$CCDASH_LOGIN_DIR"
+  run "$S" start _login --account work
+  [ "$status" -eq 0 ]
+  [ "$output" = claude-_login ]
+  [ "$(tm show-options -qv -t =claude-_login: @project_dir)" = "$CCDASH_LOGIN_DIR" ]
+  [ "$(tm show-options -wqv -t =claude-_login: @account)" = work ]
+  run "$S" start _login --account nope
+  [ "$status" -eq 1 ]
 }

@@ -7,7 +7,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const FIELDS = new Set(['ip', 'outcome', 'reason', 'project', 'sid', 'request', 'session']);
+const FIELDS = new Set(['ip', 'outcome', 'reason', 'project', 'account', 'sid', 'request', 'session']);
 const MAX_VALUE = 100;
 const SAFE = /^[A-Za-z0-9._:@\/-]*$/; // ids, ips, names, codes: no spaces, quotes or free text
 

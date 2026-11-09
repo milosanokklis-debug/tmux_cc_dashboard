@@ -28,6 +28,8 @@ register_account() ( # subshell: CLAUDE_CONFIG_DIR does not leak
 main() {
   local list a rc=0
   mkdir -p "$BASIC_MEMORY_HOME" || { log "cannot create $BASIC_MEMORY_HOME"; return 1; }
+  if [ -n "${1:-}" ]; then register_account "$1"; return # one account (ccd-account create): skip the project setup
+  fi
   while IFS= read -r a; do register_account "$a" || rc=1; done < <(account_list)
   list=$("$BM" project list --json 2>/dev/null </dev/null) || { log "project list failed"; return 1; }
   if jq -e '.projects[]? | select(.name == "main" and .is_default == true)' >/dev/null 2>&1 <<<"$list"; then
@@ -41,5 +43,5 @@ main() {
   return "$rc"
 }
 
-main || log "memory setup incomplete; sessions will be refused until basic-memory is connected"
+main "$@" || log "memory setup incomplete; sessions will be refused until basic-memory is connected"
 exit 0
