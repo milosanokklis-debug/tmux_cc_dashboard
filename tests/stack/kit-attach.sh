@@ -86,11 +86,11 @@ eq "AC-4.2 HEAD tree has no kit path" "$(ccd git -C $W ls-tree -r --name-only HE
 eq "AC-4.2 commits ahead of origin/main touch no kit path" "$(ccd git -C $W log --name-only --format= origin/main..HEAD | grep -c "$kitre" || true)" 0
 if ccd git -C $W log --name-only --format= origin/main..HEAD | grep -qx g; then ok "AC-4.2 the new file is among the commits to push"; else bad "AC-4.2 g not in the commits to push"; fi
 head_before=$(ccd git -C $W rev-parse HEAD)
-ccd bash -ec "cd $W && mkdir -p .claude && echo '{}' > .claude/settings.local.json && git add -f .claude/settings.local.json"
-if ccd git -C $W diff --cached --name-only | grep -qx '.claude/settings.local.json'; then ok "AC-4.2 kit path force-added"; else bad "AC-4.2 force-add did not stage the kit path"; fi
+ccd bash -ec "cd $W && mkdir -p docs/handoff && echo leak > docs/handoff/leak-test.md && git add -f docs/handoff/leak-test.md"
+if ccd git -C $W diff --cached --name-only | grep -qx 'docs/handoff/leak-test.md'; then ok "AC-4.2 kit path force-added"; else bad "AC-4.2 force-add did not stage the kit path"; fi
 if ccd git -C $W "${ID[@]}" commit -qm leak >/dev/null 2>&1; then bad "AC-4.2 force-added kit path was committed"; else ok "AC-4.2 leak guard refused the commit"; fi
 eq "AC-4.2 nothing was committed" "$(ccd git -C $W rev-parse HEAD)" "$head_before"
-ccd git -C $W reset -q >/dev/null 2>&1 || true
+ccd bash -ec "cd $W && git reset -q && rm -f docs/handoff/leak-test.md" >/dev/null 2>&1 || true
 
 echo "== AC-4.3 onboard with the kit off"
 if ccd ccd-onboard --no-kit octo/other >/dev/null 2>&1; then ok "AC-4.3 ccd-onboard --no-kit octo/other succeeded"; else bad "AC-4.3 ccd-onboard --no-kit failed"; fi
