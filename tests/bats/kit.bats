@@ -53,7 +53,7 @@ subjects() { git -C "$D" log --format=%s; }
   [ "$(jq -r .kitEnabled "$REC")" = true ]
   [ "$(jq -r .head "$REC")" = "$(git -C "$D" rev-parse HEAD)" ]
   [ "$(jq -r 'has("kitError")' "$REC")" = false ]
-  grep -q "args=ensure $D design code --json NO_COLOR=1 TMPDIR=/tmp KIT_REPO=octo/kit" "$STUB_LOG"
+  grep -q "args=attach $D NO_COLOR=1 TMPDIR=/tmp KIT_REPO=octo/kit" "$STUB_LOG"
   [ -s "$HOME/.ccdash/kit-demo.log" ]
 }
 
@@ -106,10 +106,10 @@ subjects() { git -C "$D" log --format=%s; }
   [ "$(jq -r 'has("kit")' "$REC")" = false ]
 }
 
-@test "--kit runs ensure with design code; a later pull without a flag keeps it on; --no-kit stops and leaves files" {
+@test "--kit runs attach; a later pull without a flag keeps it on; --no-kit stops and leaves files" {
   run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
-  grep -q "args=ensure $D design code --json" "$STUB_LOG"
+  grep -q "args=attach $D" "$STUB_LOG"
   [ "$(jq -c .packs "$REC")" = '["kit-core","kit-design","kit-code"]' ]
   [ "$(jq -r .kitEnabled "$REC")" = true ]
   [ -f "$D/.claude/skills/web-design-guidelines/SKILL.md" ]
@@ -135,7 +135,7 @@ subjects() { git -C "$D" log --format=%s; }
   jq -c '.kit = {version: "0.9.0", packs: ["kit-core"], memory: "connected"} | del(.kitEnabled)' "$REC" > "$REC.n"; mv "$REC.n" "$REC"
   run "$BIN/ccd-onboard" octo/demo
   [ "$status" -eq 0 ]
-  grep -q "args=ensure $D design code --json" "$STUB_LOG"
+  grep -q "args=attach $D" "$STUB_LOG"
   [ "$(jq -r .kitEnabled "$REC")" = true ]
   [ "$(jq -c .packs "$REC")" = '["kit-core","kit-design","kit-code"]' ]
 }
