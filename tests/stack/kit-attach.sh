@@ -3,26 +3,32 @@
 # stack image with the fake claude and the inert kit): a local bare repo stands in for GitHub (git url.<bare>.insteadOf),
 # the kit's plugin marketplaces come from github.com (needs network). AC-4.1: a project onboarded with --kit leaves the
 # tree clean (nothing untracked, no tracked kit path), has the `# agent-kit:private` block in .git/info/exclude and the
-# kit-core, kit-design and kit-code plugins installed. AC-4.2: a normal commit pushes no kit path to the remote, and a
-# force-added kit path is refused by the leak-guard hook. AC-4.3: a project onboarded with --no-kit pushes
-# .claude/agents/x.md and has no exclude block. AC-4.4: after a container restart (no -v) the start re-check records
+# kit-core, kit-design and kit-code plugins installed. AC-4.2: the kit-on project does not push (the kit pre-push hook
+# needs a Claude login); instead what a push would send (HEAD tree and the commits ahead of the fetched remote main)
+# holds no kit path, and a force-added kit path is refused by the pre-commit leak guard. AC-4.3: a project onboarded
+# with --no-kit really pushes .claude/agents/x.md and AGENTS.md to its bare remote and has no exclude block. AC-4.4: after a container restart (no -v) the start re-check records
 # kitCheck status ok and the tree is still clean. Needs docker (or CCDASH_DOCKER, e.g. "sudo -n -u ccdash
 # /usr/local/bin/ccdash-docker"), curl and jq. Own project and volumes (ccdashtest-k), removed at the end. Env:
-# CCDASH_TEST_PORT (7699), CCDASH_IMAGE (ccdash:ci, built from the checkout if missing), KEEP=1, DEBUG=1.
+# CCDASH_TEST_PORT (7699), CCDASH_IMAGE (unset: an image ccdash:kitattach is built from the checkout and removed at the end), KEEP=1, DEBUG=1.
 # shellcheck disable=SC2329,SC2317,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
 export CCDASH_TEST_PORT=${CCDASH_TEST_PORT:-7699}
-base=${CCDASH_IMAGE:-ccdash:ci}
+base=${CCDASH_IMAGE:-}
+built=
 P=ccdashtest-k
-export CCDASH_TEST_IMAGE=$base # the real image: real claude, real kit
+
 url=http://127.0.0.1:$CCDASH_TEST_PORT
 fail=0
 
 compose() { (cd / && $D compose -p "$P" -f - "$@" < <(sed -e "s|@IMAGE@|$CCDASH_TEST_IMAGE|" -e "s|@PORT@|$CCDASH_TEST_PORT|" -e '/# phase-c$/d' "$root/tests/stack/compose.yaml")); }
 ccd() { compose exec -T -u ccd -e HOME=/home/ccd ccdash "$@"; }
-cleanup() { [ -n "${KEEP:-}" ] && return; compose down -v --remove-orphans >/dev/null 2>&1 || true; }
+cleanup() {
+  [ -n "${KEEP:-}" ] && return
+  compose down -v --remove-orphans >/dev/null 2>&1 || true
+  if [ -n "$built" ]; then $D rmi -f "$built" >/dev/null 2>&1 || true; fi
+}
 trap cleanup EXIT
 ok() { echo "PASS $*"; }
 bad() { echo "FAIL $*"; fail=1; }
@@ -36,10 +42,12 @@ until_ok() { # until_ok SECONDS DESCRIPTION CMD...
 eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; fi; }
 tar_ctx() { (cd "$root" && git ls-files -co --exclude-standard -- . ':!dashboard/node_modules' | grep -v '^docs/handoff\|^\.claude' | tar -c -T -); }
 
-if ! $D image inspect "$base" >/dev/null 2>&1; then
+if [ -z "$base" ]; then
+  base=ccdash:kitattach built=$base
   set -a; . "$root/.env.example"; set +a
   tar_ctx | $D build -q -t "$base" --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION" --build-arg "S6_OVERLAY_VERSION=$S6_OVERLAY_VERSION" --build-arg "BASIC_MEMORY_VERSION=$BASIC_MEMORY_VERSION" --build-arg "KIT_REPO=$KIT_REPO" --build-arg "KIT_REF=$KIT_REF" - >/dev/null
 fi
+export CCDASH_TEST_IMAGE=$base # the real image: real claude, real kit
 
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 healthy() { curl -sf "$url/healthz"; }
@@ -70,20 +78,26 @@ for p in kit-core kit-design kit-code; do
   if grep -q "$p" <<<"$plugins"; then ok "AC-4.1 plugin $p listed"; else bad "AC-4.1 plugin $p missing: $plugins"; fi
 done
 
-# The kit's pre-push hook runs an independent Claude review, which needs a login; SKIP_REVIEW=1 (its documented bypass) skips only that step
-echo "== AC-4.2 push and the leak guard"
-ccd bash -ec "cd $W && echo two > g && git add g && git ${ID[*]} commit -qm two && SKIP_REVIEW=1 git push -q origin HEAD:main"
-if remote_files demo | grep -q '^g$'; then ok "AC-4.2 the new file reached the remote"; else bad "AC-4.2 g not on the remote"; fi
-eq "AC-4.2 remote tree has no kit path" "$(remote_files demo | grep -c '^\.claude\|^CLAUDE\.local\.md' || true)" 0
-ccd git -C $W add -f .claude/settings.local.json >/dev/null 2>&1 || true
+# No push from the kit-on project: its pre-push hook needs a Claude login. Check what a push would send instead.
+echo "== AC-4.2 what a push would send, and the leak guard"
+kitre='^\.claude/\|^CLAUDE\.local\.md$\|^AGENTS\.md$\|^docs/handoff/'
+ccd bash -ec "cd $W && echo two > g && git add g && git ${ID[*]} commit -qm two && git fetch -q origin"
+eq "AC-4.2 HEAD tree has no kit path" "$(ccd git -C $W ls-tree -r --name-only HEAD | grep -c "$kitre" || true)" 0
+eq "AC-4.2 commits ahead of origin/main touch no kit path" "$(ccd git -C $W log --name-only --format= origin/main..HEAD | grep -c "$kitre" || true)" 0
+if ccd git -C $W log --name-only --format= origin/main..HEAD | grep -qx g; then ok "AC-4.2 the new file is among the commits to push"; else bad "AC-4.2 g not in the commits to push"; fi
+head_before=$(ccd git -C $W rev-parse HEAD)
+ccd bash -ec "cd $W && mkdir -p .claude && echo '{}' > .claude/settings.local.json && git add -f .claude/settings.local.json"
+if ccd git -C $W diff --cached --name-only | grep -qx '.claude/settings.local.json'; then ok "AC-4.2 kit path force-added"; else bad "AC-4.2 force-add did not stage the kit path"; fi
 if ccd git -C $W "${ID[@]}" commit -qm leak >/dev/null 2>&1; then bad "AC-4.2 force-added kit path was committed"; else ok "AC-4.2 leak guard refused the commit"; fi
+eq "AC-4.2 nothing was committed" "$(ccd git -C $W rev-parse HEAD)" "$head_before"
 ccd git -C $W reset -q >/dev/null 2>&1 || true
 
 echo "== AC-4.3 onboard with the kit off"
 if ccd ccd-onboard --no-kit octo/other >/dev/null 2>&1; then ok "AC-4.3 ccd-onboard --no-kit octo/other succeeded"; else bad "AC-4.3 ccd-onboard --no-kit failed"; fi
 O=/workspace/other
-ccd bash -ec "cd $O && mkdir -p .claude/agents && echo hi > .claude/agents/x.md && git add .claude && git ${ID[*]} commit -qm agent && SKIP_REVIEW=1 git push -q origin HEAD:main"
+ccd bash -ec "cd $O && mkdir -p .claude/agents && echo hi > .claude/agents/x.md && echo hi > AGENTS.md && git add .claude AGENTS.md && git ${ID[*]} commit -qm agent && git push -q origin HEAD:main"
 if remote_files other | grep -qx '.claude/agents/x.md'; then ok "AC-4.3 .claude/agents/x.md reached the remote"; else bad "AC-4.3 x.md not on the remote"; fi
+if remote_files other | grep -qx 'AGENTS.md'; then ok "AC-4.3 AGENTS.md reached the remote"; else bad "AC-4.3 AGENTS.md not on the remote"; fi
 eq "AC-4.3 no exclude block" "$(ccd grep -c 'agent-kit:private' $O/.git/info/exclude || true)" 0
 
 echo "== AC-4.4 restart: the start re-check"
