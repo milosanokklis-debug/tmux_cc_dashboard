@@ -310,3 +310,30 @@ HOOKS='{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"curl evil
   [ "$status" -eq 5 ]
   [ ! -e "$D" ]
 }
+
+@test "--kit-only needs an existing checkout (exit 3) and never pulls" {
+  run "$BIN/ccd-onboard" --kit-only octo/demo
+  [ "$status" -eq 3 ]
+  [ ! -e "$D" ]
+  "$BIN/ccd-onboard" octo/demo
+  before=$(git -C "$D" rev-parse HEAD)
+  push_commit two
+  run "$BIN/ccd-onboard" --kit-only octo/demo
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$D" rev-parse HEAD)" = "$before" ]
+}
+
+@test "TERM during the kit step restores the checkout, records kitError, exits 8" {
+  "$BIN/ccd-onboard" octo/demo
+  echo mine > "$D/notes.txt"; echo more >> "$D/f"
+  before=$(git -C "$D" status --porcelain)
+  printf '#!/bin/bash\nmkdir -p "$2/.claude"; echo k > "$2/.claude/CLAUDE.md"; echo k > "$2/CLAUDE.md"\nsleep 30\n' > "$BATS_TEST_TMPDIR/slowkit"
+  chmod +x "$BATS_TEST_TMPDIR/slowkit"
+  export CCDASH_KIT=$BATS_TEST_TMPDIR/slowkit
+  run timeout -s TERM 2 "$BIN/ccd-onboard" --kit-only octo/demo
+  [ "$status" -eq 124 ] # timeout reports 124 whatever the child exits with
+  [ "$(git -C "$D" status --porcelain)" = "$before" ]
+  [ "$(jq -r .kitError.code "$CCDASH_PROJECTS/demo.json")" = 5 ]
+  [[ $(jq -r .kitError.message "$CCDASH_PROJECTS/demo.json") == *interrupted* ]]
+  ! pgrep -f "$BATS_TEST_TMPDIR/slowkit" > /dev/null
+}

@@ -114,14 +114,13 @@ ON='{"repo":"octo/demo","kitEnabled":true}'
   [ "$(rec .kitCheck.ts demo)" != null ]
 }
 
-@test "a dirty checkout skips the kit: session starts, kitCheck failed 'skipped', no kitError" {
+@test "a dirty checkout does not stop the re-check (no pull); the user's change stays" {
   mkproj demo "$ON"
   echo dirty >> "$CCDASH_WS/demo/f"
   run "$S" start demo
   [ "$status" -eq 0 ] && [ "$output" = claude-demo ]
-  [ "$(rec .kitCheck.status demo)" = failed ]
-  [[ $(rec .kitCheck.message demo) == *skipped* ]]
-  [ "$(rec '.kitError // "none"' demo)" = none ]
+  [[ $(rec .kitCheck.status demo) =~ ^(ok|changed)$ ]]
+  [ "$(git -C "$CCDASH_WS/demo" status --porcelain -- f)" = " M f" ]
 }
 
 @test "a project lock held elsewhere: session starts within the timeout, kitCheck mentions busy" {
@@ -138,4 +137,49 @@ ON='{"repo":"octo/demo","kitEnabled":true}'
   [ "$(rec .kitCheck.status demo)" = failed ]
   [[ $(rec .kitCheck.message demo) == *[Bb]usy* ]]
   [ "$(rec .kitError.code demo)" = 5 ]
+}
+
+@test "re-check does not pull: HEAD stays put although origin has a new commit" {
+  mkproj demo "$ON"
+  w=$BATS_TEST_TMPDIR/demo.w
+  before=$(git -C "$CCDASH_WS/demo" rev-parse HEAD)
+  git -C "$CCDASH_WS/demo" fetch -q origin # origin/main = before; a later fetch or pull would move it
+  [ "$(git -C "$CCDASH_WS/demo" rev-parse origin/main)" = "$before" ]
+  echo y > "$w/g"; git -C "$w" add g; git -C "$w" commit -qm two; git -C "$w" push -q origin HEAD:main
+  run "$S" kit-recheck
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$CCDASH_WS/demo" rev-parse origin/main)" = "$before" ] # no fetch
+  [ "$(git -C "$CCDASH_WS/demo" rev-parse HEAD~0)" != "" ] && ! git -C "$CCDASH_WS/demo" merge-base --is-ancestor "$(git -C "$w" rev-parse HEAD)" HEAD # the kit commit may move HEAD, never to the remote commit
+  [ ! -e "$CCDASH_WS/demo/g" ]
+  ! git -C "$CCDASH_WS/demo" log --format=%s | grep -qx two
+  [[ $(rec .kitCheck.status demo) =~ ^(ok|changed)$ ]]
+}
+
+@test "a kit killed by the timeout leaves the checkout as it was, dirty file included, and records kitError" {
+  mkproj demo "$ON"
+  d=$CCDASH_WS/demo
+  echo mine > "$d/notes.txt"; echo more >> "$d/f"
+  before=$(git -C "$d" status --porcelain)
+  printf '#!/bin/bash\nmkdir -p "$2/.claude"; echo kit > "$2/.claude/CLAUDE.md"; echo kit > "$2/.claude/settings.json"; echo kit > "$2/CLAUDE.md"\nsleep 30\n' > "$BATS_TEST_TMPDIR/slowkit"
+  chmod +x "$BATS_TEST_TMPDIR/slowkit"
+  export CCDASH_KIT=$BATS_TEST_TMPDIR/slowkit CCDASH_KIT_TIMEOUT=2
+  run "$S" kit-recheck
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$d" status --porcelain)" = "$before" ]
+  [ ! -e "$d/.claude" ]
+  [ "$(rec .kitError.code demo)" = 124 ]
+  ! pgrep -f "$BATS_TEST_TMPDIR/slowkit" > /dev/null
+}
+
+@test "the kit commit holds only kit paths; the user's own staged file stays staged" {
+  mkproj demo "$ON"
+  d=$CCDASH_WS/demo
+  echo mine > "$d/mine.txt"; git -C "$d" add mine.txt
+  run "$S" start demo --account work
+  [ "$status" -eq 0 ]
+  [ "$(rec .kitCheck.status demo)" = changed ]
+  [ "$(git -C "$d" log -1 --format=%s)" != one ]
+  ! git -C "$d" show --name-only --format= HEAD | grep -qx mine.txt
+  git -C "$d" show --name-only --format= HEAD | grep -q CLAUDE.md
+  [ "$(git -C "$d" diff --cached --name-only)" = mine.txt ]
 }
