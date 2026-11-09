@@ -123,6 +123,7 @@ if [ -n "$kit" ] && { [ "$want" = 1 ] || [ "$detach" = 1 ]; }; then
     [ "$had_skills" = 1 ] || rmdir "$dir/.claude/skills" 2> /dev/null || true
     [ "$had_claude" = 1 ] || rmdir "$dir/.claude" 2> /dev/null || true
   }
+  redact() { sed -E '/(token|secret|password|key=|bearer)/I s/((token|secret|password|key=|bearer)[[:space:]:="]*)[^[:space:]"]*/\1***/Ig'; }
   kit_fail() { # kit_fail <code> <message>: undo the kit step, record kitError, exit 8
     local kerr=$1 kmsg=$2 ken=$kitenabled
     [ "$detach" = 0 ] || ken=$([ "$prev_on" = 1 ] && echo true || echo false) # a failed detach leaves the kit on
@@ -138,7 +139,7 @@ if [ -n "$kit" ] && { [ "$want" = 1 ] || [ "$detach" = 1 ]; }; then
     echo "kit-error $kerr $kmsg"
     # only the tail goes to the API, with obvious secrets blanked (the full log stays on disk, owner-only)
     tail -n 20 "$log" | tr -d '\000' \
-      | sed -E '/(token|secret|password|key=|bearer)/I s/((token|secret|password|key=|bearer)[[:space:]:="]*)[^[:space:]"]*/\1***/Ig'
+      | redact
     exit 8
   }
   kpid=''
@@ -177,7 +178,7 @@ if [ -n "$kit" ] && { [ "$want" = 1 ] || [ "$detach" = 1 ]; }; then
     [ "$(state_sum)" = "$before" ] || kchanged=true
     if [[ $out =~ memory[[:space:]]+(connected|missing) ]]; then kmem=${BASH_REMATCH[1]}; fi
     [[ $kver =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,40}$ ]] || { kerr=5; kmsg="Plugin install or update failed; retry"; }
-    kwarn=$( { cat "$log"; printf '%s\n' "$out"; } | grep -E '^(!! |warning:)' | tr -d '[:cntrl:]' | cut -c1-200 | head -n 5 | paste -sd'|' | sed -E '/(token|secret|password|key=|bearer)/I s/((token|secret|password|key=|bearer)[[:space:]:="]*)[^[:space:]"]*/\1***/Ig' || true)
+    kwarn=$( { cat "$log"; printf '%s\n' "$out"; } | grep -E '^(!! |warning:)' | tr -d '[:cntrl:]' | cut -c1-200 | head -n 5 | paste -sd'|' | redact || true)
   fi
   if [ "$kerr" != 0 ]; then kit_fail "$kerr" "$kmsg"; fi
   trap - TERM INT

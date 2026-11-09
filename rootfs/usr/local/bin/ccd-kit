@@ -7,7 +7,7 @@
 # The kit script is only read as text (kit_version), never run here; ccd-onboard runs it.
 # Env: KIT_REPO (owner/repo, default: origin of the image kit), CCDASH_KIT_HOME (checkouts + `current`),
 # CCDASH_KIT_IMAGE (/opt/agent-kit), CCDASH_LOCK_DIR (/run/ccdash, else $HOME/.ccdash/locks), CCDASH_PROJECTS,
-# CCDASH_KIT_LOCK_WAIT (600 s), CCDASH_MARKETPLACE_TIMEOUT (60 s per `claude plugin marketplace add`). Locks: kit.lock (check and update, whole run), kit-<project>.lock (also taken by ccd-onboard's kit step).
+# CCDASH_KIT_LOCK_WAIT (600 s). Locks: kit.lock (check and update, whole run), kit-<project>.lock (also taken by ccd-onboard's kit step).
 set -euo pipefail
 # shellcheck source=/dev/null
 . "${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}/kit.sh"
@@ -66,6 +66,8 @@ valid_ref() {
   [[ $r =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && [[ $r != *..* ]] && [[ $r != *//* ]] && [[ $r != */ ]] && [[ $r != *.lock ]]
 }
 
+clean_line() { tr -d '[:cntrl:]' | cut -c1-200; } # strip control characters, cap at 200
+
 # recheck_projects: ccd-onboard --kit-only for every opted-in project, with the active kit
 recheck_projects() {
   local f name repo out rc line
@@ -83,7 +85,7 @@ recheck_projects() {
       out=$(CCDASH_KIT_LOCKED=1 "$here/ccd-onboard" --kit-only "$repo" 2>&1 < /dev/null) || rc=$?
       line=$(printf '%s\n' "$out" | grep -m1 -E '^kit(-error)? ' || true)
       [ -n "$line" ] || line=$(printf '%s\n' "$out" | grep -m1 . || true)
-      line=$(printf '%s' "$line" | tr -d '[:cntrl:]' | cut -c1-200)
+      line=$(printf '%s' "$line" | clean_line)
       if [ "$rc" != 0 ]; then echo "project $name failed ${line:-exit $rc}"
       elif [[ $line == "kit "*" changed"* ]]; then echo "project $name changed $line"
       else echo "project $name ok ${line:-no kit line}"; fi
@@ -98,10 +100,10 @@ register_marketplace() { # dir
   ACCT_FAIL=
   while IFS= read -r a; do
     rc=0
-    out=$( (account_env "$a" && timeout -k 5 "${CCDASH_MARKETPLACE_TIMEOUT:-60}" claude plugin marketplace add "$d") 2>&1 < /dev/null) || rc=$?
+    out=$( (account_env "$a" && timeout -k 5 60 claude plugin marketplace add "$d") 2>&1 < /dev/null) || rc=$?
     if [ "$rc" != 0 ]; then
       msg=$(printf '%s\n' "$out" | grep -m1 . || true)
-      msg=$(printf '%s' "$msg" | tr -d '[:cntrl:]' | cut -c1-200)
+      msg=$(printf '%s' "$msg" | clean_line)
       ACCT_FAIL+="account $a failed ${msg:-exit $rc}"$'\n'
     fi
   done < <(account_list)

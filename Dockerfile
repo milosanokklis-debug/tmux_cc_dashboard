@@ -22,11 +22,7 @@ ARG KIT_REPO=milosanokklis-debug/new_ai_setup
 ARG KIT_REF=18ad921ec9d8b74e295350f876bf5cf1e7f15636
 ARG SEMGREP_VERSION=1.183.0
 ARG GITLEAKS_VERSION=8.30.1
-ARG GITLEAKS_SHA256_AMD64=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-ARG GITLEAKS_SHA256_ARM64=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
 ARG UV_VERSION=0.13.7
-ARG UV_SHA256_AMD64=c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
-ARG UV_SHA256_ARM64=71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc
 
 # Fixed ids so upgrades keep volume owners (web 999, ccd 1000). Created before the first package install: packages
 # that add system users would otherwise take these ids first.
@@ -60,8 +56,8 @@ RUN set -eux; \
 # /usr/local/bin/uvx stays the ccdash shim.
 RUN set -eux; \
     case "${TARGETARCH:-amd64}" in \
-      amd64) gl=x64; gsha=$GITLEAKS_SHA256_AMD64; uvarch=x86_64; usha=$UV_SHA256_AMD64 ;; \
-      arm64) gl=arm64; gsha=$GITLEAKS_SHA256_ARM64; uvarch=aarch64; usha=$UV_SHA256_ARM64 ;; \
+      amd64) gl=x64; gsha=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb; uvarch=x86_64; usha=c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83 ;; \
+      arm64) gl=arm64; gsha=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080; uvarch=aarch64; usha=71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc ;; \
       *) echo "unsupported TARGETARCH ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     cd /tmp; \
