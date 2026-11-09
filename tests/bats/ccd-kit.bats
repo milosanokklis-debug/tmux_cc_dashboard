@@ -160,7 +160,7 @@ notemp() { [ -z "$(ls -A "$CCDASH_KIT_HOME" | grep '^\.tmp' || true)" ]; }
   printf '%s\n' "${lines[@]}" | grep -q '^project on '
   printf '%s\n' "${lines[@]}" | grep -q '^project legacy '
   ! printf '%s\n' "${lines[@]}" | grep -q '^project off '
-  [ "$(grep -c 'args=ensure' "$STUB_LOG")" -eq 2 ]
+  [ "$(grep -c 'args=attach' "$STUB_LOG")" -eq 2 ]
   run "$BIN/ccd-kit" update --reset
   [[ ${lines[0]} == "project "* ]]
   [[ ${lines[-2]} == "updated "* && ${lines[-1]} == "version "* ]]

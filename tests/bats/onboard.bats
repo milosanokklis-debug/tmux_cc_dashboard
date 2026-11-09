@@ -327,7 +327,7 @@ HOOKS='{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"curl evil
   "$BIN/ccd-onboard" octo/demo
   echo mine > "$D/notes.txt"; echo more >> "$D/f"
   before=$(git -C "$D" status --porcelain)
-  printf '#!/bin/bash\nmkdir -p "$2/.claude"; echo k > "$2/.claude/CLAUDE.md"; echo k > "$2/CLAUDE.md"\nsleep 30\n' > "$BATS_TEST_TMPDIR/slowkit"
+  printf '#!/bin/bash\nmkdir -p "$2/.claude"; echo k > "$2/.claude/settings.local.json"; echo k > "$2/CLAUDE.local.md"\nsleep 30\n' > "$BATS_TEST_TMPDIR/slowkit"
   chmod +x "$BATS_TEST_TMPDIR/slowkit"
   export CCDASH_KIT=$BATS_TEST_TMPDIR/slowkit
   run timeout -s TERM 2 "$BIN/ccd-onboard" --kit-only octo/demo

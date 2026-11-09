@@ -36,34 +36,23 @@ state() {
 }
 subjects() { git -C "$D" log --format=%s; }
 
-@test "fresh onboard: one chore commit by ccdash with only .claude/ and CLAUDE.md; record has kit and packs" {
+@test "fresh onboard: attach, no commit, clean status; record has kit and packs" {
   run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
-  [[ $output == *"kit 0.9.2 changed"* ]]
+  [[ $output == *"kit 0.14.0 changed"* ]]
   [[ $output == *"packs kit-core,kit-design,kit-code"* ]]
   [[ $output == *"memory connected"* ]]
   [ "${lines[-1]}" = "head $(git -C "$D" rev-parse HEAD)" ]
-  [ "$(git -C "$D" rev-list --count HEAD)" -eq 2 ]
-  [ "$(git -C "$D" log -1 --format='%an <%ae>|%cn <%ce>|%s')" = 'ccdash <ccdash@localhost>|ccdash <ccdash@localhost>|chore: agent-kit 0.9.2' ]
-  [ "$(git -C "$D" diff-tree --no-commit-id --name-only -r HEAD | paste -sd' ')" = ".claude/agent-kit.json .claude/settings.json CLAUDE.md" ]
+  [ "$(git -C "$D" rev-list --count HEAD)" -eq 1 ]
   [ -z "$(git -C "$D" status --porcelain)" ]
   [ "$(git --git-dir="$BARE" rev-parse main)" = "$(git -C "$W" rev-parse HEAD)" ] # never pushed
-  [ "$(jq -c .kit "$REC")" = '{"version":"0.9.2","packs":["kit-core","kit-design","kit-code"],"memory":"connected"}' ]
+  [ "$(jq -c .kit "$REC")" = '{"version":"0.14.0","packs":["kit-core","kit-design","kit-code"],"memory":"connected"}' ]
   [ "$(jq -c .packs "$REC")" = '["kit-core","kit-design","kit-code"]' ]
   [ "$(jq -r .kitEnabled "$REC")" = true ]
   [ "$(jq -r .head "$REC")" = "$(git -C "$D" rev-parse HEAD)" ]
   [ "$(jq -r 'has("kitError")' "$REC")" = false ]
   grep -q "args=attach $D NO_COLOR=1 TMPDIR=/tmp KIT_REPO=octo/kit" "$STUB_LOG"
-  [ -s "$HOME/.ccdash/kit-demo.log" ]
-}
-
-@test "kit that writes only .claude/ (no CLAUDE.md): the commit still succeeds" {
-  STUB_NO_CLAUDEMD=1 run "$BIN/ccd-onboard" --kit octo/demo
-  [ "$status" -eq 0 ]
-  [ "$(git -C "$D" log -1 --format=%s)" = 'chore: agent-kit 0.9.2' ]
-  [ "$(git -C "$D" diff-tree --no-commit-id --name-only -r HEAD | paste -sd' ')" = ".claude/agent-kit.json .claude/settings.json" ]
-  [ -z "$(git -C "$D" status --porcelain)" ]
-  [ "$(jq -r 'has("kitError")' "$REC")" = false ]
+  [ -e "$HOME/.ccdash/kit-demo.log" ]
 }
 
 @test "second onboard: nothing changes, no commit, tree clean" {
@@ -71,27 +60,25 @@ subjects() { git -C "$D" log --format=%s; }
   before=$(state)
   run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
-  [[ $output == *"kit 0.9.2 unchanged"* ]]
+  [[ $output == *"kit 0.14.0 unchanged"* ]]
   [ "$(state)" = "$before" ]
-  [ "$(git -C "$D" rev-list --count HEAD)" -eq 2 ]
+  [ "$(git -C "$D" rev-list --count HEAD)" -eq 1 ]
 }
 
-@test "kit paths already dirty: the kit runs but its commit is skipped" {
+@test "a local change to a tracked file is not touched by the kit step and nothing is committed" {
   "$BIN/ccd-onboard" --kit octo/demo
   head=$(git -C "$D" rev-parse HEAD)
-  echo mine >> "$D/CLAUDE.md"
+  echo mine >> "$D/f"
   STUB_VERSION=1.2.3 run "$BIN/ccd-onboard" --kit-only octo/demo
   [ "$status" -eq 0 ]
   [ "$(git -C "$D" rev-parse HEAD)" = "$head" ]
-  [ "$(git -C "$D" log -1 --format=%s)" != "chore: agent-kit 1.2.3" ]
-  [ -n "$(git -C "$D" status --porcelain -- .claude CLAUDE.md)" ]
+  [ "$(git -C "$D" status --porcelain)" = " M f" ]
 }
 
 @test "memory missing and a different version are recorded" {
   STUB_MEMORY=missing STUB_VERSION=1.2.3 run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
   [[ $output == *"memory missing"* ]]
-  [ "$(git -C "$D" log -1 --format=%s)" = "chore: agent-kit 1.2.3" ]
   [ "$(jq -c .kit "$REC")" = '{"version":"1.2.3","packs":["kit-core","kit-design","kit-code"],"memory":"missing"}' ]
 }
 
@@ -106,26 +93,26 @@ subjects() { git -C "$D" log --format=%s; }
   [ "$(jq -r 'has("kit")' "$REC")" = false ]
 }
 
-@test "--kit runs attach; a later pull without a flag keeps it on; --no-kit stops and leaves files" {
+@test "--kit runs attach; a later pull without a flag keeps it on; --no-kit detaches" {
   run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
   grep -q "args=attach $D" "$STUB_LOG"
   [ "$(jq -c .packs "$REC")" = '["kit-core","kit-design","kit-code"]' ]
   [ "$(jq -r .kitEnabled "$REC")" = true ]
-  [ -f "$D/.claude/skills/web-design-guidelines/SKILL.md" ]
   [ -z "$(git -C "$D" status --porcelain)" ]
   run "$BIN/ccd-onboard" octo/demo # no flag: the record decides
   [ "$status" -eq 0 ]
-  [[ $output == *"kit 0.9.2 unchanged"* ]]
+  [[ $output == *"kit 0.14.0 unchanged"* ]]
   [ "$(grep -c '^args=' "$STUB_LOG")" -eq 2 ]
-  before=$(state); : > "$STUB_LOG"
+  : > "$STUB_LOG"
   run "$BIN/ccd-onboard" --no-kit octo/demo
   [ "$status" -eq 0 ]
   [[ $output == *"kit off"* ]]
-  [ ! -s "$STUB_LOG" ]
-  [ "$(state)" = "$before" ] # files stay: agent-kit has no remove command
+  grep -q "^args=detach $D" "$STUB_LOG"
+  [ ! -e "$D/.claude/agent-kit.json" ]
   [ "$(jq -r .kitEnabled "$REC")" = false ]
-  [ "$(jq -c .packs "$REC")" = '["kit-core","kit-design","kit-code"]' ] # describes what is left on disk
+  [ "$(jq -r 'has("kit")' "$REC")" = false ]
+  : > "$STUB_LOG"
   run "$BIN/ccd-onboard" octo/demo # still off without a flag
   [ ! -s "$STUB_LOG" ]
 }
@@ -231,10 +218,10 @@ subjects() { git -C "$D" log --format=%s; }
     STUB_EXIT=$n run "$BIN/ccd-onboard" --kit octo/demo
     [ "$status" -eq 8 ]
     [[ $output == *"kit-error $n ${msg[$n]}"* ]]
-    [[ $output == *"stub: scribbling"* ]] # the log tail follows
+    [[ $output == *"stub: attach failed with $n"* ]] # the log tail follows
     [ "$(state)" = "$before" ]
     [ "$(jq -r .kitError.code "$REC")" = "$n" ]
-    [ "$(jq -c .kit "$REC")" = '{"version":"0.9.2","packs":["kit-core","kit-design","kit-code"],"memory":"connected"}' ] # last good kit state kept
+    [ "$(jq -c .kit "$REC")" = '{"version":"0.14.0","packs":["kit-core","kit-design","kit-code"],"memory":"connected"}' ] # last good kit state kept
   done
   [[ $(STUB_EXIT=4 "$BIN/ccd-onboard" --kit octo/demo) == *"retry"* ]]
   [[ $(STUB_EXIT=5 "$BIN/ccd-onboard" --kit octo/demo) == *"retry"* ]]
@@ -271,21 +258,98 @@ subjects() { git -C "$D" log --format=%s; }
   [ "$(cat "$D/.claude/settings.local.json")" = keepme ]
 }
 
-@test "pull after the remote gains a commit rebases the kit commit on top" {
+# a kit wrapper: runs the stub for everything but the verb in WRAP_VERB, where it scribbles and fails
+wrap_kit() {
+  cat > "$BATS_TEST_TMPDIR/wrap.sh" <<'W'
+#!/usr/bin/env bash
+if [ "$1" = "${WRAP_VERB:-attach}" ]; then
+  d=$2; g=$(git -C "$d" rev-parse --absolute-git-dir)
+  printf '# agent-kit:private start\nextra\n# agent-kit:private end\n' >> "$g/info/exclude"
+  git -C "$d" config --local core.hooksPath /elsewhere
+  mkdir -p "$d/.claude/agents" "$g/agent-kit"; echo junk > "$d/.claude/agents/x.md"; echo junk > "$g/agent-kit/y"
+  echo junk > "$d/CLAUDE.local.md"
+  echo "${WRAP_MSG:-boom}" >&2
+  exit "${WRAP_EXIT:-5}"
+fi
+exec "$STUB" "$@"
+W
+  chmod +x "$BATS_TEST_TMPDIR/wrap.sh"
+  export STUB=$ROOT/tests/fixtures/agent-kit-stub.sh CCDASH_KIT=$BATS_TEST_TMPDIR/wrap.sh
+}
+
+@test "kit failure restores exclude, core.hooksPath, agents/, CLAUDE.local.md and keeps pre-existing settings" {
   "$BIN/ccd-onboard" --kit octo/demo
-  old_kit=$(git -C "$D" rev-parse HEAD)
+  git -C "$D" config --local core.hooksPath /mine
+  echo '{"a":1}' > "$D/.claude/settings.local.json"
+  mkdir -p "$D/.claude/agents"; echo mine > "$D/.claude/agents/m.md"; echo mine > "$D/CLAUDE.local.md"
+  ex=$(git -C "$D" rev-parse --absolute-git-dir)/info/exclude
+  echo ".claude/agents/" >> "$ex"
+  ex_before=$(cat "$ex"); aj_before=$(cat "$D/.claude/agent-kit.json")
+  before=$(state)
+  wrap_kit
+  run "$BIN/ccd-onboard" --kit octo/demo
+  [ "$status" -eq 8 ]
+  [ "$(cat "$ex")" = "$ex_before" ]
+  [ "$(git -C "$D" config --local core.hooksPath)" = /mine ]
+  [ "$(cat "$D/.claude/agents/m.md")" = mine ]
+  [ "$(cat "$D/CLAUDE.local.md")" = mine ]
+  [ ! -e "$(git -C "$D" rev-parse --absolute-git-dir)/agent-kit" ]
+  [ "$(cat "$D/.claude/settings.local.json")" = '{"a":1}' ]
+  [ "$(cat "$D/.claude/agent-kit.json")" = "$aj_before" ]
+  [ "$(state)" = "$before" ]
+}
+
+@test "kit failure with no hooksPath beforehand leaves none" {
+  wrap_kit
+  run "$BIN/ccd-onboard" --kit octo/demo
+  [ "$status" -eq 8 ]
+  run git -C "$D" config --local core.hooksPath
+  [ "$status" -ne 0 ]
+  [ ! -e "$D/.claude" ]
+}
+
+@test "a failed detach keeps kitEnabled true and the kit state" {
+  "$BIN/ccd-onboard" --kit octo/demo
+  wrap_kit
+  WRAP_VERB=detach WRAP_EXIT=4 run "$BIN/ccd-onboard" --no-kit octo/demo
+  [ "$status" -eq 8 ]
+  [ "$(jq -r .kitEnabled "$REC")" = true ]
+  [ "$(jq -r .kitError.code "$REC")" = 4 ]
+}
+
+@test "a kit output with \"missing '\" maps to kit-error 3 whatever the exit code" {
+  wrap_kit
+  WRAP_EXIT=1 WRAP_MSG="missing 'claude'" run "$BIN/ccd-onboard" --kit octo/demo
+  [ "$status" -eq 8 ]
+  [[ $output == *"kit-error 3 Kit prerequisite missing"* ]]
+  [ "$(jq -r .kitError.code "$REC")" = 3 ]
+}
+
+@test "kit warnings are redacted like the log tail" {
+  "$BIN/ccd-onboard" --kit octo/demo
+  cat > "$BATS_TEST_TMPDIR/warn.sh" <<'W'
+#!/usr/bin/env bash
+echo "warning: using token=SEKRET123 now" >&2
+exec "$STUB" "$@"
+W
+  chmod +x "$BATS_TEST_TMPDIR/warn.sh"
+  STUB=$ROOT/tests/fixtures/agent-kit-stub.sh CCDASH_KIT=$BATS_TEST_TMPDIR/warn.sh run "$BIN/ccd-onboard" --kit octo/demo
+  [ "$status" -eq 0 ]
+  [[ $(jq -r '.kitWarning // ""' "$REC") != *SEKRET123* ]]
+  [[ $(jq -r '.kitWarning // ""' "$REC") == *"token="* ]]
+}
+
+@test "pull after the remote gains a commit fast-forwards an attached project; kit still unchanged, no commit of ours" {
+  "$BIN/ccd-onboard" --kit octo/demo
   push_commit two
   run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
-  [[ $output == *rebased* ]]
-  new_kit=$(git -C "$D" rev-parse HEAD)
-  [ "$new_kit" != "$old_kit" ]
-  [ "$(git -C "$D" rev-parse HEAD~1)" = "$(git -C "$W" rev-parse HEAD)" ]
-  [ "$(git -C "$D" log -1 --format='%ae|%s')" = 'ccdash@localhost|chore: agent-kit 0.9.2' ]
+  [[ $output == *"kit 0.14.0 unchanged"* ]]
+  [ "$(git -C "$D" rev-parse HEAD)" = "$(git -C "$W" rev-parse HEAD)" ]
   [ "$(cat "$D/f")" = two ]
   [ -z "$(git -C "$D" status --porcelain)" ]
-  [ "$(git -C "$D" rev-list --count HEAD)" -eq 3 ]
-  [ "$(jq -r .head "$REC")" = "$new_kit" ]
+  [ "$(git -C "$D" rev-list --count HEAD)" -eq 2 ]
+  [ "$(jq -r .head "$REC")" = "$(git -C "$D" rev-parse HEAD)" ]
 }
 
 @test "pull refuses to rebase a hand-made local commit (other author), HEAD unchanged" {
@@ -309,19 +373,6 @@ subjects() { git -C "$D" log --format=%s; }
   [ "$status" -eq 3 ]
   [[ $output == *"local commits not from ccdash"* ]]
   [ "$(state)" = "$before" ]
-}
-
-@test "a rebase conflict is aborted: 'rebase failed', exit 3, repo as before" {
-  "$BIN/ccd-onboard" --kit octo/demo
-  git -C "$W" pull -q origin main
-  echo remote > "$W/CLAUDE.md"; git -C "$W" add CLAUDE.md; git -C "$W" commit -qm claude; git -C "$W" push -q origin HEAD:main
-  before=$(state)
-  run "$BIN/ccd-onboard" --kit octo/demo
-  [ "$status" -eq 3 ]
-  [[ $output == *"rebase failed"* ]]
-  [ "$(state)" = "$before" ]
-  [ ! -e "$D/.git/rebase-merge" ]
-  [ ! -e "$D/.git/rebase-apply" ]
 }
 
 @test "diverged with only non-kit local work keeps the Phase D message" {

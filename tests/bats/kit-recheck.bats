@@ -160,7 +160,7 @@ ON='{"repo":"octo/demo","kitEnabled":true}'
   d=$CCDASH_WS/demo
   echo mine > "$d/notes.txt"; echo more >> "$d/f"
   before=$(git -C "$d" status --porcelain)
-  printf '#!/bin/bash\nmkdir -p "$2/.claude"; echo kit > "$2/.claude/CLAUDE.md"; echo kit > "$2/.claude/settings.json"; echo kit > "$2/CLAUDE.md"\nsleep 30\n' > "$BATS_TEST_TMPDIR/slowkit"
+  printf '#!/bin/bash\nmkdir -p "$2/.claude"; echo kit > "$2/.claude/settings.local.json"; echo kit > "$2/.claude/agent-kit.json"; echo kit > "$2/CLAUDE.local.md"\nsleep 30\n' > "$BATS_TEST_TMPDIR/slowkit"
   chmod +x "$BATS_TEST_TMPDIR/slowkit"
   export CCDASH_KIT=$BATS_TEST_TMPDIR/slowkit CCDASH_KIT_TIMEOUT=2
   run "$S" kit-recheck
@@ -171,15 +171,13 @@ ON='{"repo":"octo/demo","kitEnabled":true}'
   ! pgrep -f "$BATS_TEST_TMPDIR/slowkit" > /dev/null
 }
 
-@test "the kit commit holds only kit paths; the user's own staged file stays staged" {
+@test "attach commits nothing; the user's own staged file stays staged" {
   mkproj demo "$ON"
   d=$CCDASH_WS/demo
   echo mine > "$d/mine.txt"; git -C "$d" add mine.txt
   run "$S" start demo --account work
   [ "$status" -eq 0 ]
   [ "$(rec .kitCheck.status demo)" = changed ]
-  [ "$(git -C "$d" log -1 --format=%s)" != one ]
-  ! git -C "$d" show --name-only --format= HEAD | grep -qx mine.txt
-  git -C "$d" show --name-only --format= HEAD | grep -q CLAUDE.md
+  [ "$(git -C "$d" log -1 --format=%s)" = one ]
   [ "$(git -C "$d" diff --cached --name-only)" = mine.txt ]
 }
