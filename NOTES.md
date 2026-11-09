@@ -449,3 +449,6 @@ Files: `dashboard/lib/audit.js`, `lib/sessions.js`, `lib/app.js` (sessions route
 - cloudflared runs as its own system user `cloudflared` (HOME /var/lib/cloudflared); own unit `cloudflared-ccdash.service`, config /etc/cloudflared/config.yml. `tunnel login` is backgrounded; setup waits for cert.pem (`CCDASH_SETUP_CF_LOGIN_TIMEOUT`, 600 s). The zone name for `ccdash.<domain>` comes from the cert's zoneID via the Cloudflare API.
 - Egress proxy stays off unless `CCDASH_SETUP_EGRESS=1` (its image is built locally, not published to GHCR).
 - Unverified against the real thing (no VM): `claude auth login` / `claude auth status` exit codes, the Cloudflare Access API body, `dockerd-rootless-setuptool.sh install` under `sudo -u ccdash` with XDG_RUNTIME_DIR and the user bus.
+
+## uvx shim
+- `rootfs/usr/local/bin/uvx` lets a repo `.mcp.json` with `uvx basic-memory mcp --project <name>` work in the image (no uv installed). It accepts only `basic-memory` (also `--from basic-memory` and `basic-memory==<ver>`), anything else exits 127. It sets `BASIC_MEMORY_HOME`/`BASIC_MEMORY_CONFIG_DIR` like ccd-memory-init, adds a missing valid `--project` name at `${CCDASH_BM_PROJECTS_DIR:-/home/ccd/basic-memory-projects}/<name>` (never as default; a failing `project list` does not block) and execs `$CCDASH_BM`. Tests: `tests/bats/uvx.bats`.

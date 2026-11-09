@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# ccdash uvx shim: the image has no uv, but repo .mcp.json files say `uvx basic-memory mcp --project <name>`.
+# Runs only basic-memory (the installed copy); everything else is refused with 127.
+# Creates the named project (never as default) when it is missing, then execs.
+set -euo pipefail
+BM=${CCDASH_BM:-/opt/basic-memory/bin/basic-memory}
+export BASIC_MEMORY_HOME=${BASIC_MEMORY_HOME:-${HOME:-/home/ccd}/basic-memory}
+export BASIC_MEMORY_CONFIG_DIR=${BASIC_MEMORY_CONFIG_DIR:-${HOME:-/home/ccd}/.basic-memory}
+
+refuse() { echo "uvx: this is the ccdash uvx shim; it only runs basic-memory (got: $*)" >&2; exit 127; }
+is_bm() { [[ $1 == basic-memory || $1 == basic-memory==* ]]; }
+
+if [ "${1:-}" = --from ]; then
+  { [ $# -ge 3 ] && is_bm "$2" && is_bm "$3"; } || refuse "$@"
+  shift 3
+elif [ $# -ge 1 ] && is_bm "$1"; then
+  shift
+else
+  refuse "$@"
+fi
+
+name=
+prev=
+for a in "$@"; do
+  if [ "$prev" = --project ]; then name=$a; elif [[ $a == --project=* ]]; then name=${a#--project=}; fi
+  prev=$a
+done
+if [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ && $name != *..* ]]; then
+  base=${CCDASH_BM_PROJECTS_DIR:-/home/ccd/basic-memory-projects}
+  if list=$("$BM" project list --json 2>/dev/null </dev/null); then
+    jq -e --arg n "$name" '.projects[]? | select(.name == $n)' >/dev/null 2>&1 <<<"$list" \
+      || "$BM" project add "$name" "$base/$name" </dev/null >&2 || echo "uvx: could not add project $name" >&2
+  fi
+fi
+exec "$BM" "$@"
