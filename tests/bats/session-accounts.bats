@@ -207,3 +207,12 @@ wake_record() { # wake_record <json account fragment>
   run "$S" start _login --account nope
   [ "$status" -eq 1 ]
 }
+
+@test "a default window added after an account session does not inherit its config dir" {
+  "$S" start demo --account work
+  started 1
+  "$S" start demo
+  started 2
+  [ "$(sed -n 2p "$BATS_TEST_TMPDIR/started" | cut -d' ' -f1)" = unset ]
+  [ "$(tm show-environment -t =claude-demo CLAUDE_CONFIG_DIR 2>&1 || true)" != "CLAUDE_CONFIG_DIR=$CCDASH_ACCOUNTS_DIR/work" ]
+}

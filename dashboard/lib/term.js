@@ -131,6 +131,7 @@ function createTerm(deps) {
     if (!validProject(proj)) return reject(400);
     const account = query.get('account') ?? DEFAULT_ACCOUNT;
     if (!validAccount(account)) return reject(400);
+    if (proj === '_login' && account === DEFAULT_ACCOUNT) return reject(400); // the login window is for a named account
     if (active >= MAX_TERMS) return reject(503);
     const cols = clampDim(query.get('cols'), DEFAULT_COLS);
     const rows = clampDim(query.get('rows'), DEFAULT_ROWS);

@@ -2,6 +2,7 @@
 # Records the conversation state (working, needs_approval, waiting, error, ended) per session id
 # in ~/.ccdash/sessions/<sid>.json. Must never block or fail Claude: every path exits 0.
 set -uo pipefail
+. "${CCDASH_ACCOUNTS_LIB:-${BASH_SOURCE[0]%/*}/..}/accounts.sh" 2>/dev/null || account_of_config_dir() { echo default; }
 # a hidden helper Claude (CCDASH_HIDDEN=1, the /usage fallback) is not a conversation
 if [ "${CCDASH_HIDDEN:-}" = 1 ]; then cat >/dev/null; exit 0; fi
 umask 027
@@ -29,13 +30,7 @@ if [ -n "${TMUX:-}" ]; then
   [[ ${srv:-} =~ ^[0-9]+$ && ${start:-} =~ ^[0-9]+$ ]] || { srv=""; start=""; }
 fi
 # the account comes from the config dir: unset or anything else is `default`
-acct=default
-accounts=${CCDASH_ACCOUNTS_DIR:-/home/ccd/.claude-accounts}
-case ${CLAUDE_CONFIG_DIR:-} in
-  "$accounts"/*)
-    acct=${CLAUDE_CONFIG_DIR#"$accounts"/}
-    [[ $acct =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]] || acct=default ;;
-esac
+acct=$(account_of_config_dir)
 tmp=$(mktemp "$dir/.$sid.XXXXXX" 2>/dev/null) || exit 0
 # the payload goes in on stdin (an argv string is capped at 128 KB, and PostToolUse can be larger)
 if jq --argjson prev "$prev" --arg state "${1:-}" \

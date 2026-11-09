@@ -7,12 +7,10 @@ const path = require('node:path');
 const { HttpError } = require('./http');
 
 const DEFAULT_ACCOUNT = 'default';
-const ACCOUNTS_DIR = '/home/ccd/.claude-accounts';
+const accountsDir = () => process.env.CCDASH_ACCOUNTS_DIR || '/home/ccd/.claude-accounts';
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const LIST_TIMEOUT_MS = 90 * 1000; // `claude auth status` runs once per account, each up to 30 s
-const CREATE_TIMEOUT_MS = 60 * 1000;
-// The login window: ccd-session start _login --account NAME runs claude (no project) in ccd's home.
-const LOGIN_PROJECT = '_login';
+const CREATE_TIMEOUT_MS = 150 * 1000;
 
 const validAccount = (n) => n === DEFAULT_ACCOUNT || (typeof n === 'string' && NAME_RE.test(n));
 
@@ -26,33 +24,39 @@ function parseAccount(v) {
 // Account of a transcript path, from where it lives: under <accounts>/<name>/ is that account, anything
 // else (the default config dir) is `default`. Pure string work; the reader does the real path checks.
 function accountOfPath(p) {
-  const base = ACCOUNTS_DIR;
+  const base = accountsDir();
   if (typeof p !== 'string' || path.normalize(p) !== p || !p.startsWith(`${base}/`)) return DEFAULT_ACCOUNT;
   const name = p.slice(base.length + 1).split('/')[0];
   return NAME_RE.test(name) ? name : DEFAULT_ACCOUNT;
 }
 
-// Transcript roots for tree.js: the default config dir plus each account's, when the accounts dir is readable.
+// Transcript roots for tree.js: the default projects dir plus <accounts>/<name>/projects for each real
+// (non-symlink) account dir, like the reader's allowed roots.
+const isRealDir = (d) => { try { return fs.lstatSync(d).isDirectory(); } catch { return false; } };
 function transcriptRoots() {
-  const base = ACCOUNTS_DIR;
-  const out = ['/home/ccd/.claude'];
+  const base = accountsDir();
+  const out = ['/home/ccd/.claude/projects'];
   try {
-    for (const n of fs.readdirSync(base)) if (NAME_RE.test(n)) out.push(path.join(base, n));
+    for (const n of fs.readdirSync(base)) {
+      const d = path.join(base, n);
+      if (NAME_RE.test(n) && isRealDir(d) && isRealDir(path.join(d, 'projects'))) out.push(path.join(d, 'projects'));
+    }
   } catch { /* not readable from here: only the default root */ }
   return out;
 }
 
 // [{ name, loggedIn }], default first. Output of `ccd-account list`: "name<TAB>logged in|not logged in".
-let listCache = null; // { at, p }: shared in-flight/recent result, so polling does not spawn ccd-account list each time
-const LIST_TTL_MS = 3000;
+// Concurrent callers share one in-flight run; nothing is cached once it settles.
+let inflight = null;
 
 function listAccounts(runFile) {
-  if (!listCache || Date.now() - listCache.at > LIST_TTL_MS) {
-    const entry = { at: Date.now(), p: listAccountsNow(runFile) };
-    entry.p.catch(() => { if (listCache === entry) listCache = null; });
-    listCache = entry;
+  if (!inflight) {
+    const p = listAccountsNow(runFile);
+    const clear = () => { if (inflight === p) inflight = null; };
+    p.then(clear, clear);
+    inflight = p;
   }
-  return listCache.p;
+  return inflight;
 }
 
 async function listAccountsNow(runFile) {
@@ -76,11 +80,11 @@ async function createAccount(runFile, body) {
   if (name === DEFAULT_ACCOUNT) throw new HttpError(400, 'default is reserved');
   try {
     await runFile('ccd-account', ['create', name], { timeout: CREATE_TIMEOUT_MS });
-  } catch { throw new HttpError(500, 'could not create account'); } finally { listCache = null; }
-  return { name, project: LOGIN_PROJECT, account: name };
+  } catch { throw new HttpError(500, 'could not create account'); } finally { inflight = null; }
+  return { name, project: '_login', account: name };
 }
 
 module.exports = {
-  DEFAULT_ACCOUNT, ACCOUNTS_DIR, NAME_RE, LOGIN_PROJECT, validAccount, parseAccount, accountOfPath, transcriptRoots,
+  DEFAULT_ACCOUNT, NAME_RE, validAccount, parseAccount, accountOfPath, transcriptRoots,
   listAccounts, createAccount,
 };

@@ -300,11 +300,11 @@
         else acctError(msg);
         return;
       }
-      await accounts.load();
       acctReset();
       opener = null; // the terminal takes over; do not hand focus back to the Settings button
       dlg.close();
       window.ccdash.go(d.project || '_login', d.account || name);
+      accounts.load().catch(() => {}); // in the background: the new account shows up in the pickers when it arrives
     } catch (e) {
       if (e.message !== 'unauthorized') acctError('Network error: ' + e.message);
     } finally {

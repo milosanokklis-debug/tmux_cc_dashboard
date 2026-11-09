@@ -64,7 +64,12 @@
 
   function syncAccount(c) {
     c.acct.hidden = !accounts.multi();
-    if (accounts.multi()) accounts.fill(c.acctSelect, accounts.last(c.name));
+    if (!accounts.multi()) return;
+    const sel = c.acctSelect;
+    // refill only when the list changed, and never under a select the user has open
+    const same = sel.options.length === accounts.names().length && accounts.names().every((n, i) => sel.options[i].value === n);
+    if (same || document.activeElement === sel) return;
+    accounts.fill(sel, sel.options.length ? sel.value : accounts.last(c.name));
   }
   accounts.onChange(() => { for (const c of cards.values()) syncAccount(c); syncAddAccount(); });
 

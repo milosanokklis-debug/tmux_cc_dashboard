@@ -37,7 +37,9 @@ launch() {
   local -a env=()
   shift 4
   cdir=$(account_config_dir "$acct")
-  [ -z "$cdir" ] || env=(-e "CLAUDE_CONFIG_DIR=$cdir")
+  # Set per command, never with tmux -e: -e on new-session lands in the session environment and a
+  # later window for another account (or default) would inherit it. default explicitly unsets it.
+  if [ -n "$cdir" ]; then env=(env "CLAUDE_CONFIG_DIR=$cdir"); else env=(env -u CLAUDE_CONFIG_DIR); fi
   name=$(name_for "$proj")
   if t has-session -t "=$name" 2>/dev/null; then
     # name_for is lossy (a.b and a_b collide): never attach one project to another's session
@@ -59,14 +61,14 @@ launch() {
     # a start on an account that already has a window launches nothing, so it needs no gate
     if [ "$have" = 0 ]; then
       mcp_gate "$acct"
-      wid=$(t new-window -P -F '#{window_id}' -t "=$name:" -c "$dir" ${env[@]+"${env[@]}"} "$@")
+      wid=$(t new-window -P -F '#{window_id}' -t "=$name:" -c "$dir" "${env[@]}" "$@")
       t set -w -t "$wid" @account "$acct"
     else
       t select-window -t "$haveid" # attaching lands on that account's window
     fi
   else
     mcp_gate "$acct"
-    t new-session -d -s "$name" -c "$dir" ${env[@]+"${env[@]}"} "$@"
+    t new-session -d -s "$name" -c "$dir" "${env[@]}" "$@"
     t set -t "=$name:" @project_dir "$dir"
     t set -w -t "=$name:" @account "$acct"
   fi

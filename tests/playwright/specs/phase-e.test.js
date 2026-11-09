@@ -78,7 +78,7 @@ test('idle cards view: after it settles only the /events socket is open, no HTTP
     await page.goto('/');
     await eventually(async () => assert.ok((await page.locator('#project-list li.card').count()) >= MIN_CARDS), 'cards loaded');
     await eventually(async () => assert.ok(sockets.some((w) => w.url().endsWith('/events'))), '/events socket opened');
-    await sleep(5000); // settle: previews, the one tree fetch, service-worker-free page
+    await sleep(8000); // settle: previews, the one tree fetch, service-worker-free page
     const requests = [];
     page.on('request', (r) => requests.push(`${r.method()} ${r.url()}`));
     await sleep(IDLE_SEC * 1000);

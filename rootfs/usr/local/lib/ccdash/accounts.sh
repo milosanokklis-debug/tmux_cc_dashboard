@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Claude accounts, sourced (not executed). `default` is /home/ccd/.claude with CLAUDE_CONFIG_DIR unset;
 # every other account lives in $CCDASH_ACCOUNTS_DIR/<name> and runs with CLAUDE_CONFIG_DIR set to it.
-# Interface: account_valid NAME | account_config_dir NAME | account_env NAME | account_list | account_create NAME
+# Interface: account_valid NAME | account_config_dir NAME | account_env NAME | account_list | account_create NAME | account_of_config_dir [DIR]
 
 CCDASH_ACCOUNTS_DIR=${CCDASH_ACCOUNTS_DIR:-/home/ccd/.claude-accounts}
 
@@ -22,6 +22,18 @@ account_env() {
   local dir
   dir=$(account_config_dir "$1") || return 1
   if [ -n "$dir" ]; then export CLAUDE_CONFIG_DIR=$dir; else unset CLAUDE_CONFIG_DIR; fi
+}
+
+# Prints the account a config dir belongs to (default $CLAUDE_CONFIG_DIR): its name when it is
+# <accounts>/<valid name>, otherwise `default`.
+account_of_config_dir() {
+  local d=${1-${CLAUDE_CONFIG_DIR:-}} a=default
+  case $d in
+    "$CCDASH_ACCOUNTS_DIR"/*)
+      a=${d#"$CCDASH_ACCOUNTS_DIR"/}
+      [[ $a =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]] || a=default ;;
+  esac
+  printf '%s\n' "$a"
 }
 
 # One name per line: default first, then the existing account dirs sorted.

@@ -181,7 +181,7 @@ test('usage is keyed by account and never mixed; top-level stays the default acc
 });
 
 test('accountOfPath and the tree carry each conversation\'s account', () => {
-  const base = accounts.ACCOUNTS_DIR;
+  const base = '/home/ccd/.claude-accounts';
   assert.strictEqual(accounts.accountOfPath(`${base}/work/projects/p/s.jsonl`), 'work');
   assert.strictEqual(accounts.accountOfPath('/home/ccd/.claude/projects/p/s.jsonl'), 'default');
   assert.strictEqual(accounts.accountOfPath(`${base}/work/../x/s.jsonl`), 'default');

@@ -5,6 +5,7 @@
 # "<model> · ctx <used_percentage or ?>%". Must never fail Claude: every path exits 0.
 # A hidden helper Claude (CCDASH_HIDDEN=1) records nothing.
 set -uo pipefail
+. "${CCDASH_ACCOUNTS_LIB:-${BASH_SOURCE[0]%/*}/..}/accounts.sh" 2>/dev/null || account_of_config_dir() { echo default; }
 umask 027
 base=${HOME:-/tmp}/.ccdash
 mkdir -p "$base" 2>/dev/null
@@ -13,13 +14,8 @@ in=$(cat)
 record() {
   [ "${CCDASH_HIDDEN:-}" = 1 ] && return 0
   command -v jq >/dev/null 2>&1 || return 0
-  local sid dir tmp acct=default accounts=${CCDASH_ACCOUNTS_DIR:-/home/ccd/.claude-accounts}
-  # the account comes from the config dir: unset or anything else is `default`
-  case ${CLAUDE_CONFIG_DIR:-} in
-    "$accounts"/*)
-      acct=${CLAUDE_CONFIG_DIR#"$accounts"/}
-      [[ $acct =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]] || acct=default ;;
-  esac
+  local sid dir tmp acct
+  acct=$(account_of_config_dir) # from the config dir: unset or anything else is `default`
   sid=$(jq -r '.session_id // empty' <<<"$in") || return 0
   [[ $sid =~ ^[A-Za-z0-9_-]+$ ]] || return 0
   dir=$base/usage
