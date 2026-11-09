@@ -81,16 +81,35 @@ doctor_live() {
   jq -r 'if .ok then "selftest: all checks passed or skipped" else "selftest: \(.mismatches | length) warning(s), see '"$out"' (the install is not affected)" end' <<<"$json"
 }
 
-usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] <owner/repo> | pull <project> | identity <name> <email> | identity --from-host | login [--account <name>] | accounts | passwd [--totp|--no-totp] | doctor --live" >&2; exit 2; }
+usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] [--kit|--no-kit] <owner/repo> | kit on|off <project> | kit status | pull <project> | identity <name> <email> | identity --from-host | login [--account <name>] | accounts | passwd [--totp|--no-totp] | doctor --live" >&2; exit 2; }
 case "${1:-}" in
   ls) run ccd-session ls ;;
   attach) [ $# -eq 2 ] || usage; run ccd-session attach "$2" ;;
   wake) [ $# -eq 2 ] || usage; run ccd-session wake "$2" ;;
   clone)
-    shift
-    [ "${1:-}" != --trust-hooks ] || { trust=--trust-hooks; shift; }
+    shift; flags=()
+    while [ $# -gt 1 ]; do
+      case $1 in --trust-hooks | --kit | --no-kit) flags+=("$1") ;; *) usage ;; esac
+      shift
+    done
     [ $# -eq 1 ] || usage
-    run ccd-onboard ${trust:+"$trust"} "$1" ;;
+    run ccd-onboard ${flags[@]+"${flags[@]}"} "$1" ;;
+  kit)
+    case "${2:-}" in
+      on | off)
+        [ $# -eq 3 ] || usage
+        [[ $3 =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] && [[ $3 != *..* ]] || { echo "ccd: invalid project name" >&2; exit 2; }
+        # shellcheck disable=SC2016 # expands in the container
+        repo=$(run sh -c 'jq -r ".repo // empty" "$HOME/.ccdash/projects/$1.json" 2> /dev/null' sh "$3" || true)
+        [ -n "$repo" ] || { echo "ccd: no record for project $3" >&2; exit 1; }
+        if [ "$2" = on ]; then run ccd-onboard --kit "$repo"; else run ccd-onboard --no-kit "$repo"; fi ;;
+      status)
+        [ $# -eq 2 ] || usage
+        # shellcheck disable=SC2016 # expands in the container
+        run sh -c 'for f in "$HOME"/.ccdash/projects/*.json; do [ -e "$f" ] || continue; jq -r --arg n "$(basename "$f" .json)" \
+          "\$n + \"  kit=\" + ((if .kitEnabled == null then (.kit != null) else .kitEnabled end) | tostring) + \"  version=\" + (.kit.version // \"-\") + (if .kitError then \"  error=\" + (.kitError.code | tostring) + \" \" + ((.kitError.message // \"\") | gsub(\"[[:cntrl:]]\"; \"\")) else \"\" end)" "$f"; done' ;;
+      *) usage ;;
+    esac ;;
   pull) [ $# -eq 2 ] || usage; run ccd-project pull "$2" ;;
   identity)
     if [ $# -eq 2 ] && [ "$2" = --from-host ]; then

@@ -6,21 +6,22 @@ WS=${CCDASH_WS:-/workspace} # overridden only by the tests
 PROJECTS=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}
 # A repo that defines hooks in .claude/settings*.json is refused (exit 5, "hooks: <names>" on stdout)
 # unless --trust-hooks is given or an earlier onboarding was trusted (trustHooks in the record).
-# Packs: --design / --code add a pack, --no-design / --no-code drop it; without a flag the packs of the
-# earlier onboarding (record `packs`) are reused. kit-core is always on. Kit failure: exit 8 (see below).
-trust=0 design='' code=''
+# Agent kit is opt-in per project (default off): --kit turns it on (all packs: kit-core, kit-design, kit-code),
+# --no-kit turns it off; without a flag the record decides (kitEnabled; a record with a `kit` entry and no
+# kitEnabled counts as on). Off runs nothing and writes nothing. agent-kit.sh 0.9.2 has no remove command (`ensure`
+# with no packs only drops kit-design/kit-code and the web-design-guidelines skill), so turning it off leaves the
+# files in place and keeps the record's kit/packs keys, which describe what is left on disk. Kit failure: exit 8.
+trust=0 kitflag=''
 while [ $# -gt 0 ]; do
   case $1 in
     --trust-hooks) trust=1 ;;
-    --design) design=1 ;;
-    --no-design) design=0 ;;
-    --code) code=1 ;;
-    --no-code) code=0 ;;
+    --kit) kitflag=1 ;;
+    --no-kit) kitflag=0 ;;
     *) break ;;
   esac
   shift
 done
-[ $# -eq 1 ] || { echo "usage: ccd-onboard [--trust-hooks] [--design|--no-design] [--code|--no-code] <owner/repo>" >&2; exit 2; }
+[ $# -eq 1 ] || { echo "usage: ccd-onboard [--trust-hooks] [--kit|--no-kit] <owner/repo>" >&2; exit 2; }
 repo=$1
 if ! [[ $repo =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || [[ $repo == *..* ]] || [[ ${repo#*/} == .* ]]; then
   echo "invalid repo" >&2; exit 2
@@ -28,11 +29,13 @@ fi
 proj=${repo#*/}
 dir=$WS/$proj
 cp=$(dirname "$0")/ccd-project
+# shellcheck source=/dev/null
+. "${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}/kit.sh"
 # The kit's GitHub repo (owner/repo): $KIT_REPO, else the origin of the kit checkout. ccd-project reads it from the
 # environment for the hook-gate exemption, so it is worked out once here, before any clone or pull. Empty when unknown.
 kit_repo=${KIT_REPO:-}
 if [ -z "$kit_repo" ]; then
-  u=$(git -C "$(dirname "${CCDASH_KIT:-/opt/agent-kit/agent-kit.sh}")" config --get remote.origin.url 2> /dev/null || true)
+  u=$(git -C "$(dirname "${CCDASH_KIT-$(kit_script)}")" config --get remote.origin.url 2> /dev/null || true)
   case $u in git@github.com:* | https://github.com/*) kit_repo=${u#git@github.com:}; kit_repo=${kit_repo#https://github.com/}; kit_repo=${kit_repo%.git}; kit_repo=${kit_repo%/} ;; esac
 fi
 KIT_REPO=$kit_repo
@@ -54,14 +57,16 @@ fi
 # CCDASH_KIT is the kit script (tests point it at a stub; set to the empty string it skips the kit step, tests only).
 # Exit 8: the kit failed; the checkout is as it was after the clone/pull, nothing committed, and the record only
 # gets {kitError}. Stdout then has `kit-error <code> <message>` followed by the tail of the kit log.
-kit=${CCDASH_KIT-/opt/agent-kit/agent-kit.sh}
-kitjson=null
+kit=${CCDASH_KIT-$(kit_script)}
+kitjson=null kitenabled=null want=0 # null: kit step skipped (CCDASH_KIT empty), kitEnabled untouched
 if [ -n "$kit" ]; then
-  if [ -z "$design" ]; then design=$(jq -r 'if (.packs // []) | index("kit-design") then 1 else 0 end' "$rec" 2> /dev/null || echo 0); fi
-  if [ -z "$code" ]; then code=$(jq -r 'if (.packs // []) | index("kit-code") then 1 else 0 end' "$rec" 2> /dev/null || echo 0); fi
-  packs=(kit-core); words=()
-  [ "$design" != 1 ] || { packs+=(kit-design); words+=(design); }
-  [ "$code" != 1 ] || { packs+=(kit-code); words+=(code); }
+  kitenabled=false
+  if [ -n "$kitflag" ]; then want=$kitflag
+  else want=$(jq -r 'if .kitEnabled == true then 1 elif .kitEnabled == false then 0 elif .kit then 1 else 0 end' "$rec" 2> /dev/null || echo 0); fi
+fi
+if [ -n "$kit" ] && [ "$want" = 1 ]; then
+  kitenabled=true
+  packs=(kit-core kit-design kit-code); words=(design code)
   packs_csv=$(IFS=,; echo "${packs[*]}")
   mkdir -p "$HOME/.ccdash"; log=$HOME/.ccdash/kit-$proj.log
   rm -f "$log"; (umask 077; : > "$log") # the kit's stderr may carry secrets: owner-only
@@ -88,7 +93,7 @@ if [ -n "$kit" ]; then
   if [ -L "$dir/.claude" ]; then # a symlinked .claude would make the kit write outside the checkout: do not run it
     echo ".claude is a symlink; the kit was not run" > "$log"; out=''; rc=6
   else
-    out=$(NO_COLOR=1 KIT_REPO="$kit_repo" TMPDIR=/tmp "$kit" ensure "$dir" ${words[@]+"${words[@]}"} --json 2>> "$log") && rc=0 || rc=$?
+    out=$(NO_COLOR=1 KIT_REPO="$kit_repo" TMPDIR=/tmp "$kit" ensure "$dir" "${words[@]}" --json 2>> "$log") && rc=0 || rc=$?
   fi
   res=$(printf '%s\n' "$out" | tail -n 1)
   ok=$(jq -r 'if type == "object" and .ok == true then "yes" else "no" end' <<< "$res" 2> /dev/null || echo no)
@@ -130,7 +135,7 @@ if [ -n "$kit" ]; then
     [ -n "$cur" ] || cur='{}'
     head=$(git -C "$dir" rev-parse --verify -q HEAD || true)
     jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" --argjson code "$kerr" --arg msg "$kmsg" \
-      '$cur + {repo: $repo, ts: $ts, kitError: {code: $code, message: $msg}} | if $head == "" then del(.head) else .head = $head end' > "$rec.tmp.$$"
+      '$cur + {repo: $repo, ts: $ts, kitEnabled: true, kitError: {code: $code, message: $msg}} | if $head == "" then del(.head) else .head = $head end' > "$rec.tmp.$$"
     mv "$rec.tmp.$$" "$rec"
     echo "kit-error $kerr $kmsg"
     # only the tail goes to the API, with obvious secrets blanked (the full log stays on disk, owner-only)
@@ -142,6 +147,8 @@ if [ -n "$kit" ]; then
   echo "kit $kver $([ "$kchanged" = true ] && echo changed || echo unchanged)"
   echo "packs $packs_csv"
   echo "memory $kmem"
+elif [ -n "$kit" ]; then
+  echo "kit off"
 fi
 head=$(git -C "$dir" rev-parse --verify -q HEAD || true) # empty for an unborn HEAD (empty repo)
 umask 027
@@ -149,9 +156,9 @@ mkdir -p "$PROJECTS" # umask 027 makes new directories 750
 cur=$(jq -c 'if type == "object" then . else {} end' "$rec" 2>/dev/null) || cur='{}'
 [ -n "$cur" ] || cur='{}'
 tmp=$rec.tmp.$$
-jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" --argjson trust "$trust" --argjson kit "$kitjson" \
+jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" --argjson trust "$trust" --argjson kit "$kitjson" --argjson ken "$kitenabled" \
   '$cur + {repo: $repo, ts: $ts} | if $head == "" then del(.head) else .head = $head end
    | if $trust == 1 then .trustHooks = true else . end
-   | del(.kitError) | if $kit != null then .kit = $kit | .packs = (["kit-core"] + ($kit.packs - ["kit-core"])) else . end' > "$tmp"
+   | del(.kitError) | (if $ken == null then . else .kitEnabled = $ken end) | if $kit != null then .kit = $kit | .packs = (["kit-core"] + ($kit.packs - ["kit-core"])) else . end' > "$tmp"
 mv "$tmp" "$rec"
 [ -z "$head" ] || echo "head $head"

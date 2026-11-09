@@ -37,10 +37,10 @@ state() {
 subjects() { git -C "$D" log --format=%s; }
 
 @test "fresh onboard: one chore commit by ccdash with only .claude/ and CLAUDE.md; record has kit and packs" {
-  run "$BIN/ccd-onboard" octo/demo
+  run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
   [[ $output == *"kit 0.9.2 changed"* ]]
-  [[ $output == *"packs kit-core"* ]]
+  [[ $output == *"packs kit-core,kit-design,kit-code"* ]]
   [[ $output == *"memory connected"* ]]
   [ "${lines[-1]}" = "head $(git -C "$D" rev-parse HEAD)" ]
   [ "$(git -C "$D" rev-list --count HEAD)" -eq 2 ]
@@ -48,18 +48,19 @@ subjects() { git -C "$D" log --format=%s; }
   [ "$(git -C "$D" diff-tree --no-commit-id --name-only -r HEAD | paste -sd' ')" = ".claude/agent-kit.json .claude/settings.json CLAUDE.md" ]
   [ -z "$(git -C "$D" status --porcelain)" ]
   [ "$(git --git-dir="$BARE" rev-parse main)" = "$(git -C "$W" rev-parse HEAD)" ] # never pushed
-  [ "$(jq -c .kit "$REC")" = '{"version":"0.9.2","packs":["kit-core"],"memory":"connected"}' ]
-  [ "$(jq -c .packs "$REC")" = '["kit-core"]' ]
+  [ "$(jq -c .kit "$REC")" = '{"version":"0.9.2","packs":["kit-core","kit-design","kit-code"],"memory":"connected"}' ]
+  [ "$(jq -c .packs "$REC")" = '["kit-core","kit-design","kit-code"]' ]
+  [ "$(jq -r .kitEnabled "$REC")" = true ]
   [ "$(jq -r .head "$REC")" = "$(git -C "$D" rev-parse HEAD)" ]
   [ "$(jq -r 'has("kitError")' "$REC")" = false ]
-  grep -q "args=ensure $D --json NO_COLOR=1 TMPDIR=/tmp KIT_REPO=octo/kit" "$STUB_LOG"
+  grep -q "args=ensure $D design code --json NO_COLOR=1 TMPDIR=/tmp KIT_REPO=octo/kit" "$STUB_LOG"
   [ -s "$HOME/.ccdash/kit-demo.log" ]
 }
 
 @test "second onboard: nothing changes, no commit, tree clean" {
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   before=$(state)
-  run "$BIN/ccd-onboard" octo/demo
+  run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
   [[ $output == *"kit 0.9.2 unchanged"* ]]
   [ "$(state)" = "$before" ]
@@ -67,70 +68,163 @@ subjects() { git -C "$D" log --format=%s; }
 }
 
 @test "memory missing and a different version are recorded" {
-  STUB_MEMORY=missing STUB_VERSION=1.2.3 run "$BIN/ccd-onboard" octo/demo
+  STUB_MEMORY=missing STUB_VERSION=1.2.3 run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
   [[ $output == *"memory missing"* ]]
   [ "$(git -C "$D" log -1 --format=%s)" = "chore: agent-kit 1.2.3" ]
-  [ "$(jq -c .kit "$REC")" = '{"version":"1.2.3","packs":["kit-core"],"memory":"missing"}' ]
+  [ "$(jq -c .kit "$REC")" = '{"version":"1.2.3","packs":["kit-core","kit-design","kit-code"],"memory":"missing"}' ]
 }
 
-@test "design and code packs: flags, record, reuse without flags, and unticking removes kit-design and the skill" {
-  "$BIN/ccd-onboard" octo/demo
-  run "$BIN/ccd-onboard" --design --code octo/demo
-  [ "$status" -eq 0 ]
-  [[ $output == *"packs kit-core,kit-design,kit-code"* ]]
-  grep -q "args=ensure $D design code --json" "$STUB_LOG"
-  [ "$(jq -c .packs "$REC")" = '["kit-core","kit-design","kit-code"]' ]
-  [ "$(jq -r '.enabledPlugins | keys | join(",")' "$D/.claude/settings.json")" = "kit-code@agent-kit,kit-core@agent-kit,kit-design@agent-kit" ]
-  [ -f "$D/.claude/skills/web-design-guidelines/SKILL.md" ]
-  [ -z "$(git -C "$D" status --porcelain)" ] # the vendored skill ignores itself
-  [ "$(git -C "$D" rev-list --count HEAD)" -eq 3 ]
-  # no flags: the packs of the last onboarding are reused, nothing changes
+@test "default is off: a clone without --kit runs no kit, writes no .claude or CLAUDE.md, record kitEnabled false" {
   run "$BIN/ccd-onboard" octo/demo
   [ "$status" -eq 0 ]
-  [[ $output == *"kit 0.9.2 unchanged"* ]]
-  [[ $output == *"packs kit-core,kit-design,kit-code"* ]]
-  [ "$(git -C "$D" rev-list --count HEAD)" -eq 3 ]
-  # untick design
-  run "$BIN/ccd-onboard" --no-design octo/demo
+  [[ $output == *"kit off"* ]]
+  [ ! -s "$STUB_LOG" ]
+  [ ! -e "$D/.claude" ] && [ ! -e "$D/CLAUDE.md" ]
+  [ "$(git -C "$D" rev-list --count HEAD)" -eq 1 ]
+  [ "$(jq -r .kitEnabled "$REC")" = false ]
+  [ "$(jq -r 'has("kit")' "$REC")" = false ]
+}
+
+@test "--kit runs ensure with design code; a later pull without a flag keeps it on; --no-kit stops and leaves files" {
+  run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
-  [[ $output == *"packs kit-core,kit-code"* ]]
-  grep -q "args=ensure $D code --json" "$STUB_LOG"
-  run grep -q kit-design "$D/.claude/settings.json"
-  [ "$status" -eq 1 ]
-  run grep -q kit-design "$D/.claude/agent-kit.json"
-  [ "$status" -eq 1 ]
-  [ ! -e "$D/.claude/skills/web-design-guidelines" ]
-  [ "$(git -C "$D" rev-list --count HEAD)" -eq 4 ]
-  [ "$(git -C "$D" log -1 --format='%ae|%s')" = 'ccdash@localhost|chore: agent-kit 0.9.2' ]
+  grep -q "args=ensure $D design code --json" "$STUB_LOG"
+  [ "$(jq -c .packs "$REC")" = '["kit-core","kit-design","kit-code"]' ]
+  [ "$(jq -r .kitEnabled "$REC")" = true ]
+  [ -f "$D/.claude/skills/web-design-guidelines/SKILL.md" ]
   [ -z "$(git -C "$D" status --porcelain)" ]
-  [ "$(jq -c .packs "$REC")" = '["kit-core","kit-code"]' ]
-  run "$BIN/ccd-onboard" --no-code octo/demo
-  [ "$(jq -c .packs "$REC")" = '["kit-core"]' ]
+  run "$BIN/ccd-onboard" octo/demo # no flag: the record decides
+  [ "$status" -eq 0 ]
+  [[ $output == *"kit 0.9.2 unchanged"* ]]
+  [ "$(grep -c '^args=' "$STUB_LOG")" -eq 2 ]
+  before=$(state); : > "$STUB_LOG"
+  run "$BIN/ccd-onboard" --no-kit octo/demo
+  [ "$status" -eq 0 ]
+  [[ $output == *"kit off"* ]]
+  [ ! -s "$STUB_LOG" ]
+  [ "$(state)" = "$before" ] # files stay: agent-kit has no remove command
+  [ "$(jq -r .kitEnabled "$REC")" = false ]
+  [ "$(jq -c .packs "$REC")" = '["kit-core","kit-design","kit-code"]' ] # describes what is left on disk
+  run "$BIN/ccd-onboard" octo/demo # still off without a flag
+  [ ! -s "$STUB_LOG" ]
+}
+
+@test "an old record with a kit entry and no kitEnabled migrates to enabled on pull" {
+  "$BIN/ccd-onboard" octo/demo
+  jq -c '.kit = {version: "0.9.0", packs: ["kit-core"], memory: "connected"} | del(.kitEnabled)' "$REC" > "$REC.n"; mv "$REC.n" "$REC"
+  run "$BIN/ccd-onboard" octo/demo
+  [ "$status" -eq 0 ]
+  grep -q "args=ensure $D design code --json" "$STUB_LOG"
+  [ "$(jq -r .kitEnabled "$REC")" = true ]
+  [ "$(jq -c .packs "$REC")" = '["kit-core","kit-design","kit-code"]' ]
+}
+
+@test "the exemption follows the active kit's UPSTREAM_MARKETPLACES and falls back to the 0.9.2 list" {
+  export CCDASH_KIT= KIT_HOME=$BATS_TEST_TMPDIR/kithome
+  export CCDASH_KIT_HOME=$KIT_HOME
+  "$BIN/ccd-onboard" octo/demo
+  add_settings agent-kit.json '{"kit_version":"1"}'
+  add_settings settings.json '{"extraKnownMarketplaces":{"extra":{"source":{"source":"github","repo":"Foo/extra-skills"}}}}'
+  run "$BIN/ccd-project" pull demo # no active kit dir: 0.9.2 list, Foo/extra-skills is unknown
+  [ "$status" -eq 5 ]
+  mkdir -p "$KIT_HOME/current"
+  printf '#!/usr/bin/env bash\nUPSTREAM_MARKETPLACES=(\n  "extra=Foo/extra-skills"\n  "hallmark=Nutlope/hallmark"\n)\n' > "$KIT_HOME/current/agent-kit.sh"
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 0 ]
+  printf '#!/usr/bin/env bash\necho no array here\n' > "$KIT_HOME/current/agent-kit.sh" # falls back again
+  add_settings settings.json '{"extraKnownMarketplaces":{"hallmark":{"source":{"source":"github","repo":"Nutlope/hallmark"}}},"enabledPlugins":{"hallmark@hallmark":true}}'
+  run "$BIN/ccd-project" pull demo
+  [ "$status" -eq 0 ]
+}
+
+@test "kit.sh: kit_script prefers current when it has agent-kit.sh, else /opt/agent-kit" {
+  . "$ROOT/rootfs/usr/local/lib/ccdash/kit.sh"
+  export CCDASH_KIT_HOME=$BATS_TEST_TMPDIR/kh
+  [ "$(kit_script)" = /opt/agent-kit/agent-kit.sh ]
+  mkdir -p "$CCDASH_KIT_HOME/current"; : > "$CCDASH_KIT_HOME/current/agent-kit.sh"
+  [ "$(kit_script)" = "$CCDASH_KIT_HOME/current/agent-kit.sh" ]
+}
+
+@test "kit.sh: rows are validated; an empty array falls back to the 0.9.2 list" {
+  . "$ROOT/rootfs/usr/local/lib/ccdash/kit.sh"
+  export CCDASH_KIT_HOME=$BATS_TEST_TMPDIR/kh
+  mkdir -p "$CCDASH_KIT_HOME/current"
+  printf 'UPSTREAM_MARKETPLACES=(\n  "a-b=o/r.x"\n  "bad row"\n  "x=y"\n)\n' > "$CCDASH_KIT_HOME/current/agent-kit.sh"
+  [ "$(kit_upstream_marketplaces)" = "a-b=o/r.x" ]
+  : > "$CCDASH_KIT_HOME/current/agent-kit.sh"
+  [ "$(kit_upstream_marketplaces | wc -l)" -eq 5 ]
+}
+
+@test "kit.sh: an unterminated UPSTREAM_MARKETPLACES array gives the fallback; a later x=evil/repo line is not read" {
+  . "$ROOT/rootfs/usr/local/lib/ccdash/kit.sh"
+  export CCDASH_KIT_HOME=$BATS_TEST_TMPDIR/kh
+  mkdir -p "$CCDASH_KIT_HOME/current"
+  printf 'UPSTREAM_MARKETPLACES=(\n  "a=b/c"\nx=evil/repo\n' > "$CCDASH_KIT_HOME/current/agent-kit.sh"
+  [ "$(kit_upstream_marketplaces | wc -l)" -eq 5 ]
+  ! kit_upstream_marketplaces | grep -q evil
+  ! kit_upstream_marketplaces | grep -q 'a=b/c'
+}
+
+@test "kit.sh: commented rows and trailing comments are ignored; the one-line form is read" {
+  . "$ROOT/rootfs/usr/local/lib/ccdash/kit.sh"
+  export CCDASH_KIT_HOME=$BATS_TEST_TMPDIR/kh
+  mkdir -p "$CCDASH_KIT_HOME/current"
+  printf 'UPSTREAM_MARKETPLACES=(\n  # "hidden=o/r"\n  "keep=o/r"   # "trailing=o/r" )\n  "tail=o/r" # )\n)\n' > "$CCDASH_KIT_HOME/current/agent-kit.sh"
+  [ "$(kit_upstream_marketplaces)" = "$(printf 'keep=o/r\ntail=o/r')" ]
+  printf 'UPSTREAM_MARKETPLACES=(a=b/c d=e/f)\n' > "$CCDASH_KIT_HOME/current/agent-kit.sh"
+  [ "$(kit_upstream_marketplaces)" = "$(printf 'a=b/c\nd=e/f')" ]
+}
+
+@test "ccd kit on/off/status and clone flags pass through to the container" {
+  TD=$BATS_TEST_TMPDIR/dk; mkdir -p "$TD"
+  printf '#!/usr/bin/env bash\necho "$@" >> %s/calls\n' "$TD" > "$TD/docker"; chmod +x "$TD/docker"
+  export CCDASH_DOCKER=$TD/docker
+  run "$ROOT/bin/ccd" clone --trust-hooks --kit octo/demo
+  [ "$status" -eq 0 ]
+  grep -q 'ccd-onboard --trust-hooks --kit octo/demo' "$TD/calls"
+  run "$ROOT/bin/ccd" clone --bogus octo/demo
+  [ "$status" -eq 2 ]
+  run "$ROOT/bin/ccd" kit on '../x'
+  [ "$status" -eq 2 ]
+  run "$ROOT/bin/ccd" kit status
+  [ "$status" -eq 0 ]
+  grep -q 'sh -c' "$TD/calls"
+}
+
+@test "ccd kit status shows kitEnabled false even with a kit entry, and strips control chars from the error" {
+  mkdir -p "$HOME/.ccdash/projects"
+  jq -n '{repo: "octo/demo", kit: {version: "0.9.2"}, kitEnabled: false, kitError: {code: 4, message: "bad\u001b[31m msg"}}' > "$HOME/.ccdash/projects/demo.json"
+  TD=$BATS_TEST_TMPDIR/dk; mkdir -p "$TD"
+  printf '#!/usr/bin/env bash\nwhile [ "$1" != ccdash ]; do shift; done; shift; exec "$@"\n' > "$TD/docker"; chmod +x "$TD/docker"
+  export CCDASH_DOCKER=$TD/docker
+  run "$ROOT/bin/ccd" kit status
+  [ "$status" -eq 0 ]
+  [ "$output" = "demo  kit=false  version=0.9.2  error=4 bad[31m msg" ]
 }
 
 @test "kit exit 2..6: message printed, exit 8, repo exactly as it was, no commit, record only gets kitError" {
   declare -A msg=([2]="Kit usage error" [3]="Kit prerequisite missing" [4]="Kit marketplace failed (network?)" [5]="Plugin install or update failed" [6]="Could not write project files")
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   before=$(state)
   for n in 2 3 4 5 6; do
-    STUB_EXIT=$n run "$BIN/ccd-onboard" --design octo/demo
+    STUB_EXIT=$n run "$BIN/ccd-onboard" --kit octo/demo
     [ "$status" -eq 8 ]
     [[ $output == *"kit-error $n ${msg[$n]}"* ]]
     [[ $output == *"stub: scribbling"* ]] # the log tail follows
     [ "$(state)" = "$before" ]
     [ "$(jq -r .kitError.code "$REC")" = "$n" ]
-    [ "$(jq -c .kit "$REC")" = '{"version":"0.9.2","packs":["kit-core"],"memory":"connected"}' ] # last good kit state kept
+    [ "$(jq -c .kit "$REC")" = '{"version":"0.9.2","packs":["kit-core","kit-design","kit-code"],"memory":"connected"}' ] # last good kit state kept
   done
-  [[ $(STUB_EXIT=4 "$BIN/ccd-onboard" octo/demo) == *"retry"* ]]
-  [[ $(STUB_EXIT=5 "$BIN/ccd-onboard" octo/demo) == *"retry"* ]]
-  run "$BIN/ccd-onboard" octo/demo # recovers, and clears the error
+  [[ $(STUB_EXIT=4 "$BIN/ccd-onboard" --kit octo/demo) == *"retry"* ]]
+  [[ $(STUB_EXIT=5 "$BIN/ccd-onboard" --kit octo/demo) == *"retry"* ]]
+  run "$BIN/ccd-onboard" --kit octo/demo # recovers, and clears the error
   [ "$status" -eq 0 ]
   [ "$(jq -r 'has("kitError")' "$REC")" = false ]
 }
 
 @test "kit failure on a fresh clone keeps the clone untouched past the clone" {
-  STUB_EXIT=4 run "$BIN/ccd-onboard" octo/demo
+  STUB_EXIT=4 run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 8 ]
   [ "$(git -C "$D" rev-parse HEAD)" = "$(git -C "$W" rev-parse HEAD)" ]
   [ -z "$(git -C "$D" status --porcelain --ignored)" ]
@@ -146,11 +240,11 @@ subjects() { git -C "$D" log --format=%s; }
   printf '# mine\n' > "$W/CLAUDE.md"
   printf '.claude/settings.local.json\n' > "$W/.gitignore"
   git -C "$W" add -A; git -C "$W" commit -qm project; git -C "$W" push -q origin HEAD:main
-  STUB_EXIT=3 run "$BIN/ccd-onboard" octo/demo
+  STUB_EXIT=3 run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 8 ]
   echo keepme > "$D/.claude/settings.local.json"
   before=$(state)
-  STUB_EXIT=6 run "$BIN/ccd-onboard" octo/demo
+  STUB_EXIT=6 run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 8 ]
   [ "$(state)" = "$before" ]
   [ "$(cat "$D/CLAUDE.md")" = "# mine" ]
@@ -158,10 +252,10 @@ subjects() { git -C "$D" log --format=%s; }
 }
 
 @test "pull after the remote gains a commit rebases the kit commit on top" {
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   old_kit=$(git -C "$D" rev-parse HEAD)
   push_commit two
-  run "$BIN/ccd-onboard" octo/demo
+  run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
   [[ $output == *rebased* ]]
   new_kit=$(git -C "$D" rev-parse HEAD)
@@ -175,18 +269,18 @@ subjects() { git -C "$D" log --format=%s; }
 }
 
 @test "pull refuses to rebase a hand-made local commit (other author), HEAD unchanged" {
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   echo mine > "$D/g"; git -C "$D" add g; git -C "$D" commit -qm mine
   push_commit two
   before=$(state)
-  run "$BIN/ccd-onboard" octo/demo
+  run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 3 ]
   [[ $output == *"local commits not from ccdash"* ]]
   [ "$(state)" = "$before" ]
 }
 
 @test "pull refuses a ccdash-authored local commit that touches other paths" {
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   echo mine > "$D/g"; git -C "$D" add g
   GIT_AUTHOR_EMAIL=ccdash@localhost git -C "$D" commit -qm sneaky
   push_commit two
@@ -198,11 +292,11 @@ subjects() { git -C "$D" log --format=%s; }
 }
 
 @test "a rebase conflict is aborted: 'rebase failed', exit 3, repo as before" {
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   git -C "$W" pull -q origin main
   echo remote > "$W/CLAUDE.md"; git -C "$W" add CLAUDE.md; git -C "$W" commit -qm claude; git -C "$W" push -q origin HEAD:main
   before=$(state)
-  run "$BIN/ccd-onboard" octo/demo
+  run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 3 ]
   [[ $output == *"rebase failed"* ]]
   [ "$(state)" = "$before" ]
@@ -211,7 +305,7 @@ subjects() { git -C "$D" log --format=%s; }
 }
 
 @test "diverged with only non-kit local work keeps the Phase D message" {
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   push_commit two
   echo l > "$D/g"; git -C "$D" add g; git -C "$D" commit -qm local
   run "$BIN/ccd-project" pull demo
@@ -229,7 +323,7 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
 
 @test "a repo with its own hooks is still refused (exit 5) and the kit never runs" {
   add_settings settings.json '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"evil"}]}]}}'
-  run "$BIN/ccd-onboard" octo/demo
+  run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 5 ]
   [[ $output == *"hooks: Stop"* ]]
   [ ! -e "$D" ]
@@ -237,21 +331,21 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
 }
 
 @test "the kit's own committed settings do not trip the gate: pull and fresh clone" {
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   git -C "$D" push -q origin HEAD:main # a user pushes the kit commit
   push_commit two
-  run "$BIN/ccd-onboard" octo/demo
+  run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 0 ]
   [ "$(git -C "$D" rev-parse HEAD)" = "$(git -C "$W" rev-parse HEAD)" ]
   rm -rf "$D" "$CCDASH_PROJECTS"
-  run "$BIN/ccd-onboard" octo/demo # fresh clone of a repo that already carries the kit
+  run "$BIN/ccd-onboard" --kit octo/demo # fresh clone of a repo that already carries the kit
   [ "$status" -eq 0 ]
   [ "$(git -C "$D" rev-list --count HEAD)" -eq "$(git -C "$W" rev-list --count HEAD)" ] # unchanged, no new commit
 }
 
 @test "enabledPlugins/extraKnownMarketplaces are still refused without agent-kit.json, with a foreign repo, extra fields or next to hooks" {
   export CCDASH_KIT= # gate only: no kit commit of our own to conflict with
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   before=$(git -C "$D" rev-parse HEAD)
   add_settings settings.json "$KITSET" # no agent-kit.json
   run "$BIN/ccd-project" pull demo
@@ -283,7 +377,7 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
 
 @test "a plugin the kit does not write is refused even under an allowlisted marketplace; the exact upstream ones pass" {
   export CCDASH_KIT=
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   before=$(git -C "$D" rev-parse HEAD)
   add_settings agent-kit.json '{"kit_version":"1"}'
   add_settings settings.json '{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","repo":"octo/kit"}}},"enabledPlugins":{"evil@agent-kit":true}}'
@@ -301,7 +395,7 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
 
 @test "agent-kit.json must be a regular file holding an object with kit_version" {
   export CCDASH_KIT=
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   before=$(git -C "$D" rev-parse HEAD)
   add_settings settings.json "$KITSET"
   git -C "$W" pull -q origin main 2>/dev/null
@@ -323,7 +417,7 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
 @test "a symlinked .claude: kit step refused with 'Could not write project files', exit 8, nothing changed" {
   mkdir -p "$W/elsewhere"; echo '{}' > "$W/elsewhere/settings.json"; ln -s elsewhere "$W/.claude"
   git -C "$W" add .; git -C "$W" commit -qm link; git -C "$W" push -q origin HEAD:main
-  run "$BIN/ccd-onboard" --trust-hooks octo/demo
+  run "$BIN/ccd-onboard" --trust-hooks --kit octo/demo
   [ "$status" -eq 8 ]
   [[ $output == *"kit-error 6 Could not write project files"* ]]
   [ -L "$D/.claude" ]
@@ -334,7 +428,7 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
 }
 
 @test "the kit log shown on failure is a redacted tail, and the log file is owner-only" {
-  STUB_SECRET=hunter2hunter2 STUB_EXIT=5 run "$BIN/ccd-onboard" octo/demo
+  STUB_SECRET=hunter2hunter2 STUB_EXIT=5 run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 8 ]
   [[ $output == *"token=***"* ]]
   [[ $output == *"Bearer ***"* ]]
@@ -343,7 +437,7 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
 }
 
 @test "pull refuses to rebase over a local merge commit" {
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   git -C "$D" checkout -q -b side
   echo s > "$D/.claude/side"; git -C "$D" add .claude
   GIT_AUTHOR_EMAIL=ccdash@localhost git -C "$D" commit -qm side
@@ -351,7 +445,7 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
   git -C "$D" merge -q --no-ff side -m "local merge"
   push_commit two
   before=$(state)
-  run "$BIN/ccd-onboard" octo/demo
+  run "$BIN/ccd-onboard" --kit octo/demo
   [ "$status" -eq 3 ]
   [[ $output == *"local commits not from ccdash"* ]]
   [ "$(state)" = "$before" ]
@@ -359,7 +453,7 @@ KITSET='{"extraKnownMarketplaces":{"agent-kit":{"source":{"source":"github","rep
 
 @test "settings.local.json is never exempt" {
   export CCDASH_KIT=
-  "$BIN/ccd-onboard" octo/demo
+  "$BIN/ccd-onboard" --kit octo/demo
   add_settings agent-kit.json '{"kit_version":"1"}'
   add_settings settings.local.json "$KITSET"
   run "$BIN/ccd-project" pull demo
