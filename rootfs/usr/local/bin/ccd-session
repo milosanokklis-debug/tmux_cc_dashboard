@@ -3,6 +3,9 @@ set -euo pipefail
 WS=${CCDASH_WS:-/workspace} # overridden only by the tests
 # shellcheck source=/dev/null
 . "${CCDASH_ACCOUNTS_LIB:-/usr/local/lib/ccdash}/accounts.sh"
+# shellcheck source=/dev/null
+. "${CCDASH_KIT_LIB:-${CCDASH_ACCOUNTS_LIB:-/usr/local/lib/ccdash}}/kit.sh"
+PROJECTS=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}
 t() { tmux -S "${CCDASH_TMUX:-/run/ccdash/tmux.sock}" "$@"; }
 name_for() { local b=${1##*/}; printf 'claude-%s' "${b//[^[:alnum:]_-]/_}"; }
 # `--` ends option parsing so a prompt beginning with "-" is never read as a claude flag
@@ -61,6 +64,7 @@ launch() {
     # a start on an account that already has a window launches nothing, so it needs no gate
     if [ "$have" = 0 ]; then
       mcp_gate "$acct"
+      kit_recheck_project "$proj" "$acct"
       wid=$(t new-window -P -F '#{window_id}' -t "=$name:" -c "$dir" "${env[@]}" "$@")
       t set -w -t "$wid" @account "$acct"
     else
@@ -68,6 +72,7 @@ launch() {
     fi
   else
     mcp_gate "$acct"
+    kit_recheck_project "$proj" "$acct"
     t new-session -d -s "$name" -c "$dir" "${env[@]}" "$@"
     t set -t "=$name:" @project_dir "$dir"
     t set -w -t "=$name:" @account "$acct"
@@ -92,7 +97,7 @@ known_account() {
   d=$(account_config_dir "$1")
   [ -d "$d" ] && [ ! -L "$d" ] || { echo "unknown account: $1 (create it with: ccd login --account $1)" >&2; exit 1; }
 }
-usage() { echo "usage: ccd-session start <project> [--account name] [prompt] | wake <session-id> | attach <project> [--account name] | ls" >&2; exit 2; }
+usage() { echo "usage: ccd-session start <project> [--account name] [prompt] | wake <session-id> | attach <project> [--account name] | ls | kit-recheck" >&2; exit 2; }
 
 sub=${1:-}
 [ $# -gt 0 ] && shift
@@ -142,6 +147,14 @@ case "$sub" in
     else
       t attach -t "=$name"
     fi
+    ;;
+  kit-recheck)
+    # every opted-in project under every account, one after the other; kit_recheck_project never fails
+    for f in "$PROJECTS"/*.json; do
+      [ -e "$f" ] || continue
+      p=$(basename "$f" .json)
+      while read -r a; do kit_recheck_project "$p" "$a"; done < <(account_list)
+    done
     ;;
   ls)
     out=$(t list-sessions -F '#{session_name}' 2>/dev/null | grep '^claude-' || true)

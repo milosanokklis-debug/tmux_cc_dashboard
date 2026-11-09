@@ -471,3 +471,4 @@ Files: `dashboard/lib/audit.js`, `lib/sessions.js`, `lib/app.js` (sessions route
 - Verified in the image as ccd with `--network none`, read-only root: MCP `initialize` answered by context7 4.4.4, playwright (1.65.0-alpha), chrome-devtools 1.12.0, shadcn; `semgrep --version` and `semgrep mcp --help` run.
 - Image size: 2.39 GB before, 4.2 GB after (chromium + its libs, /opt/semgrep 371 MB, /opt/npm-cache 244 MB).
 - Tests: `tests/bats/image.bats` (pins agree, allowlist, wrappers).
+- Kit re-check design: runs in the background at container start (`ccd-session kit-recheck`) and before each new conversation; per-project timeout `CCDASH_KIT_TIMEOUT` (60s); outcome in the project record as `kitCheck` and `kitError`.
