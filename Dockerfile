@@ -22,6 +22,13 @@ ARG KIT_REPO=milosanokklis-debug/new_ai_setup
 ARG KIT_REF=1099829fff8a692293f311751584983fc6821c15
 ARG SEMGREP_VERSION=1.183.0
 
+# Fixed ids so upgrades keep volume owners (web 999, ccd 1000). Created before the first package install: packages
+# that add system users would otherwise take these ids first.
+RUN groupadd -g 999 web \
+ && groupadd -g 1000 ccd \
+ && useradd -m -u 1000 -g ccd -s /bin/bash ccd \
+ && useradd -r -M -u 999 -g web -G ccd -s /usr/sbin/nologin web
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       tmux ncurses-term jq git curl ca-certificates procps less nodejs npm python3 python3-venv xz-utils chromium fonts-liberation \
@@ -74,9 +81,7 @@ RUN set -eux; \
     done; \
     rm -rf /opt/npm-cache/_logs; chmod -R a+rX /opt/npm-cache
 
-RUN useradd -m -s /bin/bash ccd \
- && useradd -r -M -s /usr/sbin/nologin -G ccd web \
- && chmod 0750 /home/ccd \
+RUN chmod 0750 /home/ccd \
  && install -d -o ccd -g ccd -m 0755 /workspace \
  && install -d -o web -g web -m 0700 /var/lib/ccdash-web \
  && install -d -o web -g ccd -m 2750 /var/lib/ccdash-git

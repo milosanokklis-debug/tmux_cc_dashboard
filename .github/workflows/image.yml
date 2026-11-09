@@ -85,6 +85,19 @@ jobs:
           fi
           echo "owners ok on $PLATFORM"
 
+      # Fixed ids (web 999, ccd 1000) keep volume owners stable across upgrades; see Dockerfile.
+      - name: Check fixed user ids (web 999, ccd 1000)
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -eu
+          ids=$(docker run --rm --platform "$PLATFORM" --entrypoint sh ccdash:smoke -c 'echo "$(id -u web) $(id -g web) $(id -u ccd) $(id -g ccd)"')
+          if [ "$ids" != "999 999 1000 1000" ]; then
+            echo "web uid/gid and ccd uid/gid are '$ids', want '999 999 1000 1000'"
+            exit 1
+          fi
+          echo "user ids ok on $PLATFORM"
+
   publish:
     needs: dry-run
     # pre-release tags such as v1.0.0-rc1 match the glob but are not published

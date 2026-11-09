@@ -416,6 +416,7 @@ Files: `dashboard/lib/audit.js`, `lib/sessions.js`, `lib/app.js` (sessions route
 - Dashboard files are copied with `COPY --chown=0:0`, so they belong to root. Without it, `npm ci` in the builder kept tarball owners with huge uid/gid, and rootless Docker (which maps only 0-65535) could not pull the image.
 - `.github/workflows/image.yml` dry-run has a "Check file owners (rootless Docker)" step: it fails if any file in the smoke image has uid or gid above 65535.
 - Pins bumped to `0.1.1` in `.env.example`, the `Dockerfile.local.example` ARG default and the image.yml header comment.
+- User ids are pinned (web 999, ccd 1000) and created before the first package install, so upgrades keep the owners of existing volumes. image.yml dry-run "Check fixed user ids" asserts them.
 
 ## Handoff 2 Phase H (part 1): shared Basic Memory, kit checkout, start gate
 - Pinned `basic-memory==1.0.0` (PyPI latest on 2026-11-06, requires Python >= 3.12; trixie ships 3.13). `BASIC_MEMORY_VERSION` in `.env.example`, build arg in the Dockerfile, compose.build.yaml, CI and tests/stack scripts. Installed in a venv at `/opt/basic-memory` (`python3-venv` added to apt); binary `/opt/basic-memory/bin/basic-memory`.
