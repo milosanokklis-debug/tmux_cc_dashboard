@@ -452,3 +452,11 @@ Files: `dashboard/lib/audit.js`, `lib/sessions.js`, `lib/app.js` (sessions route
 
 ## uvx shim
 - `rootfs/usr/local/bin/uvx` lets a repo `.mcp.json` with `uvx basic-memory mcp --project <name>` work in the image (no uv installed). It accepts only `basic-memory` (also `--from basic-memory` and `basic-memory==<ver>`), anything else exits 127. It sets `BASIC_MEMORY_HOME`/`BASIC_MEMORY_CONFIG_DIR` like ccd-memory-init, adds a missing valid `--project` name at `${CCDASH_BM_PROJECTS_DIR:-/home/ccd/basic-memory-projects}/<name>` (never as default; a failing `project list` does not block) and execs `$CCDASH_BM`. Tests: `tests/bats/uvx.bats`.
+
+## Claude accounts
+- `default` is `/home/ccd/.claude` with `CLAUDE_CONFIG_DIR` unset. Every other account is `$CCDASH_ACCOUNTS_DIR/<name>` (default `/home/ccd/.claude-accounts`) and runs with `CLAUDE_CONFIG_DIR` set to it. Helper: `rootfs/usr/local/lib/ccdash/accounts.sh` (`account_valid`, `account_config_dir`, `account_env`, `account_list`, `account_create`). Name rule: `default`, or `^[a-z0-9][a-z0-9_-]{0,31}$`; the dashboard mirrors it in `dashboard/lib/accounts.js`.
+- `rootfs/usr/local/bin/ccd-account`: `login [--account NAME]` (create if missing, register basic-memory, run claude), `create NAME` (no claude; used by the dashboard's Add account), `list` (name and logged in or not, never credentials). `bin/ccd` passes `login` and `accounts` through to it.
+- `ccd-memory-init NAME` registers basic-memory in that account's config dir only; with no argument it registers every account and sets up project `main`.
+- Dashboard: `/api/accounts` (`dashboard/lib/api.js`) lists accounts and creates one from `{name}`. Add account opens the sign-in terminal for the new account. Account selects show only with more than one account (`dashboard/public/util.js`).
+- Usage: `dashboard/public/usage.js` reads the top-level fields for `default` only. Other accounts read `usage.accounts[<name>]` and show "unknown" until a reading exists.
+- Tests: `tests/bats/accounts.bats`, `dashboard/test/accounts.test.js`, `tests/playwright/specs/accounts.test.js`.

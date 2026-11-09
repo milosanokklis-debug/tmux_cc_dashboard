@@ -99,6 +99,8 @@ ccd login
 ccd passwd
 ccd passwd --totp
 ccd passwd --no-totp
+ccd login --account NAME
+ccd accounts
 ```
 
 - `ccd identity` sets the git name and email. `--from-host` copies the host's global git name and email.
@@ -108,6 +110,10 @@ ccd passwd --no-totp
 - `ccd login` runs Claude so you can log in.
 - `ccd passwd` sets a new dashboard password. All sessions end.
 - `ccd passwd --totp` turns TOTP on. It shows recovery codes once. `--no-totp` turns TOTP off.
+
+Claude accounts let one dashboard use more than one Claude login. `default` is the login from `ccd login`. `ccd login --account NAME` creates NAME if it is missing and runs Claude for it. `ccd accounts` lists each account and whether it is logged in. A name is up to 32 characters: lowercase letters, digits, `_` and `-`, starting with a letter or digit (regex `^[a-z0-9][a-z0-9_-]{0,31}$`). `default` is reserved.
+
+In the dashboard, the account selects appear only when you have more than one account. Settings has a "Claude accounts" section. "Add account" opens a login window where you run /login; Claude's trust prompt appears there once. Usage gauges follow the account of the terminal in view. Only the default account has a reading until another account's statusline reports; the others show unknown.
 
 ## 5. What survives what
 
@@ -133,6 +139,8 @@ The container:
 - Sets pid, memory and CPU limits.
 - Binds the port to 127.0.0.1 only.
 - Is optionally run under gVisor (`CCDASH_RUNTIME=runsc`). Setup enables it only when the self-test passes.
+
+The image has no `uv`. A `uvx` shim runs only `uvx basic-memory ...`, which repo `.mcp.json` files use for Basic Memory. Any other `uvx` command exits 127.
 
 The dashboard:
 
