@@ -82,7 +82,7 @@ RUN useradd -m -s /bin/bash ccd \
 COPY rootfs/ /
 # payload fixtures for `ccd doctor --live` (ccd-doctor compares real hook payloads with them)
 COPY tests/fixtures/2.1.317/ /usr/local/share/ccdash/fixtures/2.1.317/
-RUN chmod 0755 /usr/local/bin/ccd-doctor /usr/local/bin/ccd-session /usr/local/bin/ccd-project /usr/local/bin/ccd-onboard /usr/local/bin/ccd-ops /usr/local/bin/ccd-memory-init /usr/local/bin/ccd-account /usr/local/bin/uvx /usr/local/bin/npx /opt/google/chrome/chrome \
+RUN chmod 0755 /usr/local/bin/ccd-doctor /usr/local/bin/ccd-session /usr/local/bin/ccd-project /usr/local/bin/ccd-onboard /usr/local/bin/ccd-kit /usr/local/bin/ccd-ops /usr/local/bin/ccd-memory-init /usr/local/bin/ccd-account /usr/local/bin/uvx /usr/local/bin/npx /opt/google/chrome/chrome \
       /usr/local/lib/ccdash/git-credential-ccdash /usr/local/lib/ccdash/hooks/agents.sh /usr/local/lib/ccdash/hooks/state.sh \
       /usr/local/lib/ccdash/hooks/permission.sh /usr/local/lib/ccdash/hooks/statusline.sh /usr/local/lib/ccdash/reader.js \
       /etc/s6-overlay/s6-rc.d/init-ccdash/up \

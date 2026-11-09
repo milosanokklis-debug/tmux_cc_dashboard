@@ -58,6 +58,7 @@ fi
 # Exit 8: the kit failed; the checkout is as it was after the clone/pull, nothing committed, and the record only
 # gets {kitError}. Stdout then has `kit-error <code> <message>` followed by the tail of the kit log.
 kit=${CCDASH_KIT-$(kit_script)}
+if [ -n "$kit" ] && [ -e "$kit" ]; then kit=$(readlink -f "$kit"); fi
 kitjson=null kitenabled=null want=0 # null: kit step skipped (CCDASH_KIT empty), kitEnabled untouched
 if [ -n "$kit" ]; then
   kitenabled=false
@@ -68,6 +69,9 @@ if [ -n "$kit" ] && [ "$want" = 1 ]; then
   kitenabled=true
   packs=(kit-core kit-design kit-code); words=(design code)
   packs_csv=$(IFS=,; echo "${packs[*]}")
+  if [ -z "${CCDASH_KIT_LOCKED:-}" ]; then # ccd-kit update already holds this lock when it calls us
+    exec 9> "$(kit_lock_dir)/kit-$proj.lock"; flock -w "${CCDASH_KIT_LOCK_WAIT:-600}" 9 || { echo "kit-error 5 Kit busy (another kit run holds the project lock)"; exit 8; }
+  fi
   mkdir -p "$HOME/.ccdash"; log=$HOME/.ccdash/kit-$proj.log
   rm -f "$log"; (umask 077; : > "$log") # the kit's stderr may carry secrets: owner-only
   # backup of every path the kit may write, to restore on failure (the tree was clean, ignored files included)

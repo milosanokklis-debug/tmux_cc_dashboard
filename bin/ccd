@@ -81,7 +81,7 @@ doctor_live() {
   jq -r 'if .ok then "selftest: all checks passed or skipped" else "selftest: \(.mismatches | length) warning(s), see '"$out"' (the install is not affected)" end' <<<"$json"
 }
 
-usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] [--kit|--no-kit] <owner/repo> | kit on|off <project> | kit status | pull <project> | identity <name> <email> | identity --from-host | login [--account <name>] | accounts | passwd [--totp|--no-totp] | doctor --live" >&2; exit 2; }
+usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] [--kit|--no-kit] <owner/repo> | kit on|off <project> | kit status | kit check | kit update [<ref>|--reset] | pull <project> | identity <name> <email> | identity --from-host | login [--account <name>] | accounts | passwd [--totp|--no-totp] | doctor --live" >&2; exit 2; }
 case "${1:-}" in
   ls) run ccd-session ls ;;
   attach) [ $# -eq 2 ] || usage; run ccd-session attach "$2" ;;
@@ -105,9 +105,12 @@ case "${1:-}" in
         if [ "$2" = on ]; then run ccd-onboard --kit "$repo"; else run ccd-onboard --no-kit "$repo"; fi ;;
       status)
         [ $# -eq 2 ] || usage
+        run ccd-kit status 2> /dev/null || true
         # shellcheck disable=SC2016 # expands in the container
         run sh -c 'for f in "$HOME"/.ccdash/projects/*.json; do [ -e "$f" ] || continue; jq -r --arg n "$(basename "$f" .json)" \
           "\$n + \"  kit=\" + ((if .kitEnabled == null then (.kit != null) else .kitEnabled end) | tostring) + \"  version=\" + (.kit.version // \"-\") + (if .kitError then \"  error=\" + (.kitError.code | tostring) + \" \" + ((.kitError.message // \"\") | gsub(\"[[:cntrl:]]\"; \"\")) else \"\" end)" "$f"; done' ;;
+      check) [ $# -eq 2 ] || usage; run ccd-kit check ;;
+      update) [ $# -le 3 ] || usage; run ccd-kit update "${@:3}" ;;
       *) usage ;;
     esac ;;
   pull) [ $# -eq 2 ] || usage; run ccd-project pull "$2" ;;
