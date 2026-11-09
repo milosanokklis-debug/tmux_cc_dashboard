@@ -240,7 +240,7 @@ test('POST /api/projects/:proj/open validates the name and folder, runs ccd-sess
   const ok = await post(s, '/api/projects/demo/open');
   assert.strictEqual(ok.status, 200);
   assert.deepStrictEqual(await ok.json(), { session: 'claude-demo' });
-  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'demo']]);
+  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'demo', '--account', 'default']]);
   for (const [p, status] of [['/api/projects/missing/open', 404], ['/api/projects/bad%3Bname/open', 400],
     ['/api/projects/..%2Fx/open', 400], ['/api/projects/.hidden/open', 400],
     ['/api/projects/%E0%A4%A/open', 400]]) {
@@ -303,7 +303,7 @@ test('POST /api/projects: a 4000 char prompt is accepted and passed as ONE argv 
   assert.strictEqual(r.status, 200);
   assert.deepStrictEqual(await r.json(), { project: 'hello', session: 'claude-hello' });
   assert.deepStrictEqual(svc.calls.runOp, [['ccd-onboard', 'octo/hello']]);
-  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'hello', prompt]]);
+  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'hello', '--account', 'default', prompt]]);
 });
 
 test('POST /api/projects: without token no GitHub call and no token file', async (t) => {

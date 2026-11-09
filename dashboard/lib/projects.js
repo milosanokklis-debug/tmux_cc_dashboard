@@ -110,7 +110,7 @@ function memoryOffline(text) {
 async function startSession({ runFile, name, prompt }) {
   let out;
   try {
-    ({ stdout: out } = await runFile('ccd-session', ['start', name, ...(prompt ? [prompt] : [])], { timeout: START_TIMEOUT_MS }));
+    ({ stdout: out } = await runFile('ccd-session', ['start', name, '--account', 'default', ...(prompt ? [prompt] : [])], { timeout: START_TIMEOUT_MS }));
   } catch (e) {
     if (e.code === MEMORY_OFFLINE_RC) throw memoryOffline(e.stderr || e.stdout);
     const msg = (e.stderr || e.message).trim().split('\n')[0] || 'could not start session';

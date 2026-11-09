@@ -17,7 +17,7 @@ const CCD = path.join(ROOT, 'bin/ccd');
 const SKIP = fs.existsSync(path.join(ROOT, 'rootfs')) && fs.existsSync(CCD) ? false : 'rootfs/ and bin/ not found (running inside the image)';
 
 const run = (file, args, input, env = {}) =>
-  spawnSync(file, args, { input, encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
+  spawnSync(file, args, { input, encoding: 'utf8', env: { PATH: process.env.PATH, CCDASH_ACCOUNTS_LIB: path.join(ROOT, 'rootfs/usr/local/lib/ccdash'), ...env } });
 
 test('git-credential-ccdash: https + github.com + valid owner with token file returns the token', { skip: SKIP }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-git-'));
