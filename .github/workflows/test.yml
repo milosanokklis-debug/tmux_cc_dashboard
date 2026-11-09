@@ -96,3 +96,15 @@ jobs:
           tags: ccdash-fake-claude:ci
           cache-from: type=gha,scope=fake-claude
           cache-to: type=gha,mode=max,scope=fake-claude
+
+  test:
+    needs: [checks, bats, stack, fake-claude-image]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: |
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}; then
+            echo "a required job did not succeed"
+            exit 1
+          fi
