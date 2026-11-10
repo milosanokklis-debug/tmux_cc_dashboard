@@ -171,20 +171,13 @@ test('refresh is throttled by minIntervalMs', async () => {
   assert.equal(tokens.views().total.output, 20);
 });
 
-test('transcriptFiles uses the hook path, else derives the subagent path from the main transcript', () => {
+test('transcriptFiles lists the main transcript of each conversation in the state snapshot', () => {
   const main = '/home/ccd/.claude/projects/p/S1.jsonl';
-  const files = transcriptFiles(
-    [{ sid: 'S1', project: 'demo', subs: [{ agent_id: 'a1', agent_type: 'r', transcript: null }, { agent_id: 'a2', agent_type: 'r', transcript: '/home/ccd/.claude/projects/p/S1/subagents/agent-a2.jsonl' }] }],
-    new Map([['S1', { transcript: main }]]),
-  );
-  assert.deepEqual(files.map((f) => [f.agent, f.path]), [
-    ['main', main],
-    ['a1', '/home/ccd/.claude/projects/p/S1/subagents/agent-a1.jsonl'],
-    ['a2', '/home/ccd/.claude/projects/p/S1/subagents/agent-a2.jsonl'],
-  ]);
+  const files = transcriptFiles(new Map([['S1', { transcript: main, project: 'demo' }], ['S2', { project: 'x' }], ['S3', null]]));
+  assert.deepEqual(files, [{ path: main, conv: 'S1', project: 'demo', agent: 'main', agent_type: null }]);
+  assert.deepEqual(transcriptFiles(null), []);
   assert.equal(subagentPath('/x/y.txt', 'S1', 'a1'), null);
   assert.equal(subagentPath(main, 'S1', '../x'), null);
-  assert.deepEqual(transcriptFiles([{ sid: 'S9', project: null, subs: [{ agent_id: 'a', transcript: null }] }], new Map()), []);
 });
 
 test('readTranscript: tail, then follow by next_offset, complete lines only, bounded, sanitized', async () => {
@@ -217,27 +210,22 @@ test('readTranscript: tail, then follow by next_offset, complete lines only, bou
   assert.ok(big.truncated);
 });
 
-test('the fake claude\'s transcripts (duplicate lines, a subagent file) add up to the manual sum', { skip: spawnSync('jq', ['--version']).status !== 0 && 'needs jq' }, async () => {
+test('the fake claude\'s transcripts (duplicate lines) add up to the manual sum', { skip: spawnSync('jq', ['--version']).status !== 0 && 'needs jq' }, async () => {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-fake-')));
   const projects = path.join(tmp, 'projects');
   const r = spawnSync(path.join(__dirname, '..', '..', 'tests', 'fake-claude', 'claude'), [], {
-    input: 'one\ntwo /sub\n', cwd: tmp, encoding: 'utf8',
+    input: 'one\ntwo\n', cwd: tmp, encoding: 'utf8',
     env: { ...process.env, FAKE_CLAUDE_TRANSCRIPTS: projects, FAKE_CLAUDE_USAGE: '1 2 3 4', FAKE_CLAUDE_HOME: path.join(tmp, 'fh'), FAKE_CLAUDE_SETTINGS: '/nonexistent', FAKE_CLAUDE_FIXTURES: path.join(__dirname, '..', '..', 'tests', 'fixtures', '2.1.317') },
   });
   assert.equal(r.status, 0);
   const dir = path.join(projects, fs.readdirSync(projects)[0]);
   const main = path.join(dir, fs.readdirSync(dir).find((f) => f.endsWith('.jsonl')));
   const sid = path.basename(main, '.jsonl');
-  const subDir = path.join(dir, sid, 'subagents');
-  const sub = path.join(subDir, fs.readdirSync(subDir)[0]);
   const tokens = createTokens({ reader: createReader({ dir: projects }), minIntervalMs: 0 });
-  await tokens.refresh(transcriptFiles(
-    [{ sid, project: 'fake', subs: [{ agent_id: path.basename(sub, '.jsonl').slice(6), agent_type: 'x', transcript: null }] }],
-    new Map([[sid, { transcript: main }]]),
-  ));
-  // 2 prompts + 1 subagent message, 4 assistant lines in the main file but 2 messages
+  await tokens.refresh(transcriptFiles(new Map([[sid, { transcript: main, project: 'fake' }]])));
+  // 2 prompts, 4 assistant lines in the main file but 2 messages
   const t = tokens.forNode(sid);
-  assert.deepEqual([t.input, t.output, t.cache_creation, t.cache_read, t.messages], [3, 6, 9, 12, 3]);
+  assert.deepEqual([t.input, t.output, t.cache_creation, t.cache_read, t.messages], [2, 4, 6, 8, 2]);
 });
 
 test('readTranscript skips one oversized line instead of stalling on it', async () => {

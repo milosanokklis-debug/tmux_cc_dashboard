@@ -4,7 +4,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { HttpError } = require('./http');
-const { parseAccount } = require('./accounts');
 const { hasClaude } = require('./tmux');
 const github = require('./github');
 const { readRegular } = require('./safefile');
@@ -29,7 +28,7 @@ function normalizeRepo(input) {
   const bad = () => new HttpError(400, 'repo must be owner/repo or a https://github.com/owner/repo URL');
   if (parts.length !== 2) throw bad();
   const [owner, repo] = parts;
-  if (!OWNER_RE.test(owner) || owner.length > 39 || !validProject(repo) || repo === '_login') throw bad(); // _login is the terminal name of the account login window
+  if (!OWNER_RE.test(owner) || owner.length > 39 || !validProject(repo)) throw bad();
   return { owner, repo };
 }
 
@@ -64,12 +63,12 @@ function readKit(k) {
 
 const CTRL_RE = /[\u0000-\u001f\u007f-\u009f]/g;
 const cleanText = (x, max = 200) => String(x).replace(CTRL_RE, ' ').trim().slice(0, max);
-// {status, message, account, ts} from the last kit re-check, or null.
+// {status, message, ts} from the last kit re-check, or null.
 function readKitCheck(c) {
   if (c === null || typeof c !== 'object' || Array.isArray(c)) return null;
   if (!['ok', 'changed', 'failed'].includes(c.status)) return null;
   const str = (x) => (typeof x === 'string' ? cleanText(x) : '');
-  return { status: c.status, message: str(c.message), account: str(c.account), ts: str(c.ts) };
+  return { status: c.status, message: str(c.message), ts: str(c.ts) };
 }
 // {code, message} only (never log text), or null.
 function readKitError(e) {
@@ -119,6 +118,9 @@ function listProjects({ workspace, panes, procTable, projectsDir }) {
 // ccd-session exits 7 when the Basic Memory MCP server is not connected (the start gate). The body is
 // { error: 'memory-offline', message: 'memory offline', output } with status 409.
 const MEMORY_OFFLINE_RC = 7;
+// ccd-session exits 9 when the project is logged out: 409 { error: 'login-required' }.
+const LOGIN_REQUIRED_RC = 9;
+const loginRequired = () => new HttpError(409, 'login-required', { error: 'login-required' });
 const START_TIMEOUT_MS = 45 * 1000; // the gate runs `claude mcp list` (CCDASH_MCP_TIMEOUT, default 20 s) before anything starts
 function memoryOffline(text) {
   const output = String(text || '').replace(/^memory offline\n?/, '').trim();
@@ -126,14 +128,15 @@ function memoryOffline(text) {
 }
 
 // ccd-session start <name> [prompt]: no-op when the session exists, never restarts claude.
-async function startSession({ runFile, name, prompt, account }) {
+async function startSession({ runFile, name, prompt }) {
   let out;
   try {
-    ({ stdout: out } = await runFile('ccd-session', ['start', name, '--account', account, ...(prompt ? [prompt] : [])], { timeout: START_TIMEOUT_MS }));
+    ({ stdout: out } = await runFile('ccd-session', ['start', name, ...(prompt ? [prompt] : [])], { timeout: START_TIMEOUT_MS }));
   } catch (e) {
     if (e.code === MEMORY_OFFLINE_RC) throw memoryOffline(e.stderr || e.stdout);
+    if (e.code === LOGIN_REQUIRED_RC) throw loginRequired();
     const msg = (e.stderr || e.message).trim().split('\n')[0] || 'could not start session';
-    const status = /no such project|unknown account/.test(msg) ? 404 : /already used/.test(msg) ? 409 : 500;
+    const status = /no such project/.test(msg) ? 404 : /already used/.test(msg) ? 409 : 500;
     throw new HttpError(status, msg);
   }
   const session = out.trim();
@@ -141,10 +144,10 @@ async function startSession({ runFile, name, prompt, account }) {
   return session;
 }
 
-async function openProject({ workspace, runFile, name, account }) {
+async function openProject({ workspace, runFile, name }) {
   if (!validProject(name)) throw new HttpError(400, 'invalid project name');
   if (!isProjectDir(workspace, name)) throw new HttpError(404, 'no such project');
-  return startSession({ runFile, name, account: parseAccount(account) });
+  return startSession({ runFile, name });
 }
 
 const inFlight = new Map(); // "owner/repo" -> { job, prompt, token }: the same repo twice at once, with the same settings, shares one clone
@@ -158,7 +161,6 @@ const BUSY_MSG = 'another change to this project is in progress';
 async function addProject(body, deps) {
   const { owner, repo } = normalizeRepo(body.repo);
   const prompt = body.prompt;
-  const account = parseAccount(body.account);
   if (prompt !== undefined && prompt !== null) {
     if (typeof prompt !== 'string') throw new HttpError(400, 'prompt must be a string');
     if (prompt.length > MAX_PROMPT) throw new HttpError(400, `prompt is longer than ${MAX_PROMPT} characters`);
@@ -173,10 +175,10 @@ async function addProject(body, deps) {
   if (token !== null) github.validateToken(token);
 
   const key = `${owner}/${repo}`.toLowerCase();
-  const settings = { account, prompt: prompt || '', token: token || '', trust, kit };
+  const settings = { prompt: prompt || '', token: token || '', trust, kit };
   const running = inFlight.get(key);
   if (running) {
-    if (running.account !== settings.account || running.prompt !== settings.prompt || running.token !== settings.token || running.trust !== settings.trust
+    if (running.prompt !== settings.prompt || running.token !== settings.token || running.trust !== settings.trust
       || running.kit !== settings.kit) {
       throw new HttpError(409, 'a request for this repo is already in progress with different settings');
     }
@@ -195,7 +197,7 @@ async function addProject(body, deps) {
     const op = await deps.runOp({ argv: ['ccd-onboard', ...(trust ? ['--trust-hooks'] : []), ...(kit ? ['--kit'] : []), `${owner}/${repo}`] });
     checkOnboard(op, { timeout: 'clone timed out', refused: 'clone refused' });
     if (op.rc !== 0) throw new HttpError(502, 'clone failed', { log: op.log });
-    const session = await startSession({ runFile: deps.runFile, name: repo, prompt, account });
+    const session = await startSession({ runFile: deps.runFile, name: repo, prompt });
     return { project: repo, session, ...(warning ? { warning } : {}) };
   })();
   inFlight.set(key, { job, ...settings });
@@ -302,6 +304,102 @@ async function setKit({ name, body, deps }) {
   } finally { busy.delete(lock); }
 }
 
+const WINDOW_RE = /^@\d+$/;
+const WINDOW_KINDS = ['claude', 'shell'];
+const validWindowId = (id) => typeof id === 'string' && id.length <= 12 && WINDOW_RE.test(id);
+
+// Runs ccd-session <cmd> <project> [arg]; exit 9 -> 409 login-required, 1 -> 404, 2 -> 400.
+async function sessionCmd(runFile, args, timeout = 30 * 1000) {
+  try {
+    return (await runFile('ccd-session', args, { timeout })).stdout;
+  } catch (e) {
+    if (e.code === LOGIN_REQUIRED_RC) throw loginRequired();
+    if (e.code === 1) throw new HttpError(404, 'no such window');
+    if (e.code === 2) throw new HttpError(400, 'bad request');
+    throw new HttpError(500, 'session command failed');
+  }
+}
+
+function checkProject({ workspace, name }) {
+  if (!validProject(name)) throw new HttpError(400, 'invalid project name');
+  if (!isProjectDir(workspace, name)) throw new HttpError(404, 'no such project');
+}
+
+async function loggedIn({ runFile, name }) {
+  const out = await sessionCmd(runFile, ['auth', name]);
+  return out.trim() === 'logged-in';
+}
+
+// GET login: { loggedIn, url }. The URL is read live from the login pane and never stored or logged.
+async function loginState({ workspace, runFile, tmux, name }) {
+  checkProject({ workspace, name });
+  const ok = await loggedIn({ runFile, name });
+  let url = null;
+  if (!ok) {
+    try {
+      const pane = await tmux.run(['capture-pane', '-p', '-J', '-t', `${sessionNameFor(name)}:login`]);
+      url = /https:\/\/[^\s"'<>]+/.exec(String(pane))?.[0] ?? null;
+    } catch { /* no login window yet */ }
+  }
+  return { loggedIn: ok, url };
+}
+
+async function startLogin({ workspace, runFile, name }) {
+  checkProject({ workspace, name });
+  await sessionCmd(runFile, ['login', name], START_TIMEOUT_MS);
+  return { ok: true };
+}
+
+async function listWindows({ workspace, runFile, name }) {
+  checkProject({ workspace, name });
+  const out = await sessionCmd(runFile, ['windows', name]);
+  const windows = [];
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue;
+    let w;
+    try { w = JSON.parse(line); } catch { continue; }
+    if (!w || typeof w !== 'object' || !validWindowId(w.id)) continue;
+    windows.push({ id: w.id, index: Number(w.index) || 0, name: typeof w.name === 'string' ? cleanText(w.name) : '', active: w.active === true || w.active === 1, kind: ['claude', 'shell', 'login'].includes(w.kind) ? w.kind : 'shell', pid: Number(w.pid) || null });
+  }
+  return windows;
+}
+
+async function newWindow({ workspace, runFile, name, kind }) {
+  if (!WINDOW_KINDS.includes(kind)) throw new HttpError(400, 'kind must be claude or shell');
+  checkProject({ workspace, name });
+  const id = (await sessionCmd(runFile, ['new', name, kind], START_TIMEOUT_MS)).trim();
+  if (!validWindowId(id)) throw new HttpError(500, 'unexpected window id');
+  return { id };
+}
+
+async function closeWindow({ workspace, runFile, name, id }) {
+  if (!validWindowId(id)) throw new HttpError(400, 'invalid window id');
+  checkProject({ workspace, name });
+  await sessionCmd(runFile, ['close', name, id], 60 * 1000);
+  return { ok: true };
+}
+
+// select-window in the viewer's grouped web-* session(s), or in the project's own session when nobody views it.
+// The window must belong to the project: its owning session (display-message -t <id>) is the project's session
+// or one grouped with it, else 404 (window ids are global across projects).
+async function selectWindow({ workspace, tmux, name, id }) {
+  if (!validWindowId(id)) throw new HttpError(400, 'invalid window id');
+  checkProject({ workspace, name });
+  const session = sessionNameFor(name);
+  let rows = [];
+  try { rows = String(await tmux.run(['list-sessions', '-F', '#{session_name}\t#{session_group}\t#{session_attached}'])).split('\n').map((l) => l.split('\t')); } catch { /* session list unavailable */ }
+  const group = rows.find((r) => r[0] === session)?.[1] || '';
+  let owner;
+  try { owner = String(await tmux.run(['display-message', '-p', '-t', id, '#{session_name}\t#{session_group}'])).trim().split('\t'); } catch { throw new HttpError(404, 'no such window'); }
+  if (owner[0] && owner[0] !== session && !(group && owner[1] === group)) throw new HttpError(404, 'no such window');
+  const viewers = group ? rows.filter((r) => r[0].startsWith('web-') && r[1] === group && Number(r[2]) > 0).map((r) => r[0]) : [];
+  try {
+    for (const t of viewers.length ? viewers : [session]) await tmux.run(['select-window', '-t', `${t}:${id}`]);
+  } catch { throw new HttpError(404, 'no such window'); }
+  return { ok: true };
+}
+
 module.exports = {
+  validWindowId, loginState, startLogin, listWindows, newWindow, closeWindow, selectWindow, loginRequired,
   cleanText, setKit, pullProject, readProjectRecord, memoryOffline, MEMORY_OFFLINE_RC, DEFAULT_PROJECTS_DIR, validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
 };

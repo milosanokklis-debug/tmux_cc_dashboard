@@ -317,19 +317,12 @@ async function readTranscript(reader, file, { offset = null } = {}) {
   };
 }
 
-// Transcript files to track, from the tree's conversations and the state snapshot.
-// convs: [{ sid, project, subs: [{ agent_id, agent_type, transcript }] }]; records: Map sid -> { transcript, project }.
-function transcriptFiles(convs, records) {
+// Transcript files to track: each conversation's main transcript, from the state snapshot.
+// records: Map sid -> { transcript, project } (or null).
+function transcriptFiles(records) {
   const out = [];
-  for (const c of convs) {
-    const rec = records?.get(c.sid);
-    const main = rec?.transcript;
-    const project = c.project || rec?.project || '(unknown)';
-    if (main) out.push({ path: main, conv: c.sid, project, agent: 'main', agent_type: null });
-    for (const s of c.subs) {
-      const p = s.transcript || (main ? subagentPath(main, c.sid, s.agent_id) : null);
-      if (p) out.push({ path: p, conv: c.sid, project, agent: s.agent_id, agent_type: s.agent_type });
-    }
+  for (const [sid, rec] of records || []) {
+    if (rec?.transcript) out.push({ path: rec.transcript, conv: sid, project: rec.project || '(unknown)', agent: 'main', agent_type: null });
   }
   return out;
 }

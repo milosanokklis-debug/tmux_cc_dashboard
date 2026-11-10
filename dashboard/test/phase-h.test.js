@@ -175,7 +175,7 @@ test('project list: kitEnabled / kitCheck / kitError; legacy kit entry means ena
   const svc = setup({ repo: 'octo/demo', head: HEAD, kit: KIT });
   const mk = (n, rec) => { fs.mkdirSync(path.join(svc.workspace, n)); fs.writeFileSync(path.join(svc.projectsDir, `${n}.json`), JSON.stringify(rec)); };
   mk('off', { repo: 'o/off', kitEnabled: false, kit: KIT });
-  mk('on', { repo: 'o/on', kitEnabled: true, kitCheck: { status: 'changed', message: 'ok\u0007\nx', account: 'a', ts: '2026-01-01T00:00:00Z' }, kitError: { code: 6, message: 'bad', log: SECRET } });
+  mk('on', { repo: 'o/on', kitEnabled: true, kitCheck: { status: 'changed', message: 'ok\u0007\nx', ts: '2026-01-01T00:00:00Z' }, kitError: { code: 6, message: 'bad', log: SECRET } });
   mk('odd', { repo: 'o/odd', kitCheck: { status: 'weird' }, kitError: { code: '6', message: 'x' } });
   const s = await h.authed(svc);
   t.after(s.stop);
@@ -185,7 +185,7 @@ test('project list: kitEnabled / kitCheck / kitError; legacy kit entry means ena
   assert.strictEqual(by.demo.kitEnabled, true);
   assert.strictEqual(by.off.kitEnabled, false);
   assert.strictEqual(by.odd.kitEnabled, false);
-  assert.deepStrictEqual(by.on.kitCheck, { status: 'changed', message: 'ok  x', account: 'a', ts: '2026-01-01T00:00:00Z' });
+  assert.deepStrictEqual(by.on.kitCheck, { status: 'changed', message: 'ok  x', ts: '2026-01-01T00:00:00Z' });
   assert.deepStrictEqual(by.on.kitError, { code: 6, message: 'bad' });
   assert.strictEqual(by.odd.kitCheck, null);
   assert.strictEqual(by.odd.kitError, null);

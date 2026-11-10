@@ -69,7 +69,7 @@ test('Phase B: status, liveness and wake against the fake claude', { skip: !have
     const old = s.cur(name);
     killer(old);
     await s.status(name, 'sleeping', 10000);
-    const sid = s.records().find((r) => r.project === path.join(s.ws, name)).sid;
+    const sid = s.records().find((r) => r.project === name).sid;
     assert.strictEqual(old.sid, sid);
 
     const session = s.ccd('wake', sid);
@@ -78,7 +78,7 @@ test('Phase B: status, liveness and wake against the fake claude', { skip: !have
     assert.strictEqual(woken.resumedFrom, sid);
     assert.match(fs.readFileSync(path.join(s.env.FAKE_CLAUDE_HOME, 'args.log'), 'utf8'), new RegExp(`^--resume ${sid}$`, 'm'));
     // the old record is replaced: exactly one visible conversation for the project
-    const mine = new Set(s.records().filter((r) => r.project === path.join(s.ws, name)).map((r) => r.sid));
+    const mine = new Set(s.records().filter((r) => r.project === name).map((r) => r.sid));
     const visible = [...s.rec.snapshot().values()].filter((c) => mine.has(c.sid) && !c.hidden);
     assert.deepStrictEqual(visible.map((c) => c.sid), [woken.sid]);
     assert.strictEqual(s.rec.get(sid).hidden, true);

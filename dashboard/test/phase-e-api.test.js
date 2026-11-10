@@ -1,5 +1,5 @@
 'use strict';
-// Phase E over HTTP: /api/usage, /api/tokens, /api/transcript, and the richer /api/tree nodes.
+// Phase E over HTTP: /api/usage, /api/tokens, /api/transcript.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -24,31 +24,20 @@ function world() {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-e-')));
   const projects = path.join(base, 'projects');
   const usageDir = path.join(base, 'usage');
-  fs.mkdirSync(path.join(projects, 'p', 'S1', 'subagents'), { recursive: true });
+  fs.mkdirSync(path.join(projects, 'p'), { recursive: true });
   fs.mkdirSync(usageDir);
   const main = path.join(projects, 'p', 'S1.jsonl');
-  const sub = path.join(projects, 'p', 'S1', 'subagents', 'agent-a1.jsonl');
   fs.writeFileSync(main, [user(NOW - 100, 'build it'), asst('m1', NOW - 90, [2, 100, 500, 0]), asst('m1', NOW - 89, [2, 100, 500, 0]), asst('m2', NOW - 50, [3, 40, 0, 500], 'claude-opus-5-5')].join('\n') + '\n');
-  fs.writeFileSync(sub, [user(NOW - 80, 'sub task'), asst('s1', NOW - 70, [1, 9, 0, 0], 'claude-haiku-5-5')].join('\n') + '\n');
   fs.writeFileSync(path.join(base, 'secret.jsonl'), 'secret');
-  const ev = (e, extra = {}) => JSON.stringify({ ev: e, ts: iso(NOW - 100), sid: 'S1', pane: '%3', win: 'claude-demo:0', project: '/workspace/demo', ...extra });
-  const agentsDir = path.join(base, 'agents');
-  fs.mkdirSync(agentsDir);
-  fs.writeFileSync(path.join(agentsDir, 'S1.jsonl'), [
-    ev('session'),
-    ev('start', { agent_id: 'a1', agent_type: 'runner', ts: iso(NOW - 85) }),
-    ev('stop', { agent_id: 'a1', agent_type: 'runner', ts: iso(NOW - 60), agent_transcript: sub }),
-    ev('start', { agent_id: 'a2', agent_type: 'runner', ts: iso(NOW - 20) }), // no transcript yet, no file either
-  ].join('\n') + '\n');
   const reader = createReader({ dir: projects });
   const snapshot = new Map([['S1', { sid: 'S1', status: 'working', transcript: main, project: 'demo', hidden: false }]]);
   const tokens = createTokens({ reader, minIntervalMs: 0 });
-  return { base, projects, usageDir, main, sub, agentsDir, reader, snapshot, tokens };
+  return { base, projects, usageDir, main, reader, snapshot, tokens };
 }
 
 async function boot(w, over = {}) {
   const svc = h.fakeServices({
-    agentsDir: w.agentsDir, transcriptRoot: w.base, reader: w.reader, tokens: w.tokens, usageDir: w.usageDir,
+    reader: w.reader, tokens: w.tokens, usageDir: w.usageDir,
     usageFallback: createUsageFallback({ tmux: { ensureOps: async () => {}, run: async () => '' }, env: {}, flagFile: '/nonexistent' }),
     tmux: { sock: '/x', listPanes: async () => [{ session: 'claude-demo', window: '0', paneId: '%3', panePid: 100 }], run: async () => '', ensureOps: async () => {} },
     procTable: () => new Map([[100, { ppid: 1, comm: 'bash' }], [101, { ppid: 100, comm: 'claude' }]]),
@@ -92,20 +81,20 @@ test('/api/usage: no rate_limits anywhere -> unknown, and the switched-off fallb
   assert.deepEqual(calls, ['refresh']); // refresh() itself is a no-op while disabled (see the fallback tests)
 });
 
-test('/api/tokens: totals for the conversation include its subagent; conversation filter; price note', async (t) => {
+test('/api/tokens: totals for the main conversation; conversation filter; price note', async (t) => {
   const w = world();
   const s = await boot(w);
   t.after(s.stop);
   const j = await (await s.get('/api/tokens')).json();
   assert.equal(j.price_note, 'API-price estimate, not billing');
-  assert.deepEqual([j.total.input, j.total.output, j.total.cache_creation, j.total.cache_read], [6, 149, 500, 500]);
-  assert.deepEqual(j.by_agent.map((a) => [a.agent, a.output]).sort(), [['a1', 9], ['main', 140]]);
-  assert.deepEqual(j.by_project.map((p) => [p.project, p.output]), [['demo', 149]]);
+  assert.deepEqual([j.total.input, j.total.output, j.total.cache_creation, j.total.cache_read], [5, 140, 500, 500]);
+  assert.deepEqual(j.by_agent.map((a) => [a.agent, a.output]).sort(), [['main', 140]]);
+  assert.deepEqual(j.by_project.map((p) => [p.project, p.output]), [['demo', 140]]);
   assert.equal(j.by_window.length, 1);
   assert.equal(j.reader.unavailable, false);
   const one = await (await s.get('/api/tokens?conversation=S1')).json();
   assert.equal(one.conversation, 'S1');
-  assert.equal(one.total.output, 149);
+  assert.equal(one.total.output, 140);
   assert.equal((await (await s.get('/api/tokens?conversation=nope')).json()).total.output, 0);
   assert.equal((await s.get('/api/tokens?conversation=../x')).status, 400);
 });
@@ -122,7 +111,7 @@ test('/api/tokens with the reader down says so instead of showing zeros as fact'
   assert.ok(!JSON.stringify(await r.json()).includes(w.base));
 });
 
-test('/api/transcript: tail, follow by offset, subagent, and no way to name a path', async (t) => {
+test('/api/transcript: tail, follow by offset, main only, and no way to name a path', async (t) => {
   const w = world();
   const s = await boot(w);
   t.after(s.stop);
@@ -133,55 +122,12 @@ test('/api/transcript: tail, follow by offset, subagent, and no way to name a pa
   fs.appendFileSync(w.main, `${user(NOW, 'next')}\n`);
   const b = await (await s.get(`/api/transcript?conv=S1&offset=${a.next_offset}`)).json();
   assert.deepEqual(b.entries.map((e) => e.parts[0].text), ['next']);
-  const sub = await (await s.get('/api/transcript?conv=S1&agent=a1')).json();
-  assert.equal(sub.agent_type, 'runner');
-  assert.equal(sub.entries[1].model, 'claude-haiku-5-5');
-  // derived subagent path (no hook path yet) whose file does not exist yet -> 404
-  assert.equal((await s.get('/api/transcript?conv=S1&agent=a2')).status, 404);
+  // subagent transcripts are gone with the agent tree: only the main conversation is served
+  assert.equal((await s.get('/api/transcript?conv=S1&agent=a1')).status, 404);
   for (const q of ['conv=S1&agent=zzz', 'conv=other', `conv=S1&agent=${encodeURIComponent('../../x')}`, 'conv=S1&offset=-1', 'conv=S1&offset=abc', 'conv=', 'path=/etc/passwd']) {
     const r = await s.get(`/api/transcript?${q}`);
     assert.ok([400, 404].includes(r.status), `${q} -> ${r.status}`);
     await r.arrayBuffer();
   }
   assert.equal((await h.req(s.base, '/api/transcript?conv=S1', { method: 'POST', headers: h.POST_HEADERS, cookie: s.cookie })).status, 405);
-});
-
-test('/api/transcript cannot be pointed outside the projects root through a hook-supplied path', async (t) => {
-  const w = world();
-  fs.appendFileSync(path.join(w.agentsDir, 'S1.jsonl'), JSON.stringify({ ev: 'stop', ts: iso(NOW), sid: 'S1', agent_id: 'evil', agent_type: 'x', agent_transcript: path.join(w.base, 'secret.jsonl') }) + '\n');
-  fs.appendFileSync(path.join(w.agentsDir, 'S1.jsonl'), JSON.stringify({ ev: 'start', ts: iso(NOW), sid: 'S1', agent_id: 'evil2', agent_type: 'x' }) + '\n');
-  fs.appendFileSync(path.join(w.agentsDir, 'S1.jsonl'), JSON.stringify({ ev: 'stop', ts: iso(NOW), sid: 'S1', agent_id: 'evil2', agent_type: 'x', agent_transcript: '/etc/passwd' }) + '\n');
-  const s = await boot(w);
-  t.after(s.stop);
-  for (const agent of ['evil', 'evil2']) {
-    const r = await s.get(`/api/transcript?conv=S1&agent=${agent}`);
-    assert.equal(r.status, 404);
-    assert.ok(!(await r.text()).includes('secret'));
-  }
-  const tk = await (await s.get('/api/tokens')).json();
-  assert.equal(tk.total.output, 149);
-});
-
-test('/api/tree nodes carry model, elapsed, tokens and a transcript reference', async (t) => {
-  const w = world();
-  const s = await boot(w);
-  t.after(s.stop);
-  await s.get('/api/tokens'); // reads the transcripts (the tree itself never waits for them)
-  const j = await (await s.get('/api/tree')).json();
-  const c = j.projects.find((p) => p.project === 'demo').conversations[0];
-  assert.equal(c.sid, 'S1');
-  assert.equal(c.model, 'claude-opus-5-5');
-  assert.equal(c.tokens.output, 149);
-  assert.deepEqual(c.transcript, { conv: 'S1', agent: 'main' });
-  assert.equal(c.elapsed, 100); // started NOW-100, still live
-  const a1 = c.subagents.find((x) => x.agent_id === 'a1');
-  assert.equal(a1.model, 'claude-haiku-5-5');
-  assert.equal(a1.tokens.output, 9);
-  assert.deepEqual(a1.transcript, { conv: 'S1', agent: 'a1' });
-  assert.equal(a1.elapsed, 25);
-  const a2 = c.subagents.find((x) => x.agent_id === 'a2');
-  assert.equal(a2.tokens, null); // never read: unknown, not zero
-  assert.equal(a2.model, null);
-  assert.equal(a2.elapsed, 20);
-  assert.equal(a2.status, 'running');
 });

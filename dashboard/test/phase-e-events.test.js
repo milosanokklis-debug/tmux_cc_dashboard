@@ -13,7 +13,7 @@ const OTHER = '99999999-2222-3333-4444-555555555555';
 
 async function setup({ preview } = {}) {
   const watch = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-ev-'));
-  fs.mkdirSync(path.join(watch, 'agents'));
+  fs.mkdirSync(path.join(watch, 'usage'));
   let status = 'working';
   let listeners = [];
   const snap = () => new Map([[SID, { sid: SID, status, hidden: false, idle: false, quiet: false, pane: '%1' }]]);
@@ -23,7 +23,7 @@ async function setup({ preview } = {}) {
   };
   const calls = [];
   const svc = h.fakeServices({
-    reconciler, eventsDir: watch, agentsDir: path.join(watch, 'agents'), usageDir: path.join(watch, 'usage'),
+    reconciler, eventsDir: watch, usageDir: path.join(watch, 'usage'),
     eventsOpts: { debounceMs: 20, previewMs: 100, rewatchMs: 50 },
     tmux: { sock: '/x', listPanes: async () => [], run: async (a) => { calls.push(a); return preview ? preview() : 'hello'; }, ensureOps: async () => {} },
     tokens: { refresh: async () => {}, views: () => ({ total: { input: 1 } }), forNode: () => null, modelOf: () => null },
@@ -57,22 +57,22 @@ test('guard: no session 401, bad or missing Origin 403', async (t) => {
   assert.strictEqual(c.s.app.events.clients, 0);
 });
 
-test('a client gets tree, state, usage and tokens at once, then tree again on a file change', async (t) => {
+test('a client gets state, usage and tokens at once, then usage again on a file change', async (t) => {
   const c = await setup();
   t.after(c.stop);
   const ws = await c.open();
   t.after(() => ws.terminate());
   await c.sleep(300);
-  for (const type of ['tree', 'state', 'usage', 'tokens']) assert.strictEqual(of(ws, type).length, 1, type);
+  for (const type of ['state', 'usage', 'tokens']) assert.strictEqual(of(ws, type).length, 1, type);
+  assert.strictEqual(of(ws, 'tree').length, 0, 'the agent tree is gone');
   assert.strictEqual(of(ws, 'state')[0].states[SID].status, 'working');
-  assert.ok(Array.isArray(of(ws, 'tree')[0].tree.projects));
-  // a new conversation file appears in the watched dir
-  const before = of(ws, 'tree').length;
-  const ev = JSON.stringify({ ev: 'session', ts: new Date().toISOString(), sid: SID, pane: '%1', win: 'claude-demo:0', project: '/workspace/demo' });
-  fs.writeFileSync(path.join(c.watch, 'agents', `${SID}.jsonl`), ev + '\n');
+  // a new usage reading appears in the watched dir
+  const before = of(ws, 'usage').length;
+  const now = Math.floor(Date.now() / 1000);
+  fs.writeFileSync(path.join(c.watch, 'usage', `${SID}.json`), JSON.stringify({ sid: SID, ts: now, project: 'demo', rate_limits: { five_hour: { used_percentage: 12, resets_at: now + 3600 }, seven_day: { used_percentage: 3, resets_at: now + 86400 } } }));
   const t0 = Date.now();
-  while (of(ws, 'tree').length === before && Date.now() - t0 < 2000) await c.sleep(25);
-  assert.ok(of(ws, 'tree').length > before, 'tree pushed within 2 s');
+  while (of(ws, 'usage').length === before && Date.now() - t0 < 2000) await c.sleep(25);
+  assert.ok(of(ws, 'usage').length > before, 'usage pushed within 2 s');
 });
 
 test('a status change arrives as state; an unchanged tick sends nothing', async (t) => {
