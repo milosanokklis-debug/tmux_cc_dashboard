@@ -47,3 +47,13 @@ test('no signed-in project: no claude is started', async () => {
   assert.ok(!tmux.calls.some((c) => c[0] === 'new-window'));
   assert.strictEqual(fb.latest(), null);
 });
+
+test('no projects option: refresh starts no claude, never runs without a project config dir', async () => {
+  const tmux = fakeTmux();
+  const fb = createUsageFallback({
+    tmux, now: () => 1_000_000, wait: async () => {}, env: { CCDASH_USAGE_FALLBACK: '1' }, log: () => {},
+  });
+  await fb.refresh();
+  assert.ok(!tmux.calls.some((c) => c[0] === 'new-window'));
+  assert.strictEqual(fb.latest(), null);
+});
