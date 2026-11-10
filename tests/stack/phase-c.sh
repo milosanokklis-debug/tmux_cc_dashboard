@@ -58,7 +58,7 @@ until_ok() { # until_ok SECONDS DESCRIPTION CMD...
   local n=$1 what=$2; shift 2
   for _ in $(seq $((n * 5))); do if "$@" >/dev/null 2>&1; then ok "$what"; return 0; fi; sleep 0.2; done
   bad "$what (timed out after ${n}s)"
-  if [ -n "${DEBUG:-}" ]; then api "$url/api/tree?all=1" | jq -c . || true; tm list-panes -a -F '#{session_name} #{pane_id} #{pane_pid}' || true; compose logs --tail 20 || true; fi
+  if [ -n "${DEBUG:-}" ]; then states | jq -c . || true; tm list-panes -a -F '#{session_name} #{pane_id} #{pane_pid}' || true; compose logs --tail 20 || true; fi
   return 1
 }
 eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; fi; }
@@ -89,8 +89,28 @@ req() {
   out=$(curl -s -b "$jar" -X "$1" -H "Origin: $origin" -H 'X-CCDash: 1' -H 'content-type: application/json' -d "${3:-{\}}" -w '\n%{http_code}' "$url$2")
   status=${out##*$'\n'}; body=${out%$'\n'*}
 }
-tree() { api "$url/api/tree?all=1"; }
-live() { tree | jq -r --arg p "$1" '[.projects[] | select(.project == $p) | .conversations[] | select(.status != "ended" and .status != "sleeping")][0] | '"$2"; }
+# states: the conversations as one JSON array ({sid, project, status, approval?}), taken from the first
+# state message on /events (the windows API lists windows, not conversations).
+cat >"$tmp/states.js" <<'JS'
+const { WebSocket } = require(process.argv[2]);
+const [,, , wsUrl, origin, cookie] = process.argv;
+const ws = new WebSocket(wsUrl, { headers: { origin, cookie } });
+const bail = setTimeout(() => process.exit(1), 5000);
+ws.on('error', () => process.exit(1));
+ws.on('message', (d) => {
+  const m = JSON.parse(d.toString());
+  if (m.type !== 'state') return;
+  clearTimeout(bail);
+  console.log(JSON.stringify(Object.entries(m.states).map(([sid, v]) => ({ sid, ...v }))));
+  ws.terminate();
+});
+JS
+states() {
+  local ck
+  ck=$(awk '$6 == "__Host-ccdash" { printf "%s=%s", $6, $7 }' "$jar")
+  node "$tmp/states.js" "$root/dashboard/node_modules/ws" "ws${url#http}/events" "$origin" "$ck"
+}
+live() { states | jq -r --arg p "$1" '[.[] | select(.project == $p and .status != "ended" and .status != "sleeping")][0] | '"$2"; }
 sid_of() { live "$1" '.sid // empty'; }
 status_of() { live "$1" '.status // empty'; }
 is_status() { [ "$(status_of "$1")" = "$2" ]; }
@@ -169,7 +189,8 @@ until_ok 15 "Interrupt stopped the turn (waiting)" is_status api1 waiting
 req POST "/api/conversations/$a1/close"
 eq "Close of a waiting conversation" "$status" 200
 eq "Close -> ended" "$(jq -r .result <<<"$body")" ended
-until_ok 15 "api1 is ended in the tree" bash -c "[ \"\$(curl -s -b '$jar' -H 'Origin: $origin' -H 'X-CCDash: 1' '$url/api/tree?all=1' | jq -r '[.projects[] | select(.project == \"api1\") | .conversations[].status] | first')\" = ended ]"
+api1_ended() { [ "$(states | jq -r '[.[] | select(.project == "api1") | .status] | first')" = ended ]; }
+until_ok 15 "api1 is ended in the tree" api1_ended
 
 # The largest allowed prompt, on a conversation of its own (the fake claude's tty handling of a huge paste
 # can leave a stray escape behind that would end a later /long).
@@ -213,7 +234,7 @@ start_conv k1
 send k1 "/perm"
 until_ok 15 "k1 waits for a decision (needs_approval)" is_status k1 needs_approval
 k1=$(sid_of k1)
-pend() { tree | jq -e --arg s "$k1" '[.projects[].conversations[] | select(.sid == $s) | .approval.tool] | first == "Bash"'; }
+pend() { states | jq -e --arg s "$k1" '[.[] | select(.sid == $s) | .approval.tool] | first == "Bash"'; }
 until_ok 10 "the approval is pending in the tree" pend
 pane=$(pane_of "$k1")
 r=$(forge POST /permission "$(jq -nc --arg s "$k1" --arg p "$pane" '{session_id: $s, tool_name: "Bash", tool_input: {command: "forged"}, pane: $p}')")
