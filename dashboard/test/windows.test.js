@@ -41,6 +41,12 @@ function svcWith({ loggedIn = true } = {}) {
     }
     return { stdout: `claude-${name}\n`, stderr: '' };
   };
+  // display-message -p -t <id> '#{session_name}\t#{session_group}' answers with the window's owning session.
+  svc.tmux.run = async (argv) => {
+    if (argv[0] !== 'display-message') return '';
+    const owner = Object.keys(svc.state.wins).find((n) => svc.state.wins[n].some((w) => w.id === argv[3]));
+    return owner ? `claude-${owner}\t\n` : '';
+  };
   return svc;
 }
 const base = '/api/projects';
@@ -96,7 +102,7 @@ test('AC-3.2 close: own window 200; another project\'s window 404; bad id 400', 
 test('AC-3.2 select returns 200 and acts on the window id; bad id is 400', async (t) => {
   const svc = svcWith();
   svc.calls.tmux = [];
-  svc.tmux.run = async (argv) => { svc.calls.tmux.push(argv); return ''; };
+  svc.tmux.run = async (argv) => { svc.calls.tmux.push(argv); return argv[0] === 'display-message' ? 'claude-a\t\n' : ''; };
   const s = await h.authed(svc);
   t.after(s.stop);
   assert.strictEqual((await post(s, `${base}/a/windows/zz/select`)).status, 400);
