@@ -3,6 +3,8 @@
 # tests/fixtures/agent-kit-stub.sh plus a KIT_VERSION line, so `ensure` works through ccd-onboard.
 
 setup() {
+  export CCDASH_CONFIG_ROOT=$BATS_TEST_TMPDIR/projects
+  export CCDASH_MEMORY_INIT=/bin/true
   ROOT=$(cd "$BATS_TEST_DIRNAME/../.." && pwd)
   BIN=$ROOT/rootfs/usr/local/bin
   export HOME=$BATS_TEST_TMPDIR/home
@@ -209,15 +211,14 @@ notemp() { [ -z "$(ls -A "$CCDASH_KIT_HOME" | grep '^\.tmp' || true)" ]; }
   ! kit_version "$BATS_TEST_TMPDIR/none"
 }
 
-@test "a missing claude fails each account in stdout; updated and version stay last" {
+@test "a missing claude fails each project config dir in stdout; updated and version stay last" {
   [ -z "$(env PATH=/usr/bin:/bin sh -c 'command -v claude')" ] || skip "claude is on /usr/bin:/bin"
-  export CCDASH_ACCOUNTS_DIR=$BATS_TEST_TMPDIR/accounts
-  mkdir -p "$CCDASH_ACCOUNTS_DIR/work" "$CCDASH_ACCOUNTS_DIR/alt"
+  export CCDASH_CONFIG_ROOT=$BATS_TEST_TMPDIR/projects
+  mkdir -p "$CCDASH_CONFIG_ROOT/work" "$CCDASH_CONFIG_ROOT/alt"
   run env PATH=/usr/bin:/bin "$BIN/ccd-kit" update
   [ "$status" -eq 0 ]
-  printf '%s\n' "${lines[@]}" | grep -q '^account default failed '
-  printf '%s\n' "${lines[@]}" | grep -q '^account work failed '
-  printf '%s\n' "${lines[@]}" | grep -q '^account alt failed '
+  printf '%s\n' "${lines[@]}" | grep -q '^marketplace work failed '
+  printf '%s\n' "${lines[@]}" | grep -q '^marketplace alt failed '
   [ "${lines[-2]}" = "updated $IMG $TIP" ]
   [ "${lines[-1]}" = "version 0.0.1 1.2.3" ]
 }

@@ -51,19 +51,19 @@ kit_lock_dir() {
   printf '%s\n' "$d"
 }
 
-# kit_recheck_project <proj> [account=default]: re-run the kit (`ccd-onboard --kit-only`: no pull or fetch; HEAD only moves by the kit's own commit) for an opted-in project under the
-# account's CLAUDE_CONFIG_DIR, bounded by CCDASH_KIT_TIMEOUT (60s). Always returns 0 and prints nothing (callers' stdout
-# may carry data). The outcome goes into the project record as kitCheck {status,message,account,ts}; a failure also sets
-# kitError, a success clears it. Needs account_env (accounts.sh) and runs ccd-onboard from this script's directory ($0).
+# kit_recheck_project <proj>: re-run the kit (`ccd-onboard --kit-only`: no pull or fetch; HEAD only moves by the kit's own commit) for an opted-in project (ccd-onboard sets the
+# project's CLAUDE_CONFIG_DIR), bounded by CCDASH_KIT_TIMEOUT (60s). Always returns 0 and prints nothing (callers' stdout
+# may carry data). The outcome goes into the project record as kitCheck {status,message,ts}; a failure also sets
+# kitError, a success clears it. Runs ccd-onboard from this script's directory ($0).
 kit_recheck_project() {
-  local proj=$1 acct=${2:-default} f repo out rc=0 t line status ts w code
+  local proj=$1 f repo out rc=0 t line status ts w code
   f=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}/$proj.json
   [ -f "$f" ] || return 0
   jq -e 'if type != "object" then false elif .kitEnabled == true then true elif .kitEnabled == false then false else (.kit != null and .kit != false) end' "$f" > /dev/null 2>&1 || return 0
   repo=$(jq -r '.repo // empty' "$f" 2> /dev/null || true)
   [ -n "$repo" ] || return 0
   t=${CCDASH_KIT_TIMEOUT:-60}; w=$((t / 2)); [ "$w" -le 10 ] || w=10; [ "$w" -ge 1 ] || w=1
-  out=$( (account_env "$acct" && CCDASH_KIT_LOCK_WAIT=$w timeout -k 5 "$t" "$(dirname "$0")/ccd-onboard" --kit-only "$repo" < /dev/null 2>&1) ) || rc=$?
+  out=$( ( CCDASH_KIT_LOCK_WAIT=$w timeout -k 5 "$t" "$(dirname "$0")/ccd-onboard" --kit-only "$repo" < /dev/null 2>&1) ) || rc=$?
   line=$(printf '%s\n' "$out" | grep -m1 -E '^kit(-error)? ' || true)
   [ -n "$line" ] || line=$(printf '%s\n' "$out" | grep -m1 . || true)
   line=$(printf '%s' "$line" | tr -d '[:cntrl:]' | cut -c1-200)
@@ -82,8 +82,8 @@ kit_recheck_project() {
     exec 9> "$(kit_lock_dir)/kit-$proj.lock" || exit 0
     flock -w 2 9 || true  # lock held by a kit run: still record (atomic mv)
     [ -f "$f" ] || exit 0
-    jq --arg s "$status" --arg m "$line" --arg a "$acct" --arg ts "$ts" --argjson rc "$code" '
-      .kitCheck = {status: $s, message: $m, account: $a, ts: $ts}
+    jq --arg s "$status" --arg m "$line" --arg ts "$ts" --argjson rc "$code" '
+      .kitCheck = {status: $s, message: $m, ts: $ts}
       | if $s == "failed" then .kitError = {code: $rc, message: $m} else del(.kitError) end' "$f" > "$f.tmp.$$" 2> /dev/null \
       && mv "$f.tmp.$$" "$f" || rm -f "$f.tmp.$$"
   ) > /dev/null 2>&1 || true

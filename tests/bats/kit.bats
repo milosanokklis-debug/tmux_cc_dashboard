@@ -4,6 +4,8 @@
 # as the real kit). The real kit is only touched by the last test, which skips when it or `claude` is absent.
 
 setup() {
+  export CCDASH_MEMORY_INIT=/bin/true
+  export CCDASH_CONFIG_ROOT=$BATS_TEST_TMPDIR/projects
   ROOT=$(cd "$BATS_TEST_DIRNAME/../.." && pwd)
   BIN=$ROOT/rootfs/usr/local/bin
   export HOME=$BATS_TEST_TMPDIR/home

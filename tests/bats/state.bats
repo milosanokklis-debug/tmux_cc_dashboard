@@ -21,7 +21,7 @@ field() { jq -r ".$1" "$D/$SID.json"; }
   [ "$status" -eq 0 ]
   [ "$(field state)" = waiting ]
   [ "$(field event)" = SessionStart ]
-  [ "$(field project)" = /workspace/demo ]
+  [ "$(field project)" = demo ]
   [ "$(field pane)" = %4 ]
   [ "$(field transcript)" = /t.jsonl ]
   [ "$(field waiting_since)" != null ]
@@ -36,7 +36,7 @@ field() { jq -r ".$1" "$D/$SID.json"; }
   sleep 1
   unset TMUX_PANE
   CLAUDE_PROJECT_DIR=/workspace/other "$STATE" waiting < <(ev Stop)
-  [ "$(field project)" = /workspace/demo ]
+  [ "$(field project)" = demo ]
   [ "$(field pane)" = %4 ]
   [ "$(field waiting_since)" = "$since" ]
   "$STATE" working < <(ev UserPromptSubmit)
@@ -46,7 +46,7 @@ field() { jq -r ".$1" "$D/$SID.json"; }
 
 @test "project falls back to cwd; resumed_from comes from CCDASH_RESUMED_FROM" {
   CCDASH_RESUMED_FROM=aaaa "$STATE" waiting < <(ev SessionStart)
-  [ "$(field project)" = /workspace/cwd ]
+  [ "$(field project)" = cwd ]
   [ "$(field resumed_from)" = aaaa ]
 }
 

@@ -31,6 +31,11 @@ fi
 proj=${repo#*/}
 dir=$WS/$proj
 cp=$(dirname "$0")/ccd-project
+# one Claude config dir per project (0700): the kit and Basic Memory setup below run under it
+# shellcheck source=/dev/null
+. "${CCDASH_PROJECT_LIB:-${CCDASH_ACCOUNTS_LIB:-${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}}}/project-config.sh"
+project_config_create "$proj" || { echo "cannot create the config dir for $proj" >&2; exit 1; }
+project_env "$proj"
 # shellcheck source=/dev/null
 . "${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}/kit.sh"
 # The kit's GitHub repo (owner/repo): $KIT_REPO, else the origin of the kit checkout. ccd-project reads it from the
@@ -205,3 +210,5 @@ jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "
    | del(.kitError) | (if $kwarn == "" then del(.kitWarning) else .kitWarning = $kwarn end) | (if $det == 1 then del(.kit, .packs) else . end) | (if $ken == null then . else .kitEnabled = $ken end) | if $kit != null then .kit = $kit | .packs = (["kit-core"] + ($kit.packs - ["kit-core"])) else . end' > "$tmp"
 mv "$tmp" "$rec"
 [ -z "$head" ] || echo "head $head"
+# Basic Memory in the project's config dir (best effort; ccd-session start refuses a project without it)
+[ "$kitonly" = 1 ] || "${CCDASH_MEMORY_INIT:-$(dirname "$0")/ccd-memory-init}" "$proj" > /dev/null 2>&1 < /dev/null || true

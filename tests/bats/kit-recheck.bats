@@ -9,16 +9,16 @@ setup() {
   export CCDASH_WS=$BATS_TEST_TMPDIR/ws CCDASH_PROJECTS=$HOME/.ccdash/projects
   export CCDASH_TMUX=$BATS_TEST_TMPDIR/tmux.sock CCDASH_STATE=$HOME/.ccdash/sessions
   export CCDASH_KIT_HOME=$BATS_TEST_TMPDIR/kithome CCDASH_LOCK_DIR=$BATS_TEST_TMPDIR/locks
-  export CCDASH_KIT_LIB=$ROOT/rootfs/usr/local/lib/ccdash CCDASH_ACCOUNTS_LIB=$ROOT/rootfs/usr/local/lib/ccdash
-  export CCDASH_ACCOUNTS_DIR=$BATS_TEST_TMPDIR/accounts KIT_REPO=octo/kit CCDASH_KIT_LOCK_WAIT=20
+  export CCDASH_KIT_LIB=$ROOT/rootfs/usr/local/lib/ccdash CCDASH_PROJECT_LIB=$ROOT/rootfs/usr/local/lib/ccdash
+  export CCDASH_CONFIG_ROOT=$BATS_TEST_TMPDIR/projects CCDASH_MEMORY_INIT=/bin/true KIT_REPO=octo/kit CCDASH_KIT_LOCK_WAIT=20
   export FAKE_CLAUDE_HOME=$BATS_TEST_TMPDIR/fake FAKE_CLAUDE_SETTINGS=/nonexistent FAKE_CLAUDE_MCP=connected CCDASH_MCP_TIMEOUT=5
   export RUNLOG=$BATS_TEST_TMPDIR/runs.log STUB_LOG=$BATS_TEST_TMPDIR/stub.log
   export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
   unset STUB_EXIT STUB_VERSION STUB_MEMORY STUB_SECRET CCDASH_KIT CCDASH_KIT_TIMEOUT TMUX TMUX_PANE CLAUDE_CONFIG_DIR
-  mkdir -p "$HOME/bin" "$CCDASH_WS" "$CCDASH_STATE" "$CCDASH_PROJECTS" "$CCDASH_ACCOUNTS_DIR/work" "$CCDASH_ACCOUNTS_DIR/alt"
+  mkdir -p "$HOME/bin" "$CCDASH_WS" "$CCDASH_STATE" "$CCDASH_PROJECTS"
   git config --global init.defaultBranch main
   git config --global protocol.file.allow always
-  printf '#!/bin/bash\nif [ "${1:-}" = mcp ]; then exec %q "$@"; fi\nsleep 30\n' "$ROOT/tests/fake-claude/claude" > "$HOME/bin/claude"
+  printf '#!/bin/bash\nif [ "${1:-}" = mcp ] || [ "${1:-} ${2:-}" = "auth status" ]; then exec %q "$@"; fi\nsleep 30\n' "$ROOT/tests/fake-claude/claude" > "$HOME/bin/claude"
   chmod +x "$HOME/bin/claude"
   export PATH=$HOME/bin:$PATH
   printf 'export PATH=%s/bin:$PATH\n' "$HOME" > "$HOME/.bash_profile"
@@ -40,16 +40,16 @@ mkproj() {
   git clone -q "$b" "$CCDASH_WS/$1" 2> /dev/null
   git -C "$CCDASH_WS/$1" remote set-url origin "https://github.com/octo/$1.git"
   printf '%s\n' "$2" > "$CCDASH_PROJECTS/$1.json"
+  mkdir -p "$FAKE_CLAUDE_HOME/accounts/$1"; : > "$FAKE_CLAUDE_HOME/accounts/$1/logged-in" # signed in (fake claude)
 }
 rec() { jq -r "$1" "$CCDASH_PROJECTS/$2.json"; }
 ON='{"repo":"octo/demo","kitEnabled":true}'
 
-@test "start runs ensure for an opted-in project with the account's config dir" {
+@test "start runs ensure for an opted-in project with the project's config dir" {
   mkproj demo "$ON"
-  run "$S" start demo --account work
+  run "$S" start demo
   [ "$status" -eq 0 ] && [ "$output" = claude-demo ]
-  grep -q "^$CCDASH_KIT $CCDASH_ACCOUNTS_DIR/work\$" "$RUNLOG"
-  [ "$(rec .kitCheck.account demo)" = work ]
+  grep -q "^$CCDASH_KIT $CCDASH_CONFIG_ROOT/demo\$" "$RUNLOG"
   [[ $(rec .kitCheck.status demo) =~ ^(ok|changed)$ ]]
 }
 
@@ -93,15 +93,13 @@ ON='{"repo":"octo/demo","kitEnabled":true}'
   [ "$(rec .kitError.code demo)" = 124 ]
 }
 
-@test "kit-recheck runs for default and every account, opted-in projects only" {
+@test "kit-recheck runs once per opted-in project with its own config dir" {
   mkproj demo "$ON"
   mkproj other '{"repo":"octo/other"}'
   run "$S" kit-recheck
   [ "$status" -eq 0 ] && [ -z "$output" ]
-  [ "$(wc -l < "$RUNLOG")" -eq 3 ]
-  grep -q " unset\$" "$RUNLOG"
-  grep -q " $CCDASH_ACCOUNTS_DIR/work\$" "$RUNLOG"
-  grep -q " $CCDASH_ACCOUNTS_DIR/alt\$" "$RUNLOG"
+  [ "$(wc -l < "$RUNLOG")" -eq 1 ]
+  grep -q " $CCDASH_CONFIG_ROOT/demo\$" "$RUNLOG"
   [ "$(rec '.kitCheck // "none"' other)" = none ]
 }
 
@@ -175,7 +173,7 @@ ON='{"repo":"octo/demo","kitEnabled":true}'
   mkproj demo "$ON"
   d=$CCDASH_WS/demo
   echo mine > "$d/mine.txt"; git -C "$d" add mine.txt
-  run "$S" start demo --account work
+  run "$S" start demo
   [ "$status" -eq 0 ]
   [ "$(rec .kitCheck.status demo)" = changed ]
   [ "$(git -C "$d" log -1 --format=%s)" = one ]

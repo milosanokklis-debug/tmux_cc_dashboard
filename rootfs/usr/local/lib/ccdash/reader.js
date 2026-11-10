@@ -8,15 +8,15 @@
 //   {op:"read", path, offset, length}        -> {ok, data(base64), offset, size, inode}
 // Every path is resolved with realpath and must be a regular file inside ROOT (compared with a
 // trailing separator, so projects-evil is not projects). Errors never repeat a path.
-// Allowed roots: the default root plus <accounts>/<name>/projects for every real (non-symlink) account
-// directory, found on each request so a new account needs no restart. A path must resolve inside one of them.
-// Standard library only. Env: CCDASH_READER_SOCK, CCDASH_READER_ROOT, CCDASH_ACCOUNTS_DIR (overridable for tests).
+// Allowed roots: the default root plus <config root>/<project>/projects for every real (non-symlink) project
+// config dir, found on each request so a new project needs no restart. A path must resolve inside one of them.
+// Standard library only. Env: CCDASH_READER_SOCK, CCDASH_READER_ROOT, CCDASH_CONFIG_ROOT (overridable for tests).
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 
 const DEFAULT_ROOT = '/home/ccd/.claude/projects';
-const DEFAULT_ACCOUNTS = '/home/ccd/.claude-accounts';
+const DEFAULT_CONFIG_ROOT = '/home/ccd/.claude-projects';
 const DEFAULT_SOCK = '/run/ccdash/reader.sock';
 const MAX_LENGTH = 1024 * 1024; // bytes per read/tail
 const MAX_REQUEST = 8 * 1024; // bytes per request line
@@ -27,24 +27,24 @@ class ReadError extends Error {
   constructor(code) { super(code); this.code = code; }
 }
 
-const ACCOUNT_NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+const PROJECT_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 const isRealDir = (d) => { try { return fs.lstatSync(d).isDirectory(); } catch { return false; } };
 
-// Roots of the extra accounts. An account dir or its projects dir that is a symlink is skipped, so a
+// Roots of the project config dirs. A config dir or its projects dir that is a symlink is skipped, so a
 // link cannot point the reader at some other directory.
-function accountRoots(base = process.env.CCDASH_ACCOUNTS_DIR || DEFAULT_ACCOUNTS) {
+function projectRoots(base = process.env.CCDASH_CONFIG_ROOT || DEFAULT_CONFIG_ROOT) {
   let names;
   try { names = fs.readdirSync(base); } catch { return []; }
   const out = [];
   for (const n of names.sort()) {
-    if (!ACCOUNT_NAME.test(n) || n === 'default') continue;
+    if (!PROJECT_NAME.test(n) || n.includes('..')) continue;
     const d = path.join(base, n);
     const projects = path.join(d, 'projects');
     if (isRealDir(d) && isRealDir(projects)) out.push(projects);
   }
   return out;
 }
-const defaultRoots = (root = process.env.CCDASH_READER_ROOT || DEFAULT_ROOT) => [root, ...accountRoots()];
+const defaultRoots = (root = process.env.CCDASH_READER_ROOT || DEFAULT_ROOT) => [root, ...projectRoots()];
 // `root` is a path, a list of paths or a function returning one of those
 const rootList = (root) => [].concat(typeof root === 'function' ? root() : root);
 

@@ -3,6 +3,8 @@
 # Local bare repos, no network; the kit is tests/fixtures/agent-kit-stub.sh (attach/detach imitate 0.14.0).
 
 setup() {
+  export CCDASH_MEMORY_INIT=/bin/true
+  export CCDASH_CONFIG_ROOT=$BATS_TEST_TMPDIR/projects
   ROOT=$(cd "$BATS_TEST_DIRNAME/../.." && pwd)
   BIN=$ROOT/rootfs/usr/local/bin
   export HOME=$BATS_TEST_TMPDIR/home

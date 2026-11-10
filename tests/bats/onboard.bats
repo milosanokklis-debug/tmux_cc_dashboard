@@ -2,6 +2,8 @@
 # ccd-onboard and ccd-project pull against local bare repos (insteadOf), no network, no token.
 
 setup() {
+  export CCDASH_MEMORY_INIT=/bin/true
+  export CCDASH_CONFIG_ROOT=$BATS_TEST_TMPDIR/projects
   ROOT=$(cd "$BATS_TEST_DIRNAME/../.." && pwd)
   BIN=$ROOT/rootfs/usr/local/bin
   export HOME=$BATS_TEST_TMPDIR/home
