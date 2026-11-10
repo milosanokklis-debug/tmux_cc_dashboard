@@ -22,11 +22,12 @@ stack_login() {
 }
 
 # stack_states: the conversations as one JSON array ({sid, project, status, idle?, approval?}), taken
-# from the first state message on /events (GET /api/tree is gone). Needs $url, $jar and $root.
+# from the first state message on /events (GET /api/tree is gone). Runs node inside the stack
+# container (ws is there; the CI runner has no dashboard/node_modules). Needs $jar and ccd.
 stack_states() {
   local ck
   ck=$(awk '$6 == "__Host-ccdash" { printf "%s=%s", $6, $7 }' "$jar")
-  node -e '
+  ccd node -e '
 const { WebSocket } = require(process.argv[1]);
 const [, , wsUrl, origin, cookie] = process.argv;
 const ws = new WebSocket(wsUrl, { headers: { origin, cookie } });
@@ -38,7 +39,7 @@ ws.on("message", (d) => {
   clearTimeout(bail);
   console.log(JSON.stringify(Object.entries(m.states).map(([sid, v]) => ({ sid, ...v }))));
   ws.terminate();
-});' "$root/dashboard/node_modules/ws" "ws${url#http}/events" "${origin:-http://localhost:7690}" "$ck"
+});' /opt/ccdash/dashboard/node_modules/ws ws://127.0.0.1:7690/events "${origin:-http://localhost:7690}" "$ck"
 }
 
 # live PROJECT JQ_EXPR: JQ_EXPR applied to the project's first conversation that is not ended or sleeping.
