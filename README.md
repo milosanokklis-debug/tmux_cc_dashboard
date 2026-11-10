@@ -126,6 +126,8 @@ ccd passwd --no-totp
 
 Each project has its own Claude login. It lives in `/home/ccd/.claude-projects/<project>` (mode 0700, user `ccd`). Projects do not share a login.
 
+The old shared login (`/home/ccd/.claude` and `/home/ccd/.claude-accounts`) is no longer used and stays on disk.
+
 1. Add the project. Its login window opens, and the dashboard shows an "Open sign-in link" button.
 2. Click the button and approve in your browser.
 3. Paste the code in the terminal.
