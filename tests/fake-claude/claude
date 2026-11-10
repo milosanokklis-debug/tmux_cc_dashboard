@@ -50,6 +50,21 @@ if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
   exit 1
 fi
 
+# `claude auth login`: prints an OAuth URL, reads the code from stdin, then marks the config dir logged in
+# (the same $mhome/logged-in that `auth status` reads). The call is logged to $FAKE_CLAUDE_HOME/calls.log.
+if [ "${1:-}" = auth ] && [ "${2:-}" = login ]; then
+  fh=${FAKE_CLAUDE_HOME:-${HOME:-/tmp}/.fake-claude}
+  mhome=$fh
+  [ -z "${CLAUDE_CONFIG_DIR:-}" ] || mhome=$fh/accounts/$(basename "$CLAUDE_CONFIG_DIR")
+  mkdir -p "$mhome"
+  printf '%s\n' "${CLAUDE_CONFIG_DIR:-unset} $*" >>"$fh/calls.log"
+  echo "Open this URL in your browser: https://claude.com/cai/oauth/authorize?code=true&state=fake"
+  IFS= read -r _code || { echo "fake-claude: no code on stdin" >&2; exit 1; }
+  : >"$mhome/logged-in"
+  echo "Login successful."
+  exit 0
+fi
+
 sid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
 fhome=${FAKE_CLAUDE_HOME:-${HOME:-/tmp}/.fake-claude}
 mkdir -p "$fhome/history" "$fhome/prompts"
