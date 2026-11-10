@@ -39,7 +39,7 @@ if jq --argjson prev "$prev" --arg state "${1:-}" \
       --arg from "${CCDASH_RESUMED_FROM:-}" --argjson now "$(date +%s)" '
   . as $in | $prev + {
     sid: $in.session_id,
-    project: (if ($prev.project // "") != "" then $prev.project else $proj end),
+    project: (if ($prev.project // "") == "" or ($prev.project | startswith("/")) then $proj else $prev.project end),
     transcript: $in.transcript_path,
     state: $state, event: $in.hook_event_name, ts: $now,
     pane: (if $pane != "" then $pane else $prev.pane end),
@@ -48,7 +48,7 @@ if jq --argjson prev "$prev" --arg state "${1:-}" \
     waiting_since: (if $state == "waiting"
                     then (if $prev.state == "waiting" then $prev.waiting_since else $now end)
                     else null end)
-  } + (if $from != "" then {resumed_from: $from} else {} end)' <<<"$in" >"$tmp" \
+  } + (if $from != "" then {resumed_from: $from} else {} end) | del(.account)' <<<"$in" >"$tmp" \
    && chmod 0640 "$tmp" && mv -f "$tmp" "$f"; then
   :
 else
