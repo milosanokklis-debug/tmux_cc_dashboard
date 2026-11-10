@@ -8,8 +8,8 @@
 # the Windows panel, takes screenshots and checks that an idle cards view makes no HTTP
 # requests. Needs docker (or CCDASH_DOCKER, e.g. "sudo -n -u ccdash /usr/local/bin/ccdash-docker"), curl,
 # jq and tar. Own project and volumes (ccdashtest-e), removed at the end.
-# Env: CCDASH_TEST_PORT (7694), CCDASH_IMAGE (ccdash:ci, built from the checkout if missing; remove it to
-# pick up changes), CCDASH_SHOTS (directory for the screenshots, default tests/stack/out, gitignored),
+# Env: CCDASH_TEST_PORT (7694), CCDASH_IMAGE (ccdash:ci, built from the checkout if missing or older than the newest
+# file in the tree; the staleness check is skipped when CI is set, the workflow builds the image just before), CCDASH_SHOTS (directory for the screenshots, default tests/stack/out, gitignored),
 # SAMPLE_SEC (CPU sampling window, default 35, at least 30 to count), ACTIVE_MAX_CPU (limit while the fake claudes are active, default 3), KEEP=1 (leave the stack up), DEBUG=1.
 # shellcheck disable=SC2329,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
 set -euo pipefail
@@ -58,7 +58,13 @@ eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; fi
 tar_ctx() { (cd "$root" && git ls-files -co --exclude-standard -- . ':!dashboard/node_modules' | grep -v '^docs/handoff\|^\.claude' | tar -c -T -); }
 
 # ---------------------------------------------------------------- images
-if ! $D image inspect "$base" >/dev/null 2>&1; then
+stale=""
+if [ -z "${CI:-}" ] && $D image inspect "$base" >/dev/null 2>&1; then
+  built=$(date -d "$($D image inspect -f '{{.Created}}' "$base")" +%s)
+  newest=$(cd "$root" && git ls-files -co --exclude-standard -- . ':!dashboard/node_modules' | grep -v '^docs/handoff\|^\.claude' | xargs -d '\n' stat -c %Y 2>/dev/null | sort -n | tail -n 1)
+  [ "${newest:-0}" -le "$built" ] || stale=1
+fi
+if [ -n "$stale" ] || ! $D image inspect "$base" >/dev/null 2>&1; then
   set -a; . "$root/.env.example"; set +a
   tar_ctx | $D build -q -t "$base" --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION" --build-arg "S6_OVERLAY_VERSION=$S6_OVERLAY_VERSION" --build-arg "BASIC_MEMORY_VERSION=$BASIC_MEMORY_VERSION" --build-arg "KIT_REPO=$KIT_REPO" --build-arg "KIT_REF=$KIT_REF" - >/dev/null
 fi
