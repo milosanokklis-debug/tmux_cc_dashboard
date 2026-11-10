@@ -26,7 +26,11 @@ function defaultServices() {
     reader,
     tokens: createTokens({ reader }),
     usageDir: usage.DEFAULT_DIR,
-    usageFallback: createUsageFallback({ tmux }),
+    usageFallback: createUsageFallback({
+      tmux,
+      projects: () => projects.projectDirs('/workspace'),
+      signedIn: async (name) => (await runFile('ccd-session', ['auth', name])).stdout.trim() === 'logged-in',
+    }),
     selftestFile: '/home/ccd/.ccdash/selftest.json',
     workspace: '/workspace',
     projectsDir: projects.DEFAULT_PROJECTS_DIR,

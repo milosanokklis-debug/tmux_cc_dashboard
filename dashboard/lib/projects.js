@@ -406,7 +406,7 @@ async function selectWindow({ workspace, tmux, name, id }) {
   const group = rows.find((r) => r[0] === session)?.[1] || '';
   let owner;
   try { owner = String(await tmux.run(['display-message', '-p', '-t', id, '#{session_name}\t#{session_group}'])).trim().split('\t'); } catch { throw new HttpError(404, 'no such window'); }
-  if (!owner[0] || owner[0] !== session) throw new HttpError(404, 'no such window');
+  if (!owner[0] || (owner[0] !== session && owner[1] !== session)) throw new HttpError(404, 'no such window');
   const viewers = group ? rows.filter((r) => r[0].startsWith('web-') && r[1] === group && Number(r[2]) > 0).map((r) => r[0]) : [];
   try {
     for (const t of viewers.length ? viewers : [session]) await tmux.run(['select-window', '-t', `${t}:${id}`]);
@@ -415,6 +415,6 @@ async function selectWindow({ workspace, tmux, name, id }) {
 }
 
 module.exports = {
-  validWindowId, loginState, startLogin, listWindows, newWindow, closeWindow, selectWindow,
+  validWindowId, projectDirs, loginState, startLogin, listWindows, newWindow, closeWindow, selectWindow,
   cleanText, setKit, pullProject, readProjectRecord, memoryOffline, MEMORY_OFFLINE_RC, DEFAULT_PROJECTS_DIR, validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
 };

@@ -8,6 +8,7 @@
 const fs = require('node:fs');
 const { setTimeout: sleep } = require('node:timers/promises');
 
+const CONFIG_ROOT = '/home/ccd/.claude-projects'; // <root>/<project> is that project's CLAUDE_CONFIG_DIR
 const DEFAULT_FLAG = '/home/ccd/.ccdash/usage-fallback.enabled';
 const SECTIONS = [
   ['five_hour', /current session|5.?hour/i],
@@ -40,10 +41,11 @@ function parseUsage(text) {
 // any dialog mentioning trust is not it.
 const isReady = (screen) => !/trust/i.test(screen) && /^\s*[│|]?\s*(>|❯)\s*(?![0-9]+\.)/m.test(screen);
 
-// deps: { tmux ({run, ensureOps}), now (ms), wait (ms), intervalMs, flagFile, env, log }
+// deps: { projects () => names (null: one run with claude's own default dir, tests only), signedIn (name) => bool, configRoot, tmux ({run, ensureOps}), now (ms), wait (ms), intervalMs, flagFile, env, log }
 function createUsageFallback({
   tmux, now = () => Date.now(), wait = sleep, env = process.env, log = console.error,
   intervalMs = 600 * 1000,
+  projects = null, signedIn = async () => true, configRoot = CONFIG_ROOT,
   flagFile = DEFAULT_FLAG, readyPolls = 40, pollMs = 500,
 } = {}) {
   let last = null; // { ts (s), limits }
@@ -67,11 +69,11 @@ function createUsageFallback({
     try { return fs.lstatSync(flagFile).isFile(); } catch { return false; }
   };
 
-  async function once() {
+  async function once(project) {
     await tmux.ensureOps();
     if (!swept) { swept = true; await sweep(); }
     const out = await tmux.run(['new-window', '-d', '-P', '-F', '#{window_id}', '-t', '=_ops:',
-      '-n', 'ccdash-usage', '-e', 'CCDASH_HIDDEN=1', '-c', '/workspace', '--', 'claude']);
+      '-n', 'ccdash-usage', '-e', 'CCDASH_HIDDEN=1', ...(project ? ['-e', `CLAUDE_CONFIG_DIR=${configRoot}/${project}`] : []), '-c', '/workspace', '--', 'claude']);
     const win = String(out ?? '').trim();
     if (!/^@[0-9]+$/.test(win)) throw new Error('no window');
     try {
@@ -105,9 +107,15 @@ function createUsageFallback({
   function refresh() {
     if (!enabled() || running || now() - lastRun < intervalMs) return running;
     lastRun = now();
-    running = once().then((limits) => {
-      if (Object.keys(limits).length) last = { ts: Math.floor(now() / 1000), limits };
-    }).catch((e) => log('usage fallback:', e.message)).finally(() => { running = null; });
+    running = (async () => {
+      for (const p of projects ? projects() : [null]) { // one run per signed-in project; a signed-out one is skipped
+        if (p && !(await signedIn(p).catch(() => false))) continue;
+        try {
+          const limits = await once(p);
+          if (Object.keys(limits).length) last = { ts: Math.floor(now() / 1000), limits };
+        } catch (e) { log('usage fallback:', e.message); }
+      }
+    })().catch((e) => log('usage fallback:', e.message)).finally(() => { running = null; });
     return running;
   }
 
