@@ -133,6 +133,12 @@ session_ok() {
   existing=$(t show-options -qv -t "=$name:" @project_dir 2>/dev/null || true)
   [ "$existing" = "$WS/$1" ]
 }
+# claude_in_pane WID: succeeds while a process named claude runs in the pane. tmux's #{pane_current_command} cannot be used:
+# the pane runs `bash -lc 'claude ...; exec bash -l'`, so it always reports bash, never claude (checked on tmux 3.5a).
+claude_in_pane() {
+  local pid
+  pid=$(t display -p -t "$1" '#{pane_pid}' 2>/dev/null) && [ -n "$pid" ] && pgrep -P "$pid" -x claude >/dev/null
+}
 lastwid=
 
 sub=${1:-}
@@ -188,10 +194,11 @@ case "$sub" in
     [ $# -eq 1 ] || usage
     project_valid "$1" || { echo "invalid project name" >&2; exit 2; }
     session_ok "$1" || exit 0
-    t list-windows -t "=$(name_for "$1"):" -F '#{window_id}	#{window_index}	#{window_name}	#{window_active}	#{@kind}	#{pane_pid}' |
-      while IFS=$'\t' read -r id idx wname act kind pid; do
-        jq -cn --arg id "$id" --argjson index "$idx" --arg name "$wname" --argjson active "$([ "$act" = 1 ] && echo true || echo false)" \
-          --arg kind "$kind" --argjson pid "${pid:-0}" '{id:$id,index:$index,name:$name,active:$active,kind:$kind,pid:$pid}'
+    # window_name is last and the separator is not whitespace, so empty fields and tabs in the name stay intact
+    t list-windows -t "=$(name_for "$1"):" -F '#{window_id}|#{window_index}|#{window_active}|#{?@kind,#{@kind},shell}|#{pane_pid}|#{window_name}' |
+      while IFS='|' read -r id idx act kind pid wname; do
+        jq -cn --arg id "$id" --argjson index "$idx" --arg name "$wname" --arg act "$act" \
+          --arg kind "$kind" --argjson pid "${pid:-0}" '{id:$id,index:$index,name:$name,active:($act == "1"),kind:$kind,pid:$pid}'
       done
     ;;
   new)
@@ -213,22 +220,21 @@ case "$sub" in
     [[ $2 =~ ^@[0-9]+$ ]] || { echo "invalid window id" >&2; exit 2; }
     session_ok "$1" || { echo "no such session" >&2; exit 1; }
     name=$(name_for "$1")
-    kind=
-    while IFS=$'\t' read -r id k; do
-      if [ "$id" = "$2" ]; then kind=${k:-none}; fi
-    done < <(t list-windows -t "=$name:" -F '#{window_id}	#{@kind}')
-    [ -n "$kind" ] || { echo "no such window in $name" >&2; exit 1; }
-    if [ "$kind" = claude ]; then
+    t list-windows -t "=$name:" -F '#{window_id}' | grep -qx "$2" || { echo "no such window in $name" >&2; exit 1; }
+    kind=$(t show-options -wqv -t "$2" @kind)
+    if [ "$kind" = claude ] && claude_in_pane "$2"; then
+      t send-keys -t "$2" Escape C-u
       t send-keys -t "$2" -l '/exit'
       t send-keys -t "$2" Enter
       n=0
       while [ "$n" -lt $(( ${CCDASH_CLOSE_WAIT:-10} * 10 )) ]; do
-        t list-windows -t "=$name:" -F '#{window_id}' 2>/dev/null | grep -qx "$2" || exit 0
+        claude_in_pane "$2" || break
         sleep 0.1
         n=$((n + 1))
       done
     fi
     t kill-window -t "$2" 2>/dev/null || true
+    if t list-windows -t "=$name:" -F '#{window_id}' 2>/dev/null | grep -qx "$2"; then echo "window $2 did not close" >&2; exit 1; fi
     ;;
   attach)
     [ $# -eq 1 ] || usage
