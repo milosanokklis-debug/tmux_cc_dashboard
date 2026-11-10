@@ -76,12 +76,17 @@ const notifications = () => page.evaluate(async () => {
   return (await reg.getNotifications()).map((n) => ({ title: n.title, body: n.body, tag: n.tag }));
 });
 // Hands one decrypted push to the service worker, as the browser would after fetching it from the push service.
+// Re-delivers each attempt; the notification tag dedupes. The exactly-one-push guard is the server-side
+// `received.length` check, not the notification count.
 async function deliver(payload) {
-  const registrationId = await eventually(() => {
+  // CDP push to a not-ready worker is dropped without error, so the id is returned only once the worker is active.
+  const registrationId = await eventually(async () => {
     const id = registrations.get(`${ORIGIN}/`);
     if (!id) throw new Error('service worker registration not seen yet');
+    const active = await page.evaluate(async () => (await navigator.serviceWorker.getRegistration('/'))?.active?.state === 'activated');
+    assert.ok(active, 'service worker active');
     return id;
-  }, 'service worker registration');
+  }, 'service worker active');
   await cdp.send('ServiceWorker.deliverPushMessage', { origin: ORIGIN, registrationId, data: payload });
 }
 const config = () => apiGet(page, '/api/push/config');
@@ -130,8 +135,8 @@ test('an approval request produces exactly one push, and one notification, with 
   assert.equal(r.headers['content-encoding'], 'aes128gcm');
   assert.deepEqual(JSON.parse(r.payload), { project: 'pc', status: 'needs_approval' });
   assert.deepEqual(Object.keys(JSON.parse(r.payload)).sort(), ['project', 'status']);
-  await deliver(r.payload);
   await eventually(async () => {
+    await deliver(r.payload);
     const n = (await notifications()).filter((x) => x.tag === 'pc:needs_approval');
     assert.equal(n.length, 1);
     assert.equal(n[0].title, 'pc');
@@ -153,8 +158,8 @@ test('a finished turn (working to waiting) produces exactly one push and one not
   assert.equal(received.length, before + 1, 'exactly one push for the finished turn');
   const r = received[received.length - 1];
   assert.deepEqual(JSON.parse(r.payload), { project: 'pc', status: 'waiting' });
-  await deliver(r.payload);
   await eventually(async () => {
+    await deliver(r.payload);
     const n = (await notifications()).filter((x) => x.tag === 'pc:waiting');
     assert.equal(n.length, 1);
     assert.equal(n[0].body, 'Finished, waiting for you');
