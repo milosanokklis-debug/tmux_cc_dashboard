@@ -76,7 +76,6 @@ login() { curl -sf -c "$jar" -H "Origin: $origin" -H 'X-CCDash: 1' -H 'content-t
 until_ok 20 "login" login
 api() { curl -sf -b "$jar" -H "Origin: $origin" -H 'X-CCDash: 1' "$@"; }
 req() { curl -s -o /dev/null -b "$jar" -X "$1" -H "Origin: $origin" -H 'X-CCDash: 1' -H 'content-type: application/json' -d "${3:-{\}}" "$url$2"; } # req METHOD PATH [JSON]
-live() { stack_states | jq -r --arg p "$1" '[.[] | select(.project == $p and .status != "ended" and .status != "sleeping")][0] | '"$2"; }
 sid_of() { live "$1" '.sid // empty'; }
 is_idle() { [ "$(live "$1" '.idle // empty')" = true ]; }
 is_status() { [ "$(live "$1" '.status // empty')" = "$2" ]; }

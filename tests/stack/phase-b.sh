@@ -29,7 +29,7 @@ until_ok() { # until_ok SECONDS DESCRIPTION CMD...
   local n=$1 what=$2; shift 2
   for _ in $(seq $((n * 5))); do if "$@" >/dev/null 2>&1; then ok "$what"; return 0; fi; sleep 0.2; done
   bad "$what (timed out after ${n}s)"
-  if [ -n "${DEBUG:-}" ]; then tree || true; ccd tmux -S /run/ccdash/tmux.sock list-panes -a -F '#{session_name} #{pane_id} #{pane_pid}' || true; compose logs --tail 20 || true; fi
+  if [ -n "${DEBUG:-}" ]; then states_brief || true; ccd tmux -S /run/ccdash/tmux.sock list-panes -a -F '#{session_name} #{pane_id} #{pane_pid}' || true; compose logs --tail 20 || true; fi
   return 1
 }
 tar_ctx() { (cd "$root" && git ls-files -co --exclude-standard -- . ':!dashboard/node_modules' | grep -v '^docs/handoff\|^\.claude' | tar -c -T -); }
@@ -49,26 +49,26 @@ login() { curl -sf -c "$jar" -H "Origin: http://localhost:7690" -H 'X-CCDash: 1'
   -d '{"username":"t","password":"test-password-123"}' "$url/login"; }
 until_ok 20 "login" login
 api() { curl -sf -b "$jar" -H "Origin: http://localhost:7690" -H 'X-CCDash: 1' "$@"; }
-tree() { stack_states | jq -c '[.[] | {sid, status}]'; }
+states_brief() { stack_states | jq -c '[.[] | {sid, status}]'; }
 
 for p in demo1 demo2; do
   compose exec -T -u ccd ccdash mkdir -p /workspace/$p
   stack_login "$p"
   ccd ccd-session start $p >/dev/null
 done
-two_waiting() { [ "$(tree | jq '[.[] | select(.status == "waiting")] | length')" = 2 ]; }
+two_waiting() { [ "$(states_brief | jq '[.[] | select(.status == "waiting")] | length')" = 2 ]; }
 until_ok 30 "two conversations are waiting" two_waiting
-before=$(tree | jq -r '.[0].sid')
+before=$(states_brief | jq -r '.[0].sid')
 
 compose restart ccdash >/dev/null
 until_ok 60 "dashboard back after the restart" healthy
 login >/dev/null
-all_sleeping() { [ "$(tree | jq '[.[] | select(.status == "sleeping")] | length')" = 2 ]; }
+all_sleeping() { [ "$(states_brief | jq '[.[] | select(.status == "sleeping")] | length')" = 2 ]; }
 until_ok 20 "every conversation is sleeping after compose restart" all_sleeping
 
 # Wake through the API: the old record is replaced by the resumed one
 if api -X POST -H 'content-type: application/json' -d '{}' "$url/api/conversations/$before/wake" | jq -e .ok >/dev/null; then ok "wake accepted"; else bad "wake"; fi
-woke() { [ "$(tree | jq --arg s "$before" '[.[] | select(.status == "waiting")] | length == 1 and ([.[] | select(.sid == $s)] | length) == 0')" = true ]; }
+woke() { [ "$(states_brief | jq --arg s "$before" '[.[] | select(.status == "waiting")] | length == 1 and ([.[] | select(.sid == $s)] | length) == 0')" = true ]; }
 until_ok 15 "woken conversation is waiting and its old record is gone from the tree" woke
 args=$(ccd cat /home/ccd/.fake-claude/args.log)
 if grep -q -- "--resume $before" <<<"$args"; then ok "claude was started with --resume $before"; else bad "no --resume $before in: $args"; fi

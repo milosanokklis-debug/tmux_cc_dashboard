@@ -157,7 +157,6 @@ eq "subscribe to the stand-in again (the vendor one replaced it)" "$(status POST
 ccd mkdir -p /workspace/pushy
 stack_login pushy
 ccd ccd-session start pushy >/dev/null
-live() { stack_states | jq -r --arg p "$1" '[.[] | select(.project == $p and .status != "ended" and .status != "sleeping")][0] | '"$2"; }
 is_status() { [ "$(live pushy '.status // empty')" = "$1" ]; }
 until_ok 30 "pushy is waiting" is_status waiting
 api POST "/api/conversations/$(live pushy '.sid')/prompt" '{"text":"/perm"}' >/dev/null

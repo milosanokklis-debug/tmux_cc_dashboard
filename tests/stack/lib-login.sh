@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2154 # $url, $jar, $root, $origin come from the sourcing script
 # Sourced by the stack scripts. Needs the caller's `ccd` function (runs a command as ccd in the
 # stack container) and `ok`/`bad`.
 #
@@ -39,6 +40,9 @@ ws.on("message", (d) => {
   ws.terminate();
 });' "$root/dashboard/node_modules/ws" "ws${url#http}/events" "${origin:-http://localhost:7690}" "$ck"
 }
+
+# live PROJECT JQ_EXPR: JQ_EXPR applied to the project's first conversation that is not ended or sleeping.
+live() { stack_states | jq -r --arg p "$1" '[.[] | select(.project == $p and .status != "ended" and .status != "sleeping")][0] | '"$2"; }
 
 # An abort under `set -e` names the failing step instead of ending silently.
 _nl=$'\n'

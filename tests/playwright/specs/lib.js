@@ -55,13 +55,6 @@ async function apiGet(page, path) {
   return page.evaluate(async (p) => (await fetch(p, { credentials: 'same-origin' })).json(), path);
 }
 
-async function previewText(page, project) {
-  const tree = await apiGet(page, '/api/tree?all=1');
-  const conv = tree.projects.find((p) => p.project === project).conversations.find((c) => c.status !== 'ended' && c.status !== 'sleeping');
-  const pv = await apiGet(page, `/api/conversations/${conv.sid}/preview`);
-  return { sid: conv.sid, status: conv.status, text: pv.text };
-}
-
 // Types a prompt in a card's prompt box and presses Send.
 async function sendPrompt(page, project, text) {
   const c = card(page, project);
@@ -122,4 +115,4 @@ async function projectPage(browser, opts = {}) {
 }
 
 module.exports = {
-  projectPage, BASE, USER, PASS, OUT, sleep, eventually, launch, phoneContext, login, card, apiGet, previewText, sendPrompt };
+  projectPage, BASE, USER, PASS, OUT, sleep, eventually, launch, phoneContext, login, card, apiGet, sendPrompt };
