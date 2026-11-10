@@ -73,7 +73,7 @@ W=/workspace/demo
 eq "AC-4.1 git status --porcelain is empty" "$(ccd git -C $W status --porcelain)" ""
 eq "AC-4.1 no tracked .claude or CLAUDE.local.md" "$(ccd git -C $W ls-files .claude CLAUDE.local.md)" ""
 eq "AC-4.1 exclude has the private block" "$(ccd grep -cx '# agent-kit:private \(start\|end\)' $W/.git/info/exclude)" 2
-plugins=$(ccd claude plugin list 2>&1 || true)
+plugins=$(ccd env CLAUDE_CONFIG_DIR=/home/ccd/.claude-projects/demo claude plugin list 2>&1 || true)
 for p in kit-core kit-design kit-code; do
   if grep -q "$p" <<<"$plugins"; then ok "AC-4.1 plugin $p listed"; else bad "AC-4.1 plugin $p missing: $plugins"; fi
 done
