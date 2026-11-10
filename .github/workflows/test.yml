@@ -49,6 +49,8 @@ jobs:
         run: tests/stack/phase-d.sh
       - name: stack test (reader service, gauges, tokens, load, headless Chromium)
         run: tests/stack/phase-e.sh
+      - name: stack test (projects are isolated)
+        run: tests/stack/project-isolation.sh
       - name: stack test (backup, volume delete, restore)
         run: tests/stack/phase-g.sh
       - name: stack test (egress allowlist proxy, internal network, push and git through it)
