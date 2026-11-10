@@ -145,11 +145,12 @@ case "$sub" in
   auth)
     [ $# -eq 1 ] || usage
     project_valid "$1" || { echo "invalid project name" >&2; exit 2; }
-    # `unknown` when ccd cannot be reached (no tmux server, tmux error) or does not answer in time (124)
+    # `unknown` when ccd cannot be reached (no tmux server, tmux error, 125 when the ops window cannot be opened)
+    # or does not answer in time (124)
     as_ccd true >/dev/null || { echo unknown; exit 0; }
     rc=0
     logged_in "$1" || rc=$?
-    case $rc in 0) echo logged-in ;; 124) echo unknown ;; *) echo logged-out ;; esac
+    case $rc in 0) echo logged-in ;; 124 | 125) echo unknown ;; *) echo logged-out ;; esac
     ;;
   wake)
     # Resumes a stopped conversation (claude --resume) in the project's tmux session. The old state

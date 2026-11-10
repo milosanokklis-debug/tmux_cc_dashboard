@@ -7,9 +7,8 @@
 == ./sessions/0145a79c-4d3f-49ed-a2fc-f420147be356.json
 {
   "sid": "0145a79c-4d3f-49ed-a2fc-f420147be356",
-  "project": "/workspace/_h2probe",
+  "project": "_h2probe",
   "transcript": "/home/ccd/.claude/projects/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356.jsonl",
-  "account": "default",
   "state": "working",
   "event": "UserPromptSubmit",
   "ts": <TS>,
