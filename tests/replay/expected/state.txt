@@ -1,8 +1,3 @@
-== ./agents/0145a79c-4d3f-49ed-a2fc-f420147be356.jsonl
-{"ev":"end","ts":"<ISO-TS>","sid":"0145a79c-4d3f-49ed-a2fc-f420147be356","pane":"","win":"","project":"/workspace/_h2probe","agent_id":null,"agent_type":null,"agent_transcript":null}
-{"ev":"session","ts":"<ISO-TS>","sid":"0145a79c-4d3f-49ed-a2fc-f420147be356","pane":"","win":"","project":"/workspace/_h2probe","agent_id":null,"agent_type":null,"agent_transcript":null}
-{"ev":"start","ts":"<ISO-TS>","sid":"0145a79c-4d3f-49ed-a2fc-f420147be356","pane":"","win":"","project":"/workspace/_h2probe","agent_id":"afa3507b658268cc3","agent_type":"general-purpose","agent_transcript":null}
-{"ev":"stop","ts":"<ISO-TS>","sid":"0145a79c-4d3f-49ed-a2fc-f420147be356","pane":"","win":"","project":"/workspace/_h2probe","agent_id":"afa3507b658268cc3","agent_type":"general-purpose","agent_transcript":"/home/ccd/.claude/projects/-workspace--h2probe/0145a79c-4d3f-49ed-a2fc-f420147be356/subagents/agent-afa3507b658268cc3.jsonl"}
 == ./hook.log
 == ./sessions/0145a79c-4d3f-49ed-a2fc-f420147be356.json
 {

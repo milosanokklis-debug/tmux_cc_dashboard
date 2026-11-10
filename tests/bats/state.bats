@@ -127,10 +127,8 @@ field() { jq -r ".$1" "$D/$SID.json"; }
   [ "$(field event)" = PostToolUse ]
 }
 
-@test "CCDASH_HIDDEN=1 (the /usage helper Claude) records no state and no agent event" {
+@test "CCDASH_HIDDEN=1 (the /usage helper Claude) records no state" {
   CCDASH_HIDDEN=1 run "$STATE" waiting < <(ev SessionStart)
   [ "$status" -eq 0 ]
-  CCDASH_HIDDEN=1 run "$ROOT/rootfs/usr/local/lib/ccdash/hooks/agents.sh" session < <(ev SessionStart)
-  [ "$status" -eq 0 ]
-  [ ! -e "$HOME/.ccdash/sessions" ] && [ ! -e "$HOME/.ccdash/agents" ] || [ -z "$(ls -A "$HOME/.ccdash/sessions" "$HOME/.ccdash/agents" 2>/dev/null)" ]
+  [ ! -e "$HOME/.ccdash/sessions" ] || [ -z "$(ls -A "$HOME/.ccdash/sessions" 2>/dev/null)" ]
 }

@@ -1,16 +1,9 @@
 {
   "hooks": {
     "SessionStart": [
-      {"matcher": "startup|resume", "hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/agents.sh session"}, {"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh waiting"}]}
-    ],
-    "SubagentStart": [
-      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/agents.sh start"}]}
-    ],
-    "SubagentStop": [
-      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/agents.sh stop"}]}
+      {"matcher": "startup|resume", "hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh waiting"}]}
     ],
     "SessionEnd": [
-      {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/agents.sh end"}]},
       {"hooks": [{"type": "command", "command": "/usr/local/lib/ccdash/hooks/state.sh ended"}]}
     ],
     "UserPromptSubmit": [

@@ -41,8 +41,6 @@ for f in "$fixtures"/*.json; do
   done <<<"$cmds"
   if [ $ok -eq 1 ]; then echo "PASS $name (replayed through hooks)"; else fail=1; fi
 done
-# the real SessionStart payload must have produced an agents record
-if [ -z "$(ls "$HOME/.ccdash/agents" 2>/dev/null)" ]; then echo "FAIL no agent record written"; fail=1; fi
 # State diff: one snapshot of $HOME/.ccdash per run (sorted paths, volatile values normalised),
 # compared with the committed tests/replay/expected/state.txt. REPLAY_UPDATE=1 rewrites it.
 snap() {

@@ -105,6 +105,7 @@ launch() {
       if [ "$kind" = claude ]; then start_gate "$proj"; fi
       wid=$(t new-window -P -F '#{window_id}' -t "=$name:" -c "$dir" ${wname[@]+"${wname[@]}"} env "CLAUDE_CONFIG_DIR=$cdir" "$@")
       t set -w -t "$wid" @kind "$kind"
+      lastwid=$wid
     else
       t select-window -t "$haveid" # attaching lands on that window
     fi
@@ -113,6 +114,7 @@ launch() {
     # one tmux command line (`\;`), so @project_dir is set before any other start can look at the session
     t new-session -d -s "$name" -c "$dir" ${wname[@]+"${wname[@]}"} env "CLAUDE_CONFIG_DIR=$cdir" "$@" \; \
       set -t "=$name:" @project_dir "$dir" \; set -w -t "=$name:" @kind "$kind"
+    lastwid=$(t display -p -t "=$name:" '#{window_id}')
   fi
   echo "$name"
 }
@@ -122,7 +124,16 @@ project_dir_of() {
   [ -d "$WS/$1" ] || { echo "no such project: $1" >&2; exit 1; }
   printf '%s\n' "$WS/$1"
 }
-usage() { echo "usage: ccd-session start <project> [prompt] | wake <session-id> | login <project> | auth <project> | attach <project> | ls | kit-recheck" >&2; exit 2; }
+usage() { echo "usage: ccd-session start <project> [prompt] | wake <session-id> | login <project> | auth <project> | windows <project> | new <project> [claude|shell] | close <project> <window-id> | attach <project> | ls | kit-recheck" >&2; exit 2; }
+# session_ok PROJECT: the project's session exists and belongs to that project dir (name_for is lossy).
+session_ok() {
+  local name existing
+  name=$(name_for "$1")
+  t has-session -t "=$name" 2>/dev/null || return 1
+  existing=$(t show-options -qv -t "=$name:" @project_dir 2>/dev/null || true)
+  [ "$existing" = "$WS/$1" ]
+}
+lastwid=
 
 sub=${1:-}
 [ $# -gt 0 ] && shift
@@ -172,6 +183,52 @@ case "$sub" in
     # claude process only, so later windows of the same tmux session do not inherit it.
     # shellcheck disable=SC2016 # $1 is expanded by the inner bash, on purpose
     launch "$proj" "$WS/$proj" window claude bash -lc 'CCDASH_RESUMED_FROM="$1" claude --resume "$1"; exec bash -l' _ "$sid"
+    ;;
+  windows)
+    [ $# -eq 1 ] || usage
+    project_valid "$1" || { echo "invalid project name" >&2; exit 2; }
+    session_ok "$1" || exit 0
+    t list-windows -t "=$(name_for "$1"):" -F '#{window_id}	#{window_index}	#{window_name}	#{window_active}	#{@kind}	#{pane_pid}' |
+      while IFS=$'\t' read -r id idx wname act kind pid; do
+        jq -cn --arg id "$id" --argjson index "$idx" --arg name "$wname" --argjson active "$([ "$act" = 1 ] && echo true || echo false)" \
+          --arg kind "$kind" --argjson pid "${pid:-0}" '{id:$id,index:$index,name:$name,active:$active,kind:$kind,pid:$pid}'
+      done
+    ;;
+  new)
+    { [ $# -ge 1 ] && [ $# -le 2 ]; } || usage
+    proj=$1 kind=${2:-claude}
+    case $kind in claude | shell) ;; *) echo "bad kind: $kind" >&2; exit 2 ;; esac
+    dir=$(project_dir_of "$proj")
+    ensure_config "$proj"
+    if [ "$kind" = claude ]; then
+      launch "$proj" "$dir" window claude "${cmd[@]}" >/dev/null
+    else
+      launch "$proj" "$dir" window shell bash -l >/dev/null
+    fi
+    echo "$lastwid"
+    ;;
+  close)
+    [ $# -eq 2 ] || usage
+    project_valid "$1" || { echo "invalid project name" >&2; exit 2; }
+    [[ $2 =~ ^@[0-9]+$ ]] || { echo "invalid window id" >&2; exit 2; }
+    session_ok "$1" || { echo "no such session" >&2; exit 1; }
+    name=$(name_for "$1")
+    kind=
+    while IFS=$'\t' read -r id k; do
+      if [ "$id" = "$2" ]; then kind=${k:-none}; fi
+    done < <(t list-windows -t "=$name:" -F '#{window_id}	#{@kind}')
+    [ -n "$kind" ] || { echo "no such window in $name" >&2; exit 1; }
+    if [ "$kind" = claude ]; then
+      t send-keys -t "$2" -l '/exit'
+      t send-keys -t "$2" Enter
+      n=0
+      while [ "$n" -lt $(( ${CCDASH_CLOSE_WAIT:-10} * 10 )) ]; do
+        t list-windows -t "=$name:" -F '#{window_id}' 2>/dev/null | grep -qx "$2" || exit 0
+        sleep 0.1
+        n=$((n + 1))
+      done
+    fi
+    t kill-window -t "$2" 2>/dev/null || true
     ;;
   attach)
     [ $# -eq 1 ] || usage
