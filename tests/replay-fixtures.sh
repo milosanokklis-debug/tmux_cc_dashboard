@@ -22,7 +22,7 @@ for f in "$fixtures"/*.json; do
     echo "FAIL $name: hook_event_name '$ev' does not match filename"; fail=1; continue
   fi
   # only the payloads captured from the real 2.1.317 may omit the synthetic flag
-  case $name in SessionStart | UserPromptSubmit | Stop | SessionEnd) ;;
+  case $name in SessionStart | UserPromptSubmit | Stop | SubagentStart | SubagentStop | SessionEnd) ;;
     *) if [ "$(jq -r '.synthetic // false' "$f")" != true ]; then
          echo "FAIL $name: synthetic fixture lacks \"synthetic\": true"; fail=1; continue
        fi ;;
