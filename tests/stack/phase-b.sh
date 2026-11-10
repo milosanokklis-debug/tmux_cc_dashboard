@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317 # functions are invoked indirectly (trap, until_ok, helpers)
 # Phase B on a test compose stack: a `compose restart` shows every conversation sleeping, and Wake
 # through the dashboard API brings one back (fake claude). Needs docker (or CCDASH_DOCKER, e.g.
 # "sudo -n -u ccdash /usr/local/bin/ccdash-docker"), curl and jq. Uses its own project and volumes

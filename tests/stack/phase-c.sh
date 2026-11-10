@@ -204,7 +204,9 @@ mkdir -p "$shots"
 $D cp "$PW_NAME:/out/." - 2>/dev/null | tar -x -C "$shots" 2>/dev/null || true # as a tar stream: the Docker user may not own $shots
 $D rm -f "$PW_NAME" >/dev/null 2>&1 || true
 if [ "$PW_RC" = 0 ]; then ok "Playwright specs passed"; else bad "Playwright specs failed (exit $PW_RC)"; fi
-if [ -n "${CCDASH_SHOTS:-}" ]; then mkdir -p "$CCDASH_SHOTS" && cp "$shots"/*.png "$CCDASH_SHOTS"/ 2>/dev/null && echo "screenshots in $CCDASH_SHOTS" || true; fi
+if [ -n "${CCDASH_SHOTS:-}" ]; then
+  if mkdir -p "$CCDASH_SHOTS" && cp "$shots"/*.png "$CCDASH_SHOTS"/ 2>/dev/null; then echo "screenshots in $CCDASH_SHOTS" || true; fi
+fi
 events=$(ccd cat /home/ccd/.fake-claude/events.log || true)
 eq "events.log: two allows (pa, and pc in the push spec)" "$(grep -c '^permission allow$' <<<"$events")" 2
 eq "events.log: the deny message arrived" "$(grep -c '^permission-message: nope-xyz$' <<<"$events")" 1

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317 # functions are invoked indirectly (trap, until_ok, helpers)
 # Phase D on a test compose stack: re-onboarding with pull, and the git identity. A local bare repo
 # stands in for GitHub (git url.<bare>.insteadOf), so no network and no token are needed. Pull must
 # fast-forward a project while its fake Claude keeps running (same pid, pane untouched), refuse a dirty

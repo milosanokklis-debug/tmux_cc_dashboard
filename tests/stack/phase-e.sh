@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317 # functions are invoked indirectly (trap, until_ok, helpers)
 # Phase E on a test compose stack, inside the real image (so the ccd-reader s6 service runs): the reader
 # socket and what it refuses, the usage gauges (/api/usage against the fake claude's rate_limits, then
 # "unknown" when the statusline has none), a readable main transcript,
@@ -37,7 +38,7 @@ compose() { (cd / && $D compose -p "$P" -f - "$@" < <(sed -e "s|@IMAGE@|$CCDASH_
 ccd() { compose exec -T -u ccd ccdash "$@"; }
 tm() { ccd tmux -S /run/ccdash/tmux.sock "$@"; }
 cleanup() {
-  [ -n "$bg" ] && kill "$bg" 2>/dev/null || true
+  if [ -n "$bg" ]; then kill "$bg" 2>/dev/null || true; fi
   if [ -z "${KEEP:-}" ]; then
     $D rm -f "$PW_NAME" >/dev/null 2>&1 || true
     compose down -v --remove-orphans >/dev/null 2>&1 || true
@@ -264,5 +265,5 @@ mkdir -p "$tmp/shots"
 $D cp "$PW_NAME:/out/." - 2>/dev/null | tar -x -C "$tmp/shots" 2>/dev/null || true # a tar stream: the Docker user may not own the directory
 $D rm -f "$PW_NAME" >/dev/null 2>&1 || true
 if [ "$PW_RC" = 0 ]; then ok "Playwright specs passed"; else bad "Playwright specs failed (exit $PW_RC)"; fi
-mkdir -p "$SHOTS" && cp "$tmp"/shots/*.png "$SHOTS"/ 2>/dev/null && echo "screenshots in $SHOTS: $(find "$SHOTS" -maxdepth 1 -name '*.png' -printf '%f ' | head -c 600)" || true
+if mkdir -p "$SHOTS" && cp "$tmp"/shots/*.png "$SHOTS"/ 2>/dev/null; then echo "screenshots in $SHOTS: $(find "$SHOTS" -maxdepth 1 -name '*.png' -printf '%f ' | head -c 600)" || true; fi
 exit $fail

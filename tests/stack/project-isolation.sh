@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317 # functions are invoked indirectly (trap, until_ok, helpers)
 # Per-project isolation on a test compose stack, inside the real image: two projects (a, b), only a signed in
 # through the fake claude. AC-5.1 `ccd-session auth` says a is logged-in and b logged-out; AC-5.2 the web user
 # cannot read a's config dir and neither the sign-in URL nor the code is stored under /var/lib/ccdash-web;
@@ -93,6 +94,7 @@ pane_env() { # CLAUDE_CONFIG_DIR of the shell window's pane process or any of it
   local pid
   pid=$(tm list-panes -t "$shell_id" -F '#{pane_pid}' | head -n 1)
   [ -n "$pid" ] || return 1
+  # shellcheck disable=SC2016 # the loop runs in the container's shell, where $1 and $p are bound
   ccd sh -c 'for p in "$1" $(pgrep -P "$1"); do tr "\0" "\n" </proc/$p/environ 2>/dev/null | grep "^CLAUDE_CONFIG_DIR="; done | head -n 1' _ "$pid"
 }
 until_ok 10 "AC-5.3 the shell window's process has CLAUDE_CONFIG_DIR" pane_env

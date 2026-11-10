@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317 # functions are invoked indirectly (trap, until_ok, helpers)
 # Phase G on a test compose stack: the README "Backup and restore" procedure, end to end. Log in, enrol TOTP,
 # add a project (a local bare repo stands in for GitHub), write marker files into the history and the
 # workspace, stop the stack and tar each of the four volumes, `compose down -v` (volumes gone), bring up a

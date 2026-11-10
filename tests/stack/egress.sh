@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317 # functions are invoked indirectly (trap, until_ok, helpers)
 # Phase F egress on a test compose stack: the real compose.egress.yaml (the production override) layered
 # on the test stack, so ccdash sits on an internal network and the only way out is the allowlist proxy.
 # A stand-in container on the proxy's outside network plays GitHub (git over http) and a push service

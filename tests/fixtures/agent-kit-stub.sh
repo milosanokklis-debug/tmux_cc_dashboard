@@ -54,7 +54,9 @@ done
 KIT_NAME=agent-kit
 repo=${KIT_REPO:-octo/kit}
 ver=${STUB_VERSION:-0.9.2}
-[ -d "$proj" ] && [ -e "$proj/.git" ] || { echo "not a git root" >&2; printf '{"ok":false,"code":2,"error":"not a git root"}\n'; exit 2; }
+if [ ! -d "$proj" ] || [ ! -e "$proj/.git" ]; then
+  echo "not a git root" >&2; printf '{"ok":false,"code":2,"error":"not a git root"}\n'; exit 2
+fi
 cd "$proj"
 snap() { { find .claude -type f 2> /dev/null; [ ! -f CLAUDE.md ] || echo CLAUDE.md; } | sort | xargs -r sha256sum | sha256sum; }
 before=$(snap)
