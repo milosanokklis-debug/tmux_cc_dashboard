@@ -43,7 +43,7 @@ function createEvents(deps) {
     const states = {};
     for (const r of snap.values()) {
       if (r.hidden) continue;
-      states[r.sid] = { status: r.status, idle: r.idle, quiet: r.quiet };
+      states[r.sid] = { status: r.status, idle: r.idle, quiet: r.quiet, project: r.project };
       const a = r.status === 'needs_approval' ? broker?.forSid(r.sid) : null; // the card shows only while the conversation really waits
       if (a) states[r.sid].approval = { id: a.id, tool: a.tool_name, input: a.tool_input, truncated: a.truncated, since: a.since };
     }
