@@ -612,3 +612,6 @@ body.app .signin-status { color: var(--muted); }
 body.app .signin-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0; }
 body.app .signin-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 body.app .signin-actions [hidden] { display: none; }
+body.app .win-error { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+body.app .win-error[hidden] { display: none; }
+body.app .win-new [aria-disabled="true"] { opacity: .7; cursor: progress; }

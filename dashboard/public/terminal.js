@@ -422,5 +422,6 @@
   window.ccdash.terminal = {
     open(proj) { setTreeOpen(!mobile.matches); open(proj); },
     close,
+    focus() { if (term) term.focus(); },
   };
 })();

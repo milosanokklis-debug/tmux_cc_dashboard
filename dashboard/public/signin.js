@@ -36,25 +36,45 @@
       if (!r.ok || !r.data) throw new Error('HTTP ' + r.status);
       d = r.data;
     } catch (e) {
-      if (my === gen && e.message !== 'unauthorized' && !first) say('Could not check the sign-in state. Retrying.');
-      if (my === gen) schedule(my);
+      if (my !== gen) return;
+      if (e.message !== 'unauthorized') {
+        // Fail closed: show the sign-in view with the problem rather than nothing.
+        $('signin').hidden = false;
+        $('signin-link').hidden = true;
+        $('signin-start').hidden = true;
+        say('Could not check sign-in. Retrying.');
+      }
+      schedule(my, first);
       return;
     }
     if (first && d.loggedIn === true) { $('signin').hidden = true; return; } // already signed in: no sign-in view
     $('signin').hidden = false;
     if (d.loggedIn !== true && !started) {
       started = true;
-      try { await api(path(), { method: 'POST', body: {} }); } catch { /* the poll shows what happened */ }
+      let err = null;
+      try {
+        const r = await api(path(), { method: 'POST', body: {} });
+        if (!r.ok) err = (r.data && r.data.error) || 'HTTP ' + r.status;
+      } catch (e) { if (e.message !== 'unauthorized') err = 'network error'; }
       if (my !== gen) return;
+      if (err) {
+        started = false; // try again on the next poll
+        paint(d);
+        say('Could not start sign-in: ' + err + '. Retrying.');
+        schedule(my, first);
+        return;
+      }
     }
     paint(d);
     if (d.loggedIn !== true) schedule(my); // signed in: nothing left to wait for
   }
 
-  function schedule(my) {
+  function schedule(my, first) {
     clearTimeout(timer);
-    timer = setTimeout(() => { if (my === gen) check(my, false); }, POLL_MS);
+    timer = setTimeout(() => { if (my === gen) check(my, first === true); }, POLL_MS);
   }
+
+  const clearBusy = () => { const b = $('signin-start'); b.removeAttribute('aria-busy'); b.removeAttribute('aria-disabled'); };
 
   $('signin-start').addEventListener('click', async () => {
     const btn = $('signin-start');
@@ -68,20 +88,22 @@
       if (my !== gen) return;
       if (r.ok) {
         $('signin').hidden = true;
+        if (window.ccdash.terminal && window.ccdash.terminal.focus) window.ccdash.terminal.focus();
         notice('Started Claude in ' + current + '.', 'info');
         if (window.ccdash.windows) window.ccdash.windows.refresh();
       } else if (r.status === 409 && r.data && r.data.error === 'login-required') {
         say('Not signed in yet. Finish the sign-in first.');
         btn.hidden = true;
+        if (window.ccdash.terminal && window.ccdash.terminal.focus) window.ccdash.terminal.focus();
         schedule(my);
       } else {
         say('Could not start Claude: ' + ((r.data && r.data.error) || 'HTTP ' + r.status));
       }
     } catch (e) {
       if (e.message !== 'unauthorized' && my === gen) say('Could not start Claude: network error.');
+    } finally {
+      if (my === gen) clearBusy();
     }
-    btn.removeAttribute('aria-busy');
-    btn.removeAttribute('aria-disabled');
   });
 
   window.ccdash.signin = {
@@ -90,6 +112,7 @@
       gen += 1;
       started = false;
       clearTimeout(timer);
+      clearBusy();
       $('signin').hidden = true;
       $('signin-link').hidden = true;
       $('signin-start').hidden = true;
@@ -100,6 +123,7 @@
       current = null;
       gen += 1;
       clearTimeout(timer);
+      clearBusy();
       $('signin').hidden = true;
     },
   };

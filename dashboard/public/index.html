@@ -64,7 +64,7 @@
         <p id="signin-status" class="signin-status" role="status" aria-live="polite"></p>
       </section>
       <div id="term" class="term"></div>
-      <p id="term-hint" class="term-hint"><kbd>Tab</kbd> stays in the terminal. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&uarr;</kbd> leaves it for the Windows panel, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&darr;</kbd> returns. Drag to select and copy (tmux). Hold <kbd>Shift</kbd> while dragging to select with the browser instead.</p>
+      <p id="term-hint" class="term-hint"><kbd>Tab</kbd> stays in the terminal. To reach the Windows panel, use the Windows button in the toolbar or the Skip to windows link that appears when you tab to it, or press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&uarr;</kbd>; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&darr;</kbd> returns. Drag to select and copy (tmux). Hold <kbd>Shift</kbd> while dragging to select with the browser instead.</p>
     </section>
     <aside class="tree-pane">
       <button type="button" id="skip-term" class="btn skip-link">Back to terminal</button>
@@ -76,7 +76,8 @@
             <button type="button" id="win-new-shell" class="btn">New shell</button>
           </div>
           <p id="win-status" class="sr-only" role="status" aria-live="polite"></p>
-          <p id="win-error" class="inline-error" role="alert" hidden>Could not load windows.</p>
+          <p id="win-loading" class="muted" role="status" hidden>Loading windows…</p>
+          <div id="win-error" class="inline-error win-error" hidden><span role="alert">Could not load windows.</span> <button type="button" id="win-retry" class="btn">Retry</button></div>
           <ul id="win-list" class="win-list" aria-label="Windows of this project"></ul>
           <p id="win-empty" class="muted" hidden>No windows yet. Use New Claude window or New shell.</p>
           <div id="conv-box" class="conv-box" hidden>

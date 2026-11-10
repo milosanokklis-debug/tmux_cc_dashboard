@@ -32,6 +32,7 @@
   let lastAppr = null;
   let poll = null;
   let loading = false;
+  let loaded = false; // the first answer for this project has arrived
   let gen = 0; // bumps on start/stop so a late answer for another project is dropped
   const waking = new Set();
   const busy = new Set(); // 'new:claude' | 'new:shell' | 'close:@1' | 'select:@1'
@@ -41,7 +42,7 @@
   const domId = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, '_');
   const errText = (r) => (r.data && r.data.error) || 'HTTP ' + r.status;
   function say(text) { $('win-status').textContent = text; }
-  const sameProject = (s) => !s.project || s.project === current;
+  const sameProject = (s) => s.project === current; // fail closed: no project, or another one, is hidden
   const decided = new Set(); // approval ids answered here; hidden until the server stops reporting them
   const mine = () => Object.entries(states).filter(([, s]) => sameProject(s)).map(([sid, s]) => ({ sid, ...s }))
     .map((s) => (s.approval && decided.has(s.approval.id) ? { ...s, approval: undefined } : s));
@@ -53,6 +54,7 @@
     busy.add(key);
     const my = gen;
     say(label + '…');
+    paintBusy();
     try {
       const r = await fn();
       if (my !== gen) return;
@@ -62,15 +64,25 @@
       if (e.message !== 'unauthorized' && my === gen) { const m = 'Could not ' + label.toLowerCase() + ': network error.'; notice(m, 'error'); say(m); }
     }
     busy.delete(key);
-    if (my === gen) { lastWin = null; await load(); }
+    if (my === gen) { paintBusy(); lastWin = null; await load(); }
+  }
+
+  // New Claude / New shell show a busy state (aria-disabled keeps them focusable) instead of silently ignoring clicks.
+  function paintBusy() {
+    for (const [kind, id, idle] of [['claude', 'win-new-claude', 'New Claude window'], ['shell', 'win-new-shell', 'New shell']]) {
+      const b = $(id);
+      const on = busy.has('new:' + kind);
+      if (on) { b.setAttribute('aria-busy', 'true'); b.setAttribute('aria-disabled', 'true'); b.textContent = 'Starting…'; }
+      else { b.removeAttribute('aria-busy'); b.removeAttribute('aria-disabled'); b.textContent = idle; }
+    }
   }
 
   const newWindow = (kind) => act('new:' + kind, kind === 'claude' ? 'Starting a Claude window' : 'Starting a shell',
     () => api(base(), { method: 'POST', body: { kind } }));
   const selectWindow = (w) => act('select:' + w.id, 'Switching to ' + w.name, () => api(winPath(w.id, 'select'), { method: 'POST', body: {} }));
   function closeWindow(w) {
-    // A Claude window ends its conversation, so ask first (native confirm: modal, keyboard and screen reader friendly).
-    if (w.kind === 'claude' && !window.confirm('Close the Claude window "' + w.name + '"? Claude exits and the conversation stops.')) return;
+    // A Claude window ends its conversation, so ask first. Same native confirm as closing a conversation (controls.js).
+    if (w.kind === 'claude' && !window.confirm('Close ' + (w.name || 'the Claude window') + '? Claude exits and the conversation stops.')) return;
     act('close:' + w.id, 'Closing ' + w.name, () => api(winPath(w.id, 'close'), { method: 'POST', body: {} }));
   }
 
@@ -98,11 +110,19 @@
   function renderWindows() {
     const ul = $('win-list');
     const act = document.activeElement;
-    const focused = ul.contains(act) && act.dataset ? act.dataset.fk : null;
+    const inUl = ul.contains(act) && act.dataset;
+    const focused = inUl ? act.dataset.fk : null;
+    const idx = inUl ? [...ul.children].indexOf(act.closest('li')) : -1;
     const claudes = windows.filter((w) => w.kind === 'claude').length;
     ul.replaceChildren(...windows.map((w) => winRow(w, claudes)));
     $('win-empty').hidden = windows.length > 0;
-    if (focused) { const again = ul.querySelector('[data-fk="' + CSS.escape(focused) + '"]'); if (again) again.focus(); }
+    if (!focused) return;
+    const again = ul.querySelector('[data-fk="' + CSS.escape(focused) + '"]');
+    if (again) { again.focus(); return; }
+    // The focused row went away: move to the next one, or to New Claude window when none is left.
+    const next = ul.children[Math.min(Math.max(idx, 0), ul.children.length - 1)];
+    const to = next && (next.querySelector('.win-close') || next.querySelector('button'));
+    (to || $('win-new-claude')).focus();
   }
 
   // ---------------------------------------------------------------- conversations (stopped ones can be woken)
@@ -124,8 +144,7 @@
   }
 
   // One item per conversation: status, approval card, Wake (stopped), then prompt box / Interrupt / Close.
-  // data-project is set only when the pushed state names its project; until then every conversation shows.
-  function convRow(c) {
+    function convRow(c) {
     const name = 'Conversation ' + c.sid.slice(0, 8);
     const cc = { ...c, win: name };
     const li = h('li', { class: 'node conv', 'data-testid': 'conversation', 'data-sid': c.sid, 'data-status': c.status, 'data-project': c.project || null }, [
@@ -144,7 +163,7 @@
     return li;
   }
 
-  function renderConversations(focusKey) {
+  function renderConversations(focusKey, focusIdx) {
     const list = mine().filter((s) => CONV[s.status] && s.status !== 'gone');
     const box = $('conv-box');
     const ul = $('conv-list');
@@ -157,32 +176,39 @@
     ul.replaceChildren(...list.map(convRow));
     if (focused) {
       const again = ul.querySelector('[data-fk="' + CSS.escape(focused) + '"]:not(:disabled)');
-      if (again) { again.focus(); if (caret && again.setSelectionRange) try { again.setSelectionRange(caret[0], caret[1]); } catch { /* not a text control */ } }
+      if (again) { again.focus(); if (caret && again.setSelectionRange) try { again.setSelectionRange(caret[0], caret[1]); } catch { /* not a text control */ } return; }
+    }
+    if (focusIdx != null && focusIdx >= 0) {
+      // The control that had focus was removed (approval answered, conversation closed): next item, else New Claude window.
+      const li = ul.children[Math.min(focusIdx, ul.children.length - 1)];
+      const to = li && li.querySelector('button:not(:disabled), input:not(:disabled)');
+      (to || $('win-new-claude')).focus();
     }
   }
 
   // ---------------------------------------------------------------- approvals
 
   // Approval cards render inside their conversation item. Here: how many wait, shown on the (phone) panel toggle,
-  // and the panel opens for a new one.
+  // and a new one is announced politely; the panel is never forced open.
   function renderApprovals() {
     const items = mine().filter((s) => s.approval);
     const n = items.length;
     const toggle = $('tree-toggle');
     const text = n ? 'Windows, ' + n + (n === 1 ? ' needs approval' : ' need approval') : 'Windows';
     if (toggle.textContent !== text) toggle.textContent = text;
-    const fresh = items.some((s) => !seen.has(s.approval.id));
+    const fresh = items.filter((s) => !seen.has(s.approval.id));
     seen.clear();
     for (const s of items) seen.add(s.approval.id);
-    if (fresh && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+    if (fresh.length) say(fresh.length === 1 ? 'Approval needed for ' + showTool(fresh[0]) + '.' : fresh.length + ' approvals need a decision.');
   }
   const seen = new Set();
+  const showTool = (s) => 'Conversation ' + s.sid.slice(0, 8) + ' (' + String(s.approval.tool) + ')';
 
-  function renderStates(focusKey) {
+  function renderStates(focusKey, focusIdx) {
     const appr = JSON.stringify(mine().map((s) => [s.sid, s.approval && s.approval.id, s.approval && s.approval.truncated]));
     const conv = JSON.stringify(mine().map((s) => [s.sid, s.status, s.approval && s.approval.id, s.approval && s.approval.truncated]));
     if (appr !== lastAppr) { lastAppr = appr; renderApprovals(); }
-    if (conv !== lastConv || focusKey) { lastConv = conv; renderConversations(focusKey); }
+    if (conv !== lastConv || focusKey || focusIdx != null) { lastConv = conv; renderConversations(focusKey, focusIdx); }
     // the single-conversation chip on a Claude row depends on state too
     if (windows.some((w) => w.kind === 'claude') && lastWin) renderWindows();
   }
@@ -205,32 +231,37 @@
     if (current == null || loading) return;
     loading = true;
     const my = gen;
+    const first = !loaded;
+    if (first) { $('win-loading').hidden = false; $('win-error').hidden = true; $('win-empty').hidden = true; }
     try {
       const r = await api(base());
       if (my !== gen) return;
       if (!r.ok || !r.data || !Array.isArray(r.data.windows)) throw new Error('HTTP ' + r.status);
       $('win-error').hidden = true;
+      $('win-loading').hidden = true;
+      loading = false; loaded = true;
       const json = JSON.stringify(r.data.windows);
       if (json !== lastWin) { lastWin = json; windows = r.data.windows; renderWindows(); }
     } catch (e) {
-      if (e.message !== 'unauthorized' && my === gen) $('win-error').hidden = false;
+      if (e.message !== 'unauthorized' && my === gen) { $('win-loading').hidden = true; $('win-error').hidden = false; }
     } finally { loading = false; }
   }
 
   document.addEventListener('visibilitychange', () => { if (current != null && !document.hidden) load(); });
+  $('win-retry').addEventListener('click', () => { lastWin = null; load(); });
   $('win-new-claude').addEventListener('click', () => newWindow('claude'));
   $('win-new-shell').addEventListener('click', () => newWindow('shell'));
   controls.setOnChange((opts) => {
     if (opts && opts.decided) decided.add(opts.decided);
     lastAppr = null; lastConv = null;
-    renderStates(opts && opts.focus);
+    renderStates(opts && opts.focus, opts && opts.focusIdx);
   });
 
   window.ccdash.windows = {
     start(project) {
       current = project;
       gen += 1;
-      windows = []; lastWin = null; lastConv = null; lastAppr = null; loading = false;
+      windows = []; lastWin = null; lastConv = null; lastAppr = null; loading = false; loaded = false;
       states = {};
       busy.clear(); seen.clear(); decided.clear();
       $('tree-toggle').textContent = 'Windows';
@@ -239,6 +270,8 @@
       $('conv-box').hidden = true;
       $('win-empty').hidden = true;
       $('win-error').hidden = true;
+      $('win-loading').hidden = true;
+      paintBusy();
       say('');
       const pushed = events.last('state');
       if (pushed && pushed.states) setStates(pushed.states);
