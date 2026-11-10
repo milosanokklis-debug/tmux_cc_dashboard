@@ -5,7 +5,7 @@
   "description": "Phone-viewport browser tests for the ccdash test stack (tests/stack/phase-c.sh runs them in a container). playwright must match the tag of the base image in the Dockerfile.",
   "scripts": {
     "test": "node --test --test-concurrency=1 specs/ui.test.js specs/push.test.js",
-    "test:e": "node --test --test-concurrency=1 specs/phase-e.test.js specs/kit.test.js specs/login.test.js specs/windows.test.js",
+    "test:e": "node --test --test-concurrency=1 specs/phase-e.test.js specs/kit.test.js specs/login.test.js specs/windows.test.js specs/ui-review.test.js",
     "test:shot": "node --test specs/shot.test.js"
   },
   "dependencies": {
