@@ -37,7 +37,7 @@ PORT=7690
 NO_CLOUDFLARE=0 HOSTNAME_ARG="" NO_SELFTEST=0 UNINSTALL=0 PURGE=0
 
 # ---- output -------------------------------------------------------------------------------------------------
-exec 3<&0 4>&1 0</dev/null # fd 4 is the terminal output, fd 3 the terminal input; nothing else reads stdin, so nothing can block on input
+exec 0</dev/null # nothing reads stdin, so nothing can block on input
 if ! { mkdir -p "$(dirname "$LOG")" && : >>"$LOG"; }; then echo "setup: cannot write $LOG" >&2; exit 1; fi
 chmod 600 "$LOG" 2>/dev/null || true
 exec > >(tee -a "$LOG") 2>&1
@@ -436,7 +436,7 @@ cf_login() {
   [ ! -s "$cert" ] || { say "cloudflared is already logged in"; return 0; }
   say "Open the URL below in a browser and pick the domain for ccdash."
   : >"$out"
-  cf_as tunnel login >"$out" 2>&1 </dev/null 4>&- & # prints a URL and never exits by itself
+  cf_as tunnel login >"$out" 2>&1 </dev/null & # prints a URL and never exits by itself
   pid=$!
   while [ ! -s "$cert" ]; do
     if [ "$shown" -eq 0 ] && url=$(grep -m1 -o 'https://[^ ]*' "$out") && [ -n "$url" ]; then
