@@ -41,14 +41,8 @@ async function login(page, home = 'ph') {
   await page.fill('#username', USER);
   await page.fill('#password', PASS);
   await Promise.all([page.waitForURL((u) => u.pathname === '/'), page.click('button[type=submit]')]);
-  // The agents panel lives in a project's terminal view; on a phone it starts collapsed behind the
-  // "Agents" button, and it only lists the current project until "All projects" is ticked.
-  await page.evaluate((p) => { location.hash = `#/term/${p}`; }, home);
-  await page.locator('#view-terminal').waitFor({ state: 'visible' });
-  if ((await page.locator('#tree-toggle').getAttribute('aria-expanded')) !== 'true') await page.click('#tree-toggle');
-  const all = page.locator('#tree-all-projects');
-  await all.waitFor({ state: 'visible' });
-  if (!(await all.isChecked())) await all.check();
+  // The projects page is the landing view; its list is the stable element.
+  await page.locator('#project-list').waitFor({ state: 'visible' });
 }
 
 // The conversation card of a project. Test ids repeat per card, so always scope by it.
