@@ -8,7 +8,8 @@
 # Env (all optional; the tests set them): CCDASH_WS, CCDASH_TMUX, CCDASH_FIXTURES (2.1.317 payload fixtures),
 # CCDASH_DOCTOR_WAIT (seconds per wait, 60), CCDASH_DOCTOR_ESC_WAIT (75: idle_prompt fires after ~60 s),
 # CCDASH_DOCTOR_HOOK_TIMEOUT (5), CCDASH_DOCTOR_SETTLE (3),
-# CCDASH_USAGE_DIR, CCDASH_STATE, CCDASH_FALLBACK_FLAG, CCDASH_CLAUDE_HOME.
+# CCDASH_USAGE_DIR, CCDASH_STATE, CCDASH_FALLBACK_FLAG, CCDASH_CLAUDE_HOME (default: the signed-in project's config dir), CCDASH_PROJECT_LIB.
+# claude runs under the config dir of the first project `ccd-session auth` reports logged-in; none: one skip result.
 set -uo pipefail
 WS=${CCDASH_WS:-/workspace}
 SOCK=${CCDASH_TMUX:-/run/ccdash/tmux.sock}
@@ -21,7 +22,8 @@ DIALOG_RE='Do you want to|Allow this|fall-through: asking user' # the REPL's own
 USAGE_DIR=${CCDASH_USAGE_DIR:-$HOME/.ccdash/usage}
 STATE_DIR=${CCDASH_STATE:-$HOME/.ccdash/sessions}
 FLAG=${CCDASH_FALLBACK_FLAG:-$HOME/.ccdash/usage-fallback.enabled}
-CHOME=${CCDASH_CLAUDE_HOME:-$HOME/.claude}
+CHOME=${CCDASH_CLAUDE_HOME:-}
+PLIB=${CCDASH_PROJECT_LIB:-/usr/local/lib/ccdash}
 NAME=_selftest
 DIR=$WS/$NAME
 S=claude-$NAME
@@ -43,7 +45,7 @@ sid=
 cleanup() {
   t kill-session -t "=$S" 2>/dev/null
   rm -rf "${DIR:?}" "${T:?}"
-  rm -rf "${CHOME:?}/projects/${DIR//[\/._]/-}" # Claude's per-project transcript dir
+  [ -z "$CHOME" ] || rm -rf "${CHOME:?}/projects/${DIR//[\/._]/-}" # Claude's per-project transcript dir
   # the subagent's Basic Memory note (best effort: the subagent is asked to delete it too)
   rm -f "${BASIC_MEMORY_HOME:-$HOME/basic-memory}/selftest/doctor-$$.md" 2>/dev/null
   rmdir "${BASIC_MEMORY_HOME:-$HOME/basic-memory}/selftest" 2>/dev/null
@@ -51,13 +53,29 @@ cleanup() {
   local f s
   for f in "$STATE_DIR"/*.json; do
     [ -f "$f" ] || continue
-    [ "$(jq -r '.project // empty' "$f" 2>/dev/null)" = "$DIR" ] || continue
+    # state.sh writes the project name; an older record holds the path
+    case $(jq -r '.project // empty' "$f" 2>/dev/null) in "$NAME" | "$DIR") ;; *) continue ;; esac
     s=$(basename "$f" .json)
     rm -f "${f:?}" "${USAGE_DIR:?}/$s.json"
   done
 }
 trap cleanup EXIT
 trap 'exit 0' INT TERM
+
+# ---- the claude config dir: the first signed-in project's (each project has its own login) --------------
+# shellcheck source=/dev/null
+. "$PLIB/project-config.sh"
+CCFG=
+for p in $(project_list); do
+  [ "$("$(dirname "$0")/ccd-session" auth "$p" 2>/dev/null)" = logged-in ] || continue
+  CCFG=$(project_config_dir "$p")
+  break
+done
+if [ -z "$CCFG" ]; then
+  res claude_checks skip "skip: no signed-in project"
+  exit 0
+fi
+[ -n "$CHOME" ] || CHOME=$CCFG
 
 # ---- scratch project and the recording settings ------------------------------------------------------
 rm -rf "${DIR:?}"
@@ -103,7 +121,7 @@ key() { t send-keys -t "=$S:" "$@"; }
 launch() { # extra claude args
   t kill-session -t "=$S" 2>/dev/null
   # the broker socket is pointed nowhere so the managed permission hook falls through at once
-  t new-session -d -s "$S" -c "$DIR" -e CCDASH_BROKER_SOCK=/nonexistent \
+  t new-session -d -s "$S" -c "$DIR" -e CCDASH_BROKER_SOCK=/nonexistent -e "CLAUDE_CONFIG_DIR=$CCFG" \
     bash -lc 'claude --settings "$@"; exec bash -l' _ "$T/settings.json" "$@" || return 1
   t set -t "=$S:" @project_dir "$DIR" 2>/dev/null
 }
