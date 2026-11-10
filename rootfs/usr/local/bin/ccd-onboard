@@ -33,7 +33,7 @@ dir=$WS/$proj
 cp=$(dirname "$0")/ccd-project
 # one Claude config dir per project (0700): the kit and Basic Memory setup below run under it
 # shellcheck source=/dev/null
-. "${CCDASH_PROJECT_LIB:-${CCDASH_ACCOUNTS_LIB:-${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}}}/project-config.sh"
+. "${CCDASH_PROJECT_LIB:-${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}}/project-config.sh"
 project_config_create "$proj" || { echo "cannot create the config dir for $proj" >&2; exit 1; }
 project_env "$proj"
 # shellcheck source=/dev/null

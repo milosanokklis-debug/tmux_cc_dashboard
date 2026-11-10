@@ -12,7 +12,7 @@ set -euo pipefail
 # shellcheck source=/dev/null
 . "${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}/kit.sh"
 # shellcheck source=/dev/null
-. "${CCDASH_PROJECT_LIB:-${CCDASH_ACCOUNTS_LIB:-${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}}}/project-config.sh"
+. "${CCDASH_PROJECT_LIB:-${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}}/project-config.sh"
 KIT_HOME=${CCDASH_KIT_HOME:-/home/ccd/.ccdash/kit}
 IMAGE=${CCDASH_KIT_IMAGE:-/opt/agent-kit}
 PROJECTS=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}

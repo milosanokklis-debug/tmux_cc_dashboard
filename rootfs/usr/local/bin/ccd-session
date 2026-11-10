@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 WS=${CCDASH_WS:-/workspace} # overridden only by the tests
-PLIB=${CCDASH_PROJECT_LIB:-${CCDASH_ACCOUNTS_LIB:-/usr/local/lib/ccdash}}
+PLIB=${CCDASH_PROJECT_LIB:-/usr/local/lib/ccdash}
 # shellcheck source=/dev/null
 . "$PLIB/project-config.sh"
 # shellcheck source=/dev/null
-. "${CCDASH_KIT_LIB:-${CCDASH_PROJECT_LIB:-${CCDASH_ACCOUNTS_LIB:-/usr/local/lib/ccdash}}}/kit.sh"
+. "${CCDASH_KIT_LIB:-${CCDASH_PROJECT_LIB:-/usr/local/lib/ccdash}}/kit.sh"
 PROJECTS=${CCDASH_PROJECTS:-${HOME:-/home/ccd}/.ccdash/projects}
 t() { tmux -S "${CCDASH_TMUX:-/run/ccdash/tmux.sock}" "$@"; }
 name_for() { local b=${1##*/}; printf 'claude-%s' "${b//[^[:alnum:]_-]/_}"; }
