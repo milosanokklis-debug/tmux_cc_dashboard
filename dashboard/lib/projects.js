@@ -145,8 +145,7 @@ async function startSession({ runFile, name, prompt }) {
 }
 
 async function openProject({ workspace, runFile, name }) {
-  if (!validProject(name)) throw new HttpError(400, 'invalid project name');
-  if (!isProjectDir(workspace, name)) throw new HttpError(404, 'no such project');
+  checkProject({ workspace, name });
   return startSession({ runFile, name });
 }
 
@@ -174,6 +173,8 @@ async function addProject(body, deps) {
   const token = body.token === undefined || body.token === null || body.token === '' ? null : body.token;
   if (token !== null) github.validateToken(token);
 
+  const clash = projectDirs(deps.workspace).find((d) => d !== repo && sessionNameFor(d) === sessionNameFor(repo));
+  if (clash) throw new HttpError(409, `project ${clash} already uses the tmux session ${sessionNameFor(repo)}; rename one of them`);
   const key = `${owner}/${repo}`.toLowerCase();
   const settings = { prompt: prompt || '', token: token || '', trust, kit };
   const running = inFlight.get(key);
@@ -308,13 +309,13 @@ const WINDOW_RE = /^@\d+$/;
 const WINDOW_KINDS = ['claude', 'shell'];
 const validWindowId = (id) => typeof id === 'string' && id.length <= 12 && WINDOW_RE.test(id);
 
-// Runs ccd-session <cmd> <project> [arg]; exit 9 -> 409 login-required, 1 -> 404, 2 -> 400.
+// Runs ccd-session <cmd> <project> [arg]; exit 9 -> 409 login-required, 2 -> 400, 1 -> 404 for close only.
 async function sessionCmd(runFile, args, timeout = 30 * 1000) {
   try {
     return (await runFile('ccd-session', args, { timeout })).stdout;
   } catch (e) {
     if (e.code === LOGIN_REQUIRED_RC) throw loginRequired();
-    if (e.code === 1) throw new HttpError(404, 'no such window');
+    if (e.code === 1 && args[0] === 'close') throw new HttpError(404, 'no such window');
     if (e.code === 2) throw new HttpError(400, 'bad request');
     throw new HttpError(500, 'session command failed');
   }
@@ -327,7 +328,21 @@ function checkProject({ workspace, name }) {
 
 async function loggedIn({ runFile, name }) {
   const out = await sessionCmd(runFile, ['auth', name]);
-  return out.trim() === 'logged-in';
+  const v = out.trim();
+  return v === 'logged-in' ? true : v === 'unknown' ? null : false;
+}
+
+const SIGN_IN_HOSTS = ['claude.com', 'claude.ai', 'anthropic.com'];
+// The sign-in URL in the login pane: https on a known host (or subdomain); the oauth one wins over other links.
+function signInUrl(pane) {
+  const urls = [];
+  for (const m of String(pane).matchAll(/https:\/\/[^\s"'<>]+/g)) {
+    try {
+      const u = new URL(m[0]);
+      if (SIGN_IN_HOSTS.some((h) => u.hostname === h || u.hostname.endsWith(`.${h}`))) urls.push(m[0]);
+    } catch { /* not a URL */ }
+  }
+  return urls.find((u) => /oauth/.test(new URL(u).pathname)) ?? urls[0] ?? null;
 }
 
 // GET login: { loggedIn, url }. The URL is read live from the login pane and never stored or logged.
@@ -335,10 +350,10 @@ async function loginState({ workspace, runFile, tmux, name }) {
   checkProject({ workspace, name });
   const ok = await loggedIn({ runFile, name });
   let url = null;
-  if (!ok) {
+  if (ok !== true) {
     try {
-      const pane = await tmux.run(['capture-pane', '-p', '-J', '-t', `${sessionNameFor(name)}:login`]);
-      url = /https:\/\/[^\s"'<>]+/.exec(String(pane))?.[0] ?? null;
+      const pane = await tmux.run(['capture-pane', '-p', '-J', '-t', `=${sessionNameFor(name)}:=login`]);
+      url = signInUrl(pane);
     } catch { /* no login window yet */ }
   }
   return { loggedIn: ok, url };
@@ -391,7 +406,7 @@ async function selectWindow({ workspace, tmux, name, id }) {
   const group = rows.find((r) => r[0] === session)?.[1] || '';
   let owner;
   try { owner = String(await tmux.run(['display-message', '-p', '-t', id, '#{session_name}\t#{session_group}'])).trim().split('\t'); } catch { throw new HttpError(404, 'no such window'); }
-  if (owner[0] && owner[0] !== session && !(group && owner[1] === group)) throw new HttpError(404, 'no such window');
+  if (!owner[0] || owner[0] !== session) throw new HttpError(404, 'no such window');
   const viewers = group ? rows.filter((r) => r[0].startsWith('web-') && r[1] === group && Number(r[2]) > 0).map((r) => r[0]) : [];
   try {
     for (const t of viewers.length ? viewers : [session]) await tmux.run(['select-window', '-t', `${t}:${id}`]);
@@ -400,6 +415,6 @@ async function selectWindow({ workspace, tmux, name, id }) {
 }
 
 module.exports = {
-  validWindowId, loginState, startLogin, listWindows, newWindow, closeWindow, selectWindow, loginRequired,
+  validWindowId, loginState, startLogin, listWindows, newWindow, closeWindow, selectWindow,
   cleanText, setKit, pullProject, readProjectRecord, memoryOffline, MEMORY_OFFLINE_RC, DEFAULT_PROJECTS_DIR, validProject, sessionNameFor, normalizeRepo, listProjects, startSession, openProject, addProject,
 };

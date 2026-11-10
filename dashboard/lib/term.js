@@ -8,7 +8,6 @@ const { rejectUpgrade } = require('./security');
 const { validProject, startSession, sessionNameFor } = require('./projects');
 
 // The retired shared-login pseudo-project: never a project, refused before anything runs.
-const RETIRED_RE = /^_log[i]n$/;
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 const MAX_DIM = 500;
@@ -130,7 +129,7 @@ function createTerm(deps) {
   async function handleUpgrade(req, socket, head, { key, proj, query }) {
     const reject = (status) => rejectUpgrade(socket, status, STATUS_CODES[status]);
     if (!validProject(proj)) return reject(400);
-    if (RETIRED_RE.test(proj)) return reject(400);
+    if (proj === '_login') return reject(400);
     if (query.has('account')) return reject(400); // accounts are gone: one login per project
     if (active >= MAX_TERMS) return reject(503);
     const cols = clampDim(query.get('cols'), DEFAULT_COLS);

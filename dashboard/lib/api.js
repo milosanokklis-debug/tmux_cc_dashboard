@@ -247,7 +247,6 @@ function createApi(svc) {
       if (req.method !== 'POST') return methodNotAllowed();
       return send(res, 200, await audited('login.open', ctx, { project: name }, () => projects.startLogin(base)));
     }
-    if (m[2] === 'close' || m[2] === 'select') throw new HttpError(400, 'invalid window id'); // a window id was normalized away (.. or empty)
     if (m[3] === undefined) {
       if (get) return send(res, 200, { windows: await projects.listWindows(base) });
       if (req.method !== 'POST') return methodNotAllowed();

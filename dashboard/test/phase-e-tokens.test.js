@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createReader } = require('../lib/reader');
-const { createTokens, readTranscript, transcriptFiles, subagentPath, PRICE_NOTE } = require('../lib/tokens');
+const { createTokens, readTranscript, transcriptFiles, PRICE_NOTE } = require('../lib/tokens');
 
 const T0 = Date.parse('2026-01-10T10:00:00Z') / 1000; // 5-hour windows are epoch-aligned
 const iso = (s) => new Date(s * 1000).toISOString();
@@ -176,8 +176,6 @@ test('transcriptFiles lists the main transcript of each conversation in the stat
   const files = transcriptFiles(new Map([['S1', { transcript: main, project: 'demo' }], ['S2', { project: 'x' }], ['S3', null]]));
   assert.deepEqual(files, [{ path: main, conv: 'S1', project: 'demo', agent: 'main', agent_type: null }]);
   assert.deepEqual(transcriptFiles(null), []);
-  assert.equal(subagentPath('/x/y.txt', 'S1', 'a1'), null);
-  assert.equal(subagentPath(main, 'S1', '../x'), null);
 });
 
 test('readTranscript: tail, then follow by next_offset, complete lines only, bounded, sanitized', async () => {

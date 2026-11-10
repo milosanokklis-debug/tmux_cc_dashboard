@@ -327,10 +327,4 @@ function transcriptFiles(records) {
   return out;
 }
 
-// <dir>/<sid>.jsonl -> <dir>/<sid>/subagents/agent-<id>.jsonl (Claude Code 2.1.x layout)
-function subagentPath(main, sid, agentId) {
-  if (typeof main !== 'string' || !main.endsWith('.jsonl') || !/^[A-Za-z0-9_.:-]{1,100}$/.test(agentId)) return null;
-  return path.join(path.dirname(main), sid, 'subagents', `agent-${agentId.replace(/^agent-/, '')}.jsonl`);
-}
-
-module.exports = { createTokens, readTranscript, transcriptFiles, subagentPath, PRICE_NOTE };
+module.exports = { createTokens, readTranscript, transcriptFiles, PRICE_NOTE };
