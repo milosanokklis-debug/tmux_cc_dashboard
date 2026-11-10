@@ -14,8 +14,9 @@ setup() {
   export FAKE_CLAUDE_FIXTURES=$ROOT/tests/fixtures/2.1.317
   export FAKE_CLAUDE_MCP=connected
   export CCDASH_MCP_TIMEOUT=5
-  export CCDASH_ACCOUNTS_LIB=$ROOT/rootfs/usr/local/lib/ccdash CCDASH_ACCOUNTS_DIR=$BATS_TEST_TMPDIR/accounts
+  export CCDASH_PROJECT_LIB=$ROOT/rootfs/usr/local/lib/ccdash CCDASH_CONFIG_ROOT=$BATS_TEST_TMPDIR/projects
   mkdir -p "$HOME/bin" "$CCDASH_WS/demo" "$CCDASH_STATE"
+  mkdir -p "$FAKE_CLAUDE_HOME/accounts/demo"; : >"$FAKE_CLAUDE_HOME/accounts/demo/logged-in" # signed in (fake claude)
   ln -s "$ROOT/tests/fake-claude/claude" "$HOME/bin/claude"
   export PATH=$HOME/bin:$PATH
   printf 'export PATH=%s/bin:$PATH\n' "$HOME" >"$HOME/.bash_profile" # bash -l resets PATH
@@ -26,7 +27,7 @@ teardown() { tmux -S "$CCDASH_TMUX" kill-server 2>/dev/null || true; }
 
 sleeping_conversation() { # a state record that wake accepts
   SID=11111111-2222-4333-8444-555555555555
-  jq -n --arg p "$CCDASH_WS/demo" '{project: $p}' >"$CCDASH_STATE/$SID.json"
+  jq -n "{project: \"demo\"}" >"$CCDASH_STATE/$SID.json"
 }
 
 @test "start passes the gate when basic-memory is connected" {
@@ -69,6 +70,7 @@ sleeping_conversation() { # a state record that wake accepts
   rm -f "$HOME/bin/claude"
   cat >"$HOME/bin/claude" <<'EOS'
 #!/bin/bash
+[ "$1 $2" = "auth status" ] && exit 0
 [ "$1 $2" = "mcp list" ] && printf 'other: x - \xe2\x9c\x93 Connected\nbasic-memory: y - \xe2\x9c\x97 Failed to connect\n'
 EOS
   chmod +x "$HOME/bin/claude"
@@ -79,7 +81,7 @@ EOS
 fake_mcp_list() { # fake_mcp_list <printf format>: a claude whose `mcp list` prints exactly that line
   rm -f "$HOME/bin/claude"
   printf "$1\n" >"$BATS_TEST_TMPDIR/mcp-list"
-  printf '#!/bin/bash\n[ "$1 $2" = "mcp list" ] && cat %q\n' "$BATS_TEST_TMPDIR/mcp-list" >"$HOME/bin/claude"
+  printf '#!/bin/bash\n[ "$1 $2" = "auth status" ] && exit 0\n[ "$1 $2" = "mcp list" ] && cat %q\n' "$BATS_TEST_TMPDIR/mcp-list" >"$HOME/bin/claude"
   chmod +x "$HOME/bin/claude"
 }
 
@@ -116,15 +118,19 @@ esac
 EOS
   chmod +x "$fakebm"
   export FAKE_BM_LOG=$BATS_TEST_TMPDIR/bm.log CCDASH_BM=$fakebm CCDASH_MEMORY_HOME=$HOME
+  log=$FAKE_CLAUDE_HOME/accounts/demo/mcp-add.log # the fake keeps mcp state per config dir (the project's)
+  FAKE_CLAUDE_MCP=none run "$BIN/ccd-memory-init" demo
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$log")" -eq 1 ]
+  grep -q -- 'add --scope user basic-memory -e' "$log"
+  grep -q -- ' -- .* mcp$' "$log"
+  grep -q -- "BASIC_MEMORY_HOME=$HOME/basic-memory" "$log"
+  [ "$(stat -c %a "$CCDASH_CONFIG_ROOT/demo")" = 700 ]
+  FAKE_CLAUDE_MCP=none run "$BIN/ccd-memory-init" demo
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$log")" -eq 1 ]
   FAKE_CLAUDE_MCP=none run "$BIN/ccd-memory-init"
   [ "$status" -eq 0 ]
-  [ "$(wc -l <"$FAKE_CLAUDE_HOME/mcp-add.log")" -eq 1 ]
-  grep -q -- 'add --scope user basic-memory -e' "$FAKE_CLAUDE_HOME/mcp-add.log"
-  grep -q -- ' -- .* mcp$' "$FAKE_CLAUDE_HOME/mcp-add.log"
-  grep -q -- "BASIC_MEMORY_HOME=$HOME/basic-memory" "$FAKE_CLAUDE_HOME/mcp-add.log"
-  FAKE_CLAUDE_MCP=none run "$BIN/ccd-memory-init"
-  [ "$status" -eq 0 ]
-  [ "$(wc -l <"$FAKE_CLAUDE_HOME/mcp-add.log")" -eq 1 ]
   ! grep -q 'project add\|project default' "$FAKE_BM_LOG"
 }
 

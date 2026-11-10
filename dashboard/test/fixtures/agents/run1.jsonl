@@ -1,4 +1,0 @@
-{"ev":"session","ts":"2026-01-10T10:00:00Z","sid":"run1","pane":"%3","win":"claude-demo:0","project":"/workspace/demo","agent_id":null,"agent_type":null,"agent_transcript":null}
-{"ev":"start","ts":"2026-01-10T10:01:00Z","sid":"run1","pane":"%3","win":"claude-demo:0","project":"/workspace/demo","agent_id":"a1","agent_type":"Explore","agent_transcript":"__TRANSCRIPTS__/sub-a1.jsonl"}
-{"ev":"start","ts":"2026-01-10T10:02:00Z","sid":"run1","pane":"%3","win":"claude-demo:0","project":"/workspace/demo","agent_id":"a2","agent_type":"general-purpose","agent_transcript":"__TRANSCRIPTS__/missing.jsonl"}
-{"ev":"stop","ts":"2026-01-10T10:03:00Z","sid":"run1","pane":"%3","win":"claude-demo:0","project":"/workspace/demo","agent_id":"a1","agent_type":"Explore","agent_transcript":"__TRANSCRIPTS__/sub-a1.jsonl"}

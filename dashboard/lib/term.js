@@ -5,9 +5,9 @@
 const crypto = require('node:crypto');
 const { STATUS_CODES } = require('node:http');
 const { rejectUpgrade } = require('./security');
-const { validProject, startSession } = require('./projects');
-const { validAccount, DEFAULT_ACCOUNT } = require('./accounts');
+const { validProject, startSession, sessionNameFor } = require('./projects');
 
+// The retired shared-login pseudo-project: never a project, refused before anything runs.
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 const MAX_DIM = 500;
@@ -129,9 +129,8 @@ function createTerm(deps) {
   async function handleUpgrade(req, socket, head, { key, proj, query }) {
     const reject = (status) => rejectUpgrade(socket, status, STATUS_CODES[status]);
     if (!validProject(proj)) return reject(400);
-    const account = query.get('account') ?? DEFAULT_ACCOUNT;
-    if (!validAccount(account)) return reject(400);
-    if (proj === '_login' && account === DEFAULT_ACCOUNT) return reject(400); // the login window is for a named account
+    if (proj === '_login') return reject(400);
+    if (query.has('account')) return reject(400); // accounts are gone: one login per project
     if (active >= MAX_TERMS) return reject(503);
     const cols = clampDim(query.get('cols'), DEFAULT_COLS);
     const rows = clampDim(query.get('rows'), DEFAULT_ROWS);
@@ -143,7 +142,14 @@ function createTerm(deps) {
     let freed = false;
     const freeSlot = () => { if (!freed) { freed = true; active--; } }; // exactly once, whoever gets there first
     try {
-      const sessionName = await startSession({ runFile, name: proj, account });
+      let sessionName;
+      try {
+        sessionName = await startSession({ runFile, name: proj });
+      } catch (e) {
+        // logged out: do not start Claude; show the session (its login window) if there is one
+        if (e.extra?.error !== 'login-required') throw e;
+        sessionName = sessionNameFor(proj);
+      }
       if (socket.destroyed) return undefined;
       wss.handleUpgrade(req, socket, head, (ws) => {
         attached = true; // the socket is a WebSocket now: from here on errors close it, never write an HTTP reject

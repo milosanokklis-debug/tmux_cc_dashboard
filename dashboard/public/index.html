@@ -7,7 +7,7 @@
 <title>ccdash</title>
 <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#111317" media="(prefers-color-scheme: dark)">
-<meta name="description" content="ccdash: manage Claude Code sessions in tmux, with a browser terminal and an agent tree.">
+<meta name="description" content="ccdash: manage Claude Code sessions in tmux, with a browser terminal and a window list per project.">
 <link rel="icon" href="/favicon.ico">
 <link rel="stylesheet" href="/assets/xterm.css">
 <link rel="stylesheet" href="/assets/style.css">
@@ -45,37 +45,47 @@
   <div class="term-bar">
     <a href="#/" id="back" class="btn btn-ghost"><span aria-hidden="true">&larr;</span> Back<span class="back-more"> to projects</span></a>
     <span id="term-title" class="term-title"></span>
-    <label id="term-account-wrap" class="account-pick" hidden>Account <select id="term-account" data-testid="account-select-term"></select></label>
     <span class="term-actions">
       <button type="button" id="copy" class="btn" disabled aria-keyshortcuts="Control+Shift+C" title="Copy the selected terminal text (Ctrl+Shift+C)">Copy selection</button>
       <button type="button" id="paste" class="btn" aria-keyshortcuts="Control+Shift+V" title="Paste from the clipboard (Ctrl+Shift+V)">Paste</button>
     </span>
     <span class="conn" id="conn"><span id="conn-icon" class="conn-icon" aria-hidden="true"></span><span id="conn-text" role="status">Connecting…</span></span>
     <button type="button" id="reconnect" class="btn" hidden>Reconnect</button>
-    <button type="button" id="tree-toggle" class="btn btn-ghost tree-toggle" aria-expanded="true" aria-controls="tree-body">Agents</button>
+    <button type="button" id="tree-toggle" class="btn btn-ghost tree-toggle" aria-expanded="true" aria-controls="tree-body">Windows</button>
   </div>
   <div class="term-split">
     <section class="term-pane" aria-label="Terminal">
-      <button type="button" id="skip-agents" class="btn skip-link">Skip to agents</button>
+      <button type="button" id="skip-agents" class="btn skip-link">Skip to windows</button>
+      <section id="signin" class="signin" aria-labelledby="signin-title" data-testid="signin" hidden>
+        <h2 id="signin-title" class="signin-title">Sign in to Claude</h2>
+        <p class="signin-help">This project needs its own Claude sign-in. Open the link, sign in, then paste the code you get into the terminal below.</p>
+        <p class="signin-actions"><a id="signin-link" class="btn btn-primary" href="#" target="_blank" rel="noopener noreferrer" hidden>Open sign-in link</a>
+        <button type="button" id="signin-start" class="btn btn-primary" hidden>Start Claude</button></p>
+        <p id="signin-status" class="signin-status" role="status" aria-live="polite"></p>
+      </section>
       <div id="term" class="term"></div>
-      <p id="login-hint" class="term-hint login-hint" role="status" data-testid="login-hint" hidden>Run /login in this window. Claude asks once whether to trust the folder.</p>
-      <p id="term-hint" class="term-hint"><kbd>Tab</kbd> stays in the terminal. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&uarr;</kbd> leaves it for the agent panel, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&darr;</kbd> returns. Drag to select and copy (tmux). Hold <kbd>Shift</kbd> while dragging to select with the browser instead.</p>
+      <p id="term-hint" class="term-hint"><kbd>Tab</kbd> stays in the terminal. To reach the Windows panel, use the Windows button in the toolbar or the Skip to windows link that appears when you tab to it, or press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&uarr;</kbd>; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>&darr;</kbd> returns. Drag to select and copy (tmux). Hold <kbd>Shift</kbd> while dragging to select with the browser instead.</p>
     </section>
-    <aside class="tree-pane" aria-labelledby="tree-title">
+    <aside class="tree-pane">
       <button type="button" id="skip-term" class="btn skip-link">Back to terminal</button>
-      <h2 id="tree-title" class="tree-title">Agents</h2>
-      <div id="tree-body" class="tree-body">
-        <div class="tree-options">
-          <label class="check"><input type="checkbox" id="tree-all-projects"> All projects</label>
-          <label class="check"><input type="checkbox" id="tree-all-time"> Show ended / older than 24h</label>
+      <section id="windows" class="windows" aria-labelledby="tree-title">
+        <h2 id="tree-title" class="tree-title">Windows</h2>
+        <div id="tree-body" class="tree-body">
+          <div class="win-new">
+            <button type="button" id="win-new-claude" class="btn btn-primary">New Claude window</button>
+            <button type="button" id="win-new-shell" class="btn">New shell</button>
+          </div>
+          <p id="win-status" class="sr-only" role="status" aria-live="polite"></p>
+          <p id="win-loading" class="muted" role="status" hidden>Loading windows…</p>
+          <div id="win-error" class="inline-error win-error" hidden><span role="alert">Could not load windows.</span> <button type="button" id="win-retry" class="btn">Retry</button></div>
+          <ul id="win-list" class="win-list" aria-label="Windows of this project"></ul>
+          <p id="win-empty" class="muted" hidden>No windows yet. Use New Claude window or New shell.</p>
+          <div id="conv-box" class="conv-box" hidden>
+            <h3 class="conv-title">Conversations</h3>
+            <ul id="conv-list" class="win-list" aria-label="Conversations of this project"></ul>
+          </div>
         </div>
-        <p class="tree-legend muted">Tags: <b>idle</b> no recent activity, <b>quiet</b> running but silent, <b>outside tmux</b> not in a tmux window here.</p>
-        <p id="tree-status" class="sr-only" role="status"></p>
-        <p id="tree-error" class="inline-error" role="alert" hidden>Could not load agent tree.</p>
-        <div id="approvals" class="approvals"></div>
-        <ul id="tree" class="tree" aria-label="Agent tree"></ul>
-        <p id="tree-empty" class="muted" hidden></p>
-      </div>
+      </section>
     </aside>
   </div>
 </div>
@@ -117,22 +127,6 @@
         <p id="gid-status" class="gid-status" role="status"></p>
         <div class="dialog-actions dialog-actions-start">
           <button type="submit" id="gid-save" class="btn" data-testid="git-save">Save identity</button>
-        </div>
-      </form>
-    </section>
-    <section class="settings-section" aria-labelledby="acct-h" data-testid="settings-accounts">
-      <h3 id="acct-h">Claude accounts</h3>
-      <ul id="acct-list" class="acct-list" aria-labelledby="acct-h" data-testid="account-list"></ul>
-      <form id="acct-form" class="fields" novalidate>
-        <div class="field">
-          <label for="acct-name">New account name</label>
-          <input id="acct-name" name="name" type="text" maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="acct-hint acct-name-err" data-testid="account-add-name">
-          <p id="acct-hint" class="hint">Lowercase letters, digits, - and _. Up to 32 characters, starting with a letter or digit. Adding it opens a terminal where you sign in.</p>
-          <p id="acct-name-err" class="field-error"></p>
-        </div>
-        <p id="acct-error" class="inline-error" role="alert"></p>
-        <div class="dialog-actions dialog-actions-start">
-          <button type="submit" id="acct-add" class="btn" data-testid="account-add-submit">Add account</button>
         </div>
       </form>
     </section>
@@ -191,7 +185,6 @@
     </div>
     <section class="settings-section" aria-labelledby="usage-limits-h">
       <h3 id="usage-limits-h">Plan limits</h3>
-      <p id="usage-account" class="hint" data-testid="usage-account" hidden></p>
       <div id="usage-error" class="usage-error" role="status" hidden></div>
       <div id="usage-gauges" class="gauges"></div>
       <p id="usage-source" class="hint" data-testid="usage-source"></p>
@@ -207,20 +200,6 @@
       <button type="button" id="usage-close" class="btn">Close</button>
     </div>
   </div>
-</dialog>
-
-<dialog id="transcript-dialog" class="dialog sheet" aria-labelledby="tx-title" data-testid="transcript-panel">
-  <div class="sheet-head">
-    <h2 id="tx-title">Transcript</h2>
-    <button type="button" id="tx-close" class="btn" data-testid="transcript-close">Close</button>
-  </div>
-  <p class="hint">Read-only. This view follows the agent’s transcript while it is open.</p>
-  <p id="tx-status" class="tx-status" role="status" data-testid="transcript-status"></p>
-  <div class="tx-wrap">
-    <div id="tx-log" class="tx-log" role="log" aria-live="off" tabindex="0" aria-label="Agent transcript (read-only)" data-testid="transcript-log"></div>
-    <button type="button" id="tx-jump" class="btn tx-jump" hidden data-testid="transcript-jump">New output below</button>
-  </div>
-  <p id="tx-empty" class="muted" hidden>No entries yet.</p>
 </dialog>
 
 <dialog id="paste-dialog" class="dialog" aria-labelledby="paste-title" aria-describedby="paste-desc">
@@ -251,10 +230,6 @@
         <label for="add-token">Fine-grained token <span class="optional">(optional)</span></label>
         <input id="add-token" name="token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="add-token-hint">
         <p id="add-token-hint" class="hint">Needed for private repos or to push. It is never shown again after you submit. Scope it to this repository only: Contents read/write and Metadata read.</p>
-      </div>
-      <div class="field" id="add-account-field" hidden>
-        <label for="add-account">Account</label>
-        <select id="add-account" name="account" data-testid="account-select-add"></select>
       </div>
       <div class="field">
         <label for="add-prompt">First prompt <span class="optional">(optional)</span></label>
@@ -292,10 +267,10 @@
 <script src="/assets/events.js" defer></script>
 <script src="/assets/projects.js" defer></script>
 <script src="/assets/controls.js" defer></script>
-<script src="/assets/tree.js" defer></script>
+<script src="/assets/windows.js" defer></script>
+<script src="/assets/signin.js" defer></script>
 <script src="/assets/settings.js" defer></script>
 <script src="/assets/usage.js" defer></script>
-<script src="/assets/transcript.js" defer></script>
 <script src="/assets/terminal.js" defer></script>
 <script src="/assets/selftest.js" defer></script>
 <script src="/assets/app.js" defer></script>

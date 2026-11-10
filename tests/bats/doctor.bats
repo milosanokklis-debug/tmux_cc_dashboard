@@ -16,6 +16,10 @@ setup() {
   export CCDASH_SELFTEST_FILE=$TD/selftest.json
   export CCDASH_DOCKER=$TD/docker CCDASH_EGRESS_ALLOW=$TD/allow
   mkdir -p "$HOME/bin" "$HOME/.ccdash" "$CCDASH_WS/demo"
+  # one signed-in project: --live runs claude under its config dir
+  export CCDASH_PROJECT_LIB=$ROOT/rootfs/usr/local/lib/ccdash CCDASH_CONFIG_ROOT=$TD/cfg
+  mkdir -p "$CCDASH_CONFIG_ROOT/demo" "$FAKE_CLAUDE_HOME/accounts/demo"
+  : >"$FAKE_CLAUDE_HOME/accounts/demo/logged-in"
   ln -s "$ROOT/tests/fake-claude/claude" "$HOME/bin/claude"
   printf 'export PATH=%s/bin:$PATH\n' "$HOME" >"$HOME/.bash_profile"
   export PATH=$HOME/bin:$ROOT/rootfs/usr/local/bin:$PATH

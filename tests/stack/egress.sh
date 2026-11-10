@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317 # functions are invoked indirectly (trap, until_ok, helpers)
 # Phase F egress on a test compose stack: the real compose.egress.yaml (the production override) layered
 # on the test stack, so ccdash sits on an internal network and the only way out is the allowlist proxy.
 # A stand-in container on the proxy's outside network plays GitHub (git over http) and a push service
@@ -11,6 +12,8 @@
 # (ccdash:ci, built from the checkout if missing), KEEP=1 (leave the stack up), DEBUG=1.
 # shellcheck disable=SC2329,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
 set -euo pipefail
+# shellcheck source=tests/stack/lib-login.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-login.sh"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
 PORT=${CCDASH_TEST_PORT:-7691}
@@ -127,8 +130,10 @@ eq "a CONNECT to an allowed host on a port that is not allowed is refused" "$(cc
 echo "== git clone and pull through the proxy (onboarding)"
 ccd git config --global url.http://standin:8080/demo.git.insteadOf https://github.com/octo/demo.git
 r=$(body POST /api/projects '{"repo":"octo/demo"}')
-eq "add clones through the proxy and starts a session" "$(jq -r .session <<<"$r")" claude-demo
+eq "add clones through the proxy (signed out, so no session yet)" "$(jq -r .session <<<"$r")" null
 eq "the clone is in the workspace" "$(ccd cat /workspace/demo/f)" one
+stack_login demo
+eq "open starts a session once signed in" "$(body POST /api/projects/demo/open | jq -r .session)" claude-demo
 check "the proxy log shows the git traffic to the stand-in" proxy_has 'ALLOW standin:8080'
 # shellcheck disable=SC2016 # the loop runs in the container's shell
 claude_env() { ccd sh -c 'for p in $(pgrep -u ccd -x claude); do tr "\0" "\n" </proc/$p/environ; done' | sort -u; }
@@ -151,8 +156,8 @@ done
 eq "subscribe accepts a real vendor host" "$(status POST /api/push/subscribe "$(jq -nc --argjson s "$sub" '{subscription: ($s + {endpoint: "https://fcm.googleapis.com/fcm/send/abc"})}')")" 200
 eq "subscribe to the stand-in again (the vendor one replaced it)" "$(status POST /api/push/subscribe "$(jq -nc --argjson s "$sub" '{subscription: $s}')")" 200
 ccd mkdir -p /workspace/pushy
+stack_login pushy
 ccd ccd-session start pushy >/dev/null
-live() { curl -sf -b "$jar" -H "Origin: $origin" -H 'X-CCDash: 1' "$url/api/tree?all=1" | jq -r --arg p "$1" '[.projects[] | select(.project == $p) | .conversations[] | select(.status != "ended" and .status != "sleeping")][0] | '"$2"; }
 is_status() { [ "$(live pushy '.status // empty')" = "$1" ]; }
 until_ok 30 "pushy is waiting" is_status waiting
 api POST "/api/conversations/$(live pushy '.sid')/prompt" '{"text":"/perm"}' >/dev/null

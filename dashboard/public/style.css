@@ -225,7 +225,7 @@ body.app .term-split { display: grid; grid-template-columns: minmax(0, 1fr) 24re
 body.app .term-split.tree-collapsed { grid-template-columns: minmax(0, 1fr) auto; }
 body.app .term-pane {
   position: relative; min-width: 0; min-height: 0; background: var(--term-bg); padding: .5rem 0 0 .5rem; box-sizing: border-box;
-  display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto;
+  display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto;
 }
 body.app .term { min-width: 0; }
 body.app .term-hint { margin: 0; min-width: 0; box-sizing: border-box; overflow-wrap: anywhere; padding: .3rem .75rem .4rem 0; font-size: .8125rem; color: var(--muted); background: var(--term-bg); }
@@ -245,7 +245,7 @@ body.app .tree-toggle[aria-expanded="true"]::after { transform: rotate(45deg) tr
 body.app .term .xterm { height: 100%; }
 body.app .term .xterm-viewport { overflow-y: auto; background-color: transparent !important; }
 
-/* Agent tree */
+/* Windows panel */
 body.app .tree-pane { position: relative; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--surface); border-left: 1px solid var(--line); }
 body.app .tree-title { font-size: .95rem; font-weight: 600; color: var(--text); padding: .7rem .9rem .3rem; }
 body.app .tree-body { min-height: 0; overflow: auto; padding: 0 .9rem 1rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: .6rem; align-content: start; }
@@ -287,7 +287,7 @@ body.app .wake { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem
 body.app .wake-note { flex: 1 1 12rem; margin: 0; color: var(--muted); font-size: .8125rem; overflow-wrap: anywhere; }
 body.app .node .node .row { padding-left: 0; }
 
-/* Phones: terminal on top, agent panel below and collapsible */
+/* Phones: terminal on top, Windows panel below and collapsible */
 @media (max-width: 720px) {
   body.app .term-split { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
   body.app .term-split.tree-collapsed { grid-template-columns: minmax(0, 1fr); }
@@ -401,7 +401,7 @@ body.app .dialog .btn { white-space: normal; }
 @media (max-width: 400px) {
   body.app .topbar { padding: .3rem .5rem; gap: .25rem; }
   body.app .btn { padding: 0 .65rem; }
-  /* Terminal toolbar: row 1 back / agents, row 2 Copy / Paste / Reconnect, row 3 title and connection label. */
+  /* Terminal toolbar: row 1 back / windows, row 2 Copy / Paste / Reconnect, row 3 title and connection label. */
   body.app .term-bar { gap: .25rem .5rem; padding: .3rem .5rem; }
   body.app .back-more { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   body.app .term-bar #back { order: 1; }
@@ -579,28 +579,39 @@ body.app .card.is-memory-offline { border-color: var(--err); box-shadow: inset 0
 .dialog .kit-failed[hidden] { display: none; }
 .dialog #kit-section .btn { min-height: 44px; }
 
-/* Claude accounts: shown only when more than one exists (the elements start hidden). */
-body.app .account-pick { display: inline-flex; align-items: center; gap: .4rem; font-size: .875rem; color: var(--muted); }
-body.app .account-pick select, body.app .card-account select, .dialog select {
-  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line-ctl); border-radius: 6px;
-  padding: .25rem .5rem; min-height: var(--ctl); box-sizing: border-box; max-width: 100%;
-}
-.dialog .field select { width: 100%; padding: .5rem .65rem; }
-body.app .card-account { flex: 1 1 100%; display: flex; align-items: center; gap: .5rem; font-size: .8125rem; color: var(--muted); }
-body.app .card-account select { flex: 1 1 auto; min-width: 0; }
-body.app .conv-account { font-size: .75rem; color: var(--muted); font-family: var(--mono); max-width: 100%; overflow-wrap: anywhere; }
-body.app .login-hint { color: var(--text); }
-@media (pointer: coarse) { body.app .account-pick select, body.app .card-account select { min-height: 44px; } }
-/* #acct-error is a live region: it stays rendered (zero height) when empty so announcements work. */
-.dialog #acct-error:empty { display: block; visibility: hidden; height: 0; padding: 0; }
-.dialog .acct-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
-.dialog .acct-list li { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
-.dialog .acct-name { font-family: var(--mono); font-weight: 600; overflow-wrap: anywhere; }
-@media (max-width: 400px) { body.app .term-bar .account-pick { order: 6; } }
-
 /* Kit action buttons: one line each; stacked full width on narrow screens. */
 .dialog #kit-section .dialog-actions .btn { white-space: nowrap; }
 @media (max-width: 400px) {
   .dialog #kit-section .dialog-actions { flex-direction: column; align-items: stretch; }
   .dialog #kit-section .dialog-actions .btn { width: 100%; white-space: normal; }
 }
+
+/* ===== Windows panel and sign-in view ===== */
+body.app .windows { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+body.app .win-new { display: flex; flex-wrap: wrap; gap: .5rem; }
+body.app .win-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
+body.app .win { display: flex; align-items: center; gap: .5rem; padding: .15rem .25rem .15rem .15rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); cursor: pointer; min-width: 0; flex-wrap: wrap; }
+body.app .win.is-active { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+body.app .win:hover { background: var(--surface-2); }
+body.app .win-pick { flex: 1 1 8rem; align-items: center; min-height: 2.25rem; min-width: 0; display: flex; align-items: baseline; justify-content: flex-start; gap: .6rem; text-align: left; white-space: normal; }
+body.app .win-name { font: 600 .875rem/1.3 var(--mono); overflow-wrap: anywhere; }
+body.app .win-kind { font-size: .75rem; color: var(--muted); }
+body.app .win .chip { flex: none; }
+body.app .win-close { flex: none; }
+body.app .conv-box { display: grid; gap: .3rem; }
+body.app .conv-title { font-size: .875rem; font-weight: 600; color: var(--muted); }
+body.app .conv-box .node { padding-left: 0; }
+body.app .conv-box .node::before, body.app .conv-box .node::after { display: none; }
+@media (pointer: coarse) { body.app .win-pick, body.app .win-close { min-height: 44px; } }
+
+body.app .signin { display: grid; gap: .4rem; padding: .7rem .9rem; margin: 0 .75rem .5rem 0; border: 1px solid var(--accent); border-radius: 8px; background: var(--surface); color: var(--text); min-width: 0; }
+body.app .signin[hidden] { display: none; }
+body.app .signin-title { font-size: 1rem; font-weight: 600; }
+body.app .signin-help, body.app .signin-status { margin: 0; font-size: .875rem; overflow-wrap: anywhere; }
+body.app .signin-status { color: var(--muted); }
+body.app .signin-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0; }
+body.app .signin-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+body.app .signin-actions [hidden] { display: none; }
+body.app .win-error { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+body.app .win-error[hidden] { display: none; }
+body.app .win-new [aria-disabled="true"] { opacity: .7; cursor: progress; }

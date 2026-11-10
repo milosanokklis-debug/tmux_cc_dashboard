@@ -21,7 +21,7 @@ field() { jq -r ".$1" "$D/$SID.json"; }
   [ "$status" -eq 0 ]
   [ "$(field state)" = waiting ]
   [ "$(field event)" = SessionStart ]
-  [ "$(field project)" = /workspace/demo ]
+  [ "$(field project)" = demo ]
   [ "$(field pane)" = %4 ]
   [ "$(field transcript)" = /t.jsonl ]
   [ "$(field waiting_since)" != null ]
@@ -36,7 +36,7 @@ field() { jq -r ".$1" "$D/$SID.json"; }
   sleep 1
   unset TMUX_PANE
   CLAUDE_PROJECT_DIR=/workspace/other "$STATE" waiting < <(ev Stop)
-  [ "$(field project)" = /workspace/demo ]
+  [ "$(field project)" = demo ]
   [ "$(field pane)" = %4 ]
   [ "$(field waiting_since)" = "$since" ]
   "$STATE" working < <(ev UserPromptSubmit)
@@ -46,7 +46,7 @@ field() { jq -r ".$1" "$D/$SID.json"; }
 
 @test "project falls back to cwd; resumed_from comes from CCDASH_RESUMED_FROM" {
   CCDASH_RESUMED_FROM=aaaa "$STATE" waiting < <(ev SessionStart)
-  [ "$(field project)" = /workspace/cwd ]
+  [ "$(field project)" = cwd ]
   [ "$(field resumed_from)" = aaaa ]
 }
 
@@ -127,10 +127,8 @@ field() { jq -r ".$1" "$D/$SID.json"; }
   [ "$(field event)" = PostToolUse ]
 }
 
-@test "CCDASH_HIDDEN=1 (the /usage helper Claude) records no state and no agent event" {
+@test "CCDASH_HIDDEN=1 (the /usage helper Claude) records no state" {
   CCDASH_HIDDEN=1 run "$STATE" waiting < <(ev SessionStart)
   [ "$status" -eq 0 ]
-  CCDASH_HIDDEN=1 run "$ROOT/rootfs/usr/local/lib/ccdash/hooks/agents.sh" session < <(ev SessionStart)
-  [ "$status" -eq 0 ]
-  [ ! -e "$HOME/.ccdash/sessions" ] && [ ! -e "$HOME/.ccdash/agents" ] || [ -z "$(ls -A "$HOME/.ccdash/sessions" "$HOME/.ccdash/agents" 2>/dev/null)" ]
+  [ ! -e "$HOME/.ccdash/sessions" ] || [ -z "$(ls -A "$HOME/.ccdash/sessions" 2>/dev/null)" ]
 }

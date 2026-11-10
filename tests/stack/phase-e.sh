@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317 # functions are invoked indirectly (trap, until_ok, helpers)
 # Phase E on a test compose stack, inside the real image (so the ccd-reader s6 service runs): the reader
 # socket and what it refuses, the usage gauges (/api/usage against the fake claude's rate_limits, then
-# "unknown" when the statusline has none), a subagent in /api/tree within 2 s with a readable transcript,
+# "unknown" when the statusline has none), a readable main transcript,
 # token totals against a sum computed here with jq, CPU and memory of the dashboard's node process with
 # 10 conversations (idle with one /events client, and with the fake claudes active), and a headless
 # Chromium (tests/playwright/specs/phase-e.test.js) at 390x844 and 1280x800 that opens the Usage panel,
-# the tree and a subagent transcript, takes screenshots and checks that an idle cards view makes no HTTP
+# the Windows panel, takes screenshots and checks that an idle cards view makes no HTTP
 # requests. Needs docker (or CCDASH_DOCKER, e.g. "sudo -n -u ccdash /usr/local/bin/ccdash-docker"), curl,
 # jq and tar. Own project and volumes (ccdashtest-e, or per part below), removed at the end.
 # PHASE_E_PART=core|cpu|ui runs one third (CI runs them as three legs, "stack (phase-e core)", "(phase-e cpu)" and "(phase-e ui)"); unset or empty
 # runs all. core: reader socket, usage gauges, subagent, refusals, token totals (project ccdashtest-e-core, port 7694); cpu: 10 conversations,
-# one /events client, idle and active CPU/memory samples (project ccdashtest-e-cpu, port 7695); ui: 10 conversations (l1 with a subagent),
+# one /events client, idle and active CPU/memory samples (project ccdashtest-e-cpu, port 7695); ui: 10 conversations,
 # quiet-down, browser (project ccdashtest-e-ui, port 7696); unset: project ccdashtest-e, port 7694.
-# Env: CCDASH_TEST_PORT (7694, 7695 for cpu, 7696 for ui), CCDASH_IMAGE (ccdash:ci, built from the checkout if missing; remove it to
-# pick up changes), CCDASH_SHOTS (directory for the screenshots, default tests/stack/out, gitignored),
+# Env: CCDASH_TEST_PORT (7694, 7695 for cpu, 7696 for ui), CCDASH_IMAGE (ccdash:ci, built from the checkout if missing or older than the newest
+# file in the tree; the staleness check is skipped when CI is set, the workflow builds the image just before), CCDASH_SHOTS (directory for the screenshots, default tests/stack/out, gitignored),
 # SAMPLE_SEC (CPU sampling window, default 35, at least 30 to count), ACTIVE_MAX_CPU (limit while the fake claudes are active, default 3), KEEP=1 (leave the stack up), DEBUG=1.
 # shellcheck disable=SC2329,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
 set -euo pipefail
+# shellcheck source=tests/stack/lib-login.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-login.sh"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
 part=${PHASE_E_PART:-}
@@ -48,7 +51,7 @@ compose() { (cd / && $D compose -p "$P" -f - "$@" < <(sed -e "s|@IMAGE@|$CCDASH_
 ccd() { compose exec -T -u ccd ccdash "$@"; }
 tm() { ccd tmux -S /run/ccdash/tmux.sock "$@"; }
 cleanup() {
-  [ -n "$bg" ] && kill "$bg" 2>/dev/null || true
+  if [ -n "$bg" ]; then kill "$bg" 2>/dev/null || true; fi
   if [ -z "${KEEP:-}" ]; then
     $D rm -f "$PW_NAME" >/dev/null 2>&1 || true
     compose down -v --remove-orphans >/dev/null 2>&1 || true
@@ -69,7 +72,13 @@ eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; fi
 tar_ctx() { (cd "$root" && git ls-files -co --exclude-standard -- . ':!dashboard/node_modules' | grep -v '^docs/handoff\|^\.claude' | tar -c -T -); }
 
 # ---------------------------------------------------------------- images
-if ! $D image inspect "$base" >/dev/null 2>&1; then
+stale=""
+if [ -z "${CI:-}" ] && $D image inspect "$base" >/dev/null 2>&1; then
+  built=$(date -d "$($D image inspect -f '{{.Created}}' "$base")" +%s)
+  newest=$(cd "$root" && git ls-files -co --exclude-standard -- . ':!dashboard/node_modules' | grep -v '^docs/handoff\|^\.claude' | xargs -d '\n' stat -c %Y 2>/dev/null | sort -n | tail -n 1)
+  [ "${newest:-0}" -le "$built" ] || stale=1
+fi
+if [ -n "$stale" ] || ! $D image inspect "$base" >/dev/null 2>&1; then
   set -a; . "$root/.env.example"; set +a
   tar_ctx | $D build -q -t "$base" --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION" --build-arg "S6_OVERLAY_VERSION=$S6_OVERLAY_VERSION" --build-arg "BASIC_MEMORY_VERSION=$BASIC_MEMORY_VERSION" --build-arg "KIT_REPO=$KIT_REPO" --build-arg "KIT_REF=$KIT_REF" - >/dev/null
 fi
@@ -89,13 +98,12 @@ login() { curl -sf -c "$jar" -H "Origin: $origin" -H 'X-CCDash: 1' -H 'content-t
 until_ok 20 "login" login
 api() { curl -sf -b "$jar" -H "Origin: $origin" -H 'X-CCDash: 1' "$@"; }
 req() { curl -s -o /dev/null -b "$jar" -X "$1" -H "Origin: $origin" -H 'X-CCDash: 1' -H 'content-type: application/json' -d "${3:-{\}}" "$url$2"; } # req METHOD PATH [JSON]
-tree() { api "$url/api/tree?all=1"; }
-live() { tree | jq -r --arg p "$1" '[.projects[] | select(.project == $p) | .conversations[] | select(.status != "ended" and .status != "sleeping")][0] | '"$2"; }
 sid_of() { live "$1" '.sid // empty'; }
 is_idle() { [ "$(live "$1" '.idle // empty')" = true ]; }
 is_status() { [ "$(live "$1" '.status // empty')" = "$2" ]; }
 start_conv() { # start_conv PROJECT
   ccd mkdir -p "/workspace/$1"
+  stack_login "$1"
   ccd ccd-session start "$1" >/dev/null
   until_ok 30 "$1 is waiting" is_status "$1" waiting
 }
@@ -151,24 +159,14 @@ old_gone() { ! ccd test -e /home/ccd/.ccdash/usage/old-prune.json; }
 until_ok 5 "statusline.sh pruned the 10-day-old reading ccd-side" old_gone
 if api "$url/api/usage" | jq -e '.five_hour.status' >/dev/null; then ok "/api/usage still answers"; else bad "/api/usage failed"; fi
 
-echo "== subagent"
+echo "== main transcript"
 start_conv subp
 subp=$(sid_of subp)
-t0=$(date +%s.%N)
-send subp "/sub"
-has_sub() { api "$url/api/tree" | jq -e --arg s "$subp" '[.projects[].conversations[] | select(.sid == $s) | .subagents[]] | length >= 1'; }
-found=0
-for _ in $(seq 20); do if has_sub >/dev/null 2>&1; then found=1; break; fi; sleep 0.1; done
-dt=$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN { printf "%.2f", b - a }')
-if [ "$found" = 1 ]; then ok "subagent in /api/tree ${dt}s after the prompt (limit 2 s)"; else bad "subagent not in /api/tree after ${dt}s"; fi
+send subp "hello"
+until_ok 15 "subp is waiting after the prompt" is_status subp waiting
 lock_transcripts
-aid=$(api "$url/api/tree" | jq -r --arg s "$subp" '[.projects[].conversations[] | select(.sid == $s) | .subagents[]][0].agent_id')
-tr_status() { curl -s -o "$tmp/tr" -w '%{http_code}' -b "$jar" -H "Origin: $origin" -H 'X-CCDash: 1' "$url/api/transcript?conv=$subp&agent=$1"; }
-eq "subagent transcript answers 200" "$(tr_status "$aid")" 200
-if jq -e '.entries | length >= 2' "$tmp/tr" >/dev/null; then ok "subagent transcript has entries ($(jq '.entries | length' "$tmp/tr"))"; else bad "subagent transcript: $(head -c 300 "$tmp/tr")"; fi
-if jq -e '[.entries[].parts[].text] | any(contains("subagent reply"))' "$tmp/tr" >/dev/null; then ok "subagent reply text is in the transcript"; else bad "reply text missing"; fi
-eq "main transcript answers 200" "$(tr_status main)" 200
-eq "an unknown agent id answers 404" "$(tr_status ffffffffffffffff)" 404
+tr_status() { curl -s -o "$tmp/tr" -w '%{http_code}' -b "$jar" -H "Origin: $origin" -H 'X-CCDash: 1' "$url/api/transcript?conv=$subp"; }
+eq "main transcript answers 200" "$(tr_status)" 200
 
 echo "== reader refusals and permissions"
 tf=$(tfile "$subp")
@@ -217,14 +215,9 @@ for i in 3 4 5 6 7 8; do start_conv "l$i"; done
 if [ "$run_core" = 1 ]; then req POST "/api/conversations/$tok/close"; req POST "/api/conversations/$subp/close"; fi # both mode: close core's conversations so ten are live
 start_conv l1; start_conv l2; start_conv l9; start_conv l10
 for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 20 "l$i is waiting" is_status "l$i" waiting; send "l$i" "hello $i"; done
-# one with a subagent for the browser to open
 for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 20 "l$i is waiting again" is_status "l$i" waiting; done
-if [ "$run_cpu" = 1 ] || [ "$run_ui" = 1 ]; then
-  send l1 "/sub"
-  until_ok 15 "l1 is waiting after /sub" is_status l1 waiting
-fi
 lock_transcripts
-live_n=$(tree | jq '[.projects[].conversations[] | select(.status != "ended" and .status != "sleeping")] | length')
+live_n=$(stack_states | jq '[.[] | select(.status != "ended" and .status != "sleeping")] | length')
 eq "ten live conversations" "$live_n" 10
 
 if [ "$run_cpu" = 1 ]; then
@@ -295,7 +288,7 @@ mkdir -p "$tmp/shots"
 $D cp "$PW_NAME:/out/." - 2>/dev/null | tar -x -C "$tmp/shots" 2>/dev/null || true # a tar stream: the Docker user may not own the directory
 $D rm -f "$PW_NAME" >/dev/null 2>&1 || true
 if [ "$PW_RC" = 0 ]; then ok "Playwright specs passed"; else bad "Playwright specs failed (exit $PW_RC)"; fi
-mkdir -p "$SHOTS" && cp "$tmp"/shots/*.png "$SHOTS"/ 2>/dev/null && echo "screenshots in $SHOTS: $(find "$SHOTS" -maxdepth 1 -name '*.png' -printf '%f ' | head -c 600)" || true
+if mkdir -p "$SHOTS" && cp "$tmp"/shots/*.png "$SHOTS"/ 2>/dev/null; then echo "screenshots in $SHOTS: $(find "$SHOTS" -maxdepth 1 -name '*.png' -printf '%f ' | head -c 600)" || true; fi
 fi # ui
 fi # cpu/ui
 exit $fail

@@ -9,12 +9,12 @@ setup() {
   FAKEBIN=$T/fakebin
   mkdir -p "$FAKEBIN" "$FAKE_STATE" "$FAKE_ROOT/etc" "$FAKE_ROOT/home/tester" "$FAKE_ROOT/var/log"
   for c in apt-get dpkg uname ss visudo usermod getent useradd loginctl systemctl sudo dockerd-rootless-setuptool.sh \
-    curl docker claude-login cloudflared; do ln -s "$ROOT/tests/fixtures/setup-fake" "$FAKEBIN/$c"; done
+    curl docker cloudflared; do ln -s "$ROOT/tests/fixtures/setup-fake" "$FAKEBIN/$c"; done
   printf 'ID=debian\nVERSION_ID=13\nVERSION_CODENAME=trixie\n' >"$FAKE_ROOT/etc/os-release"
   export HOME=$T/hosthome
   mkdir -p "$HOME"
   export CCDASH_SETUP_ROOT=$FAKE_ROOT CCDASH_SETUP_BIN=$FAKEBIN CCDASH_SETUP_USER=tester CCDASH_SETUP_ALLOW_NONROOT=1
-  export CCDASH_SETUP_DOCKER=$FAKEBIN/docker CCDASH_SETUP_CLAUDE_LOGIN=$FAKEBIN/claude-login
+  export CCDASH_SETUP_DOCKER=$FAKEBIN/docker
   export CCDASH_SETUP_CCD=$FAKEBIN/ccd CCDASH_SETUP_MIN_DISK_MB=1 CCDASH_SETUP_CF_LOGIN_TIMEOUT=20
   export CCDASH_SETUP_HEALTH_WAIT=3 CCDASH_SETUP_WAIT=3
   printf '#!/bin/sh\necho "ccd $*" >>"$FAKE_STATE/calls.log"\necho "${CCDASH_ENV_FILE:-}" >"$FAKE_STATE/ccd-env-file"\n' >"$FAKEBIN/ccd"
@@ -91,17 +91,10 @@ run_setup() { run timeout 120 "$ROOT/setup.sh" "$@" </dev/null; }
   ! calls | grep -E 'ccdash-passwd'
 }
 
-@test "nothing prompts: stdin closed, only the sign-in waits are faked" {
+@test "nothing prompts: stdin closed, only the Cloudflare sign-in wait is faked" {
   run timeout 120 "$ROOT/setup.sh" --hostname ccdash.example.com <&-
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ -e "$FAKE_STATE/claude-login" ]
   grep -q '^cloudflared tunnel login' <(calls)
-}
-
-@test "the Claude sign-in can be skipped by a hook" {
-  CCDASH_SETUP_SKIP_CLAUDE_LOGIN=1 run_setup --no-cloudflare
-  [ "$status" -eq 0 ]
-  [ ! -e "$FAKE_STATE/claude-login" ]
 }
 
 @test "git identity and the live self-test are delegated to ccd; --no-selftest skips the second" {
@@ -251,8 +244,3 @@ run_setup() { run timeout 120 "$ROOT/setup.sh" "$@" </dev/null; }
   grep -qx 'CCDASH_TOTP_REQUIRED=1' "$FAKE_ROOT/home/ccdash/ccdash/.env"
 }
 
-@test "the sign-in output is not written to the log" {
-  run_setup --no-cloudflare
-  [ "$status" -eq 0 ]
-  ! grep -q 'claude-login-output' "$CCDASH_SETUP_ROOT/var/log/ccdash-setup.log"
-}

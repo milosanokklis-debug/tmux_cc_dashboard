@@ -2,6 +2,7 @@
 # ccd-kit status | check | update [<ref>|--reset]: which agent kit is active, what is newest upstream, and updating it.
 # Stable stdout lines (sha = 40 hex, version `-` when unknown):
 #   status: `active <sha> <ver>`, `image <sha>`     check: those + `newest <sha>` (or `newest-error <msg>`, exit 1)
+#   update: first re-adds the kit marketplace per project config dir (failures: `marketplace <project> failed <msg>`, after the project lines)
 #   update: `project <name> ok|changed|failed <message>` per opted-in project, then (last; the dashboard reads a log tail) `updated <oldsha> <newsha>`, `version <old> <new>`
 # The kit script is only read as text (kit_version), never run here; ccd-onboard runs it.
 # Env: KIT_REPO (owner/repo, default: origin of the image kit), CCDASH_KIT_HOME (checkouts + `current`),
@@ -10,6 +11,8 @@
 set -euo pipefail
 # shellcheck source=/dev/null
 . "${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}/kit.sh"
+# shellcheck source=/dev/null
+. "${CCDASH_PROJECT_LIB:-${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}}/project-config.sh"
 KIT_HOME=${CCDASH_KIT_HOME:-/home/ccd/.ccdash/kit}
 IMAGE=${CCDASH_KIT_IMAGE:-/opt/agent-kit}
 PROJECTS=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}
@@ -35,7 +38,7 @@ repo_name() {
     u=$(git -C "$IMAGE" config --get remote.origin.url 2> /dev/null || true)
     case $u in git@github.com:* | https://github.com/*) r=${u#git@github.com:}; r=${r#https://github.com/}; r=${r%.git}; r=${r%/} ;; esac
   fi
-  [[ $r =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] && [[ $r != *..* ]] || { echo "ccd-kit: unknown kit repo (set KIT_REPO=owner/repo)" >&2; return 1; }
+  if ! [[ $r =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || [[ $r == *..* ]]; then echo "ccd-kit: unknown kit repo (set KIT_REPO=owner/repo)" >&2; return 1; fi
   printf '%s\n' "$r"
 }
 remote_url() { printf 'https://github.com/%s\n' "$1"; }
@@ -63,6 +66,8 @@ valid_ref() {
   [[ $r =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && [[ $r != *..* ]] && [[ $r != *//* ]] && [[ $r != */ ]] && [[ $r != *.lock ]]
 }
 
+clean_line() { tr -d '[:cntrl:]' | cut -c1-200; } # strip control characters, cap at 200
+
 # recheck_projects: ccd-onboard --kit-only for every opted-in project, with the active kit
 recheck_projects() {
   local f name repo out rc line
@@ -80,7 +85,7 @@ recheck_projects() {
       out=$(CCDASH_KIT_LOCKED=1 "$here/ccd-onboard" --kit-only "$repo" 2>&1 < /dev/null) || rc=$?
       line=$(printf '%s\n' "$out" | grep -m1 -E '^kit(-error)? ' || true)
       [ -n "$line" ] || line=$(printf '%s\n' "$out" | grep -m1 . || true)
-      line=$(printf '%s' "$line" | tr -d '[:cntrl:]' | cut -c1-200)
+      line=$(printf '%s' "$line" | clean_line)
       if [ "$rc" != 0 ]; then echo "project $name failed ${line:-exit $rc}"
       elif [[ $line == "kit "*" changed"* ]]; then echo "project $name changed $line"
       else echo "project $name ok ${line:-no kit line}"; fi
@@ -88,10 +93,28 @@ recheck_projects() {
   done
 }
 
+# register_marketplace: point the kit marketplace at the active kit under every project config dir (kit attach only adds when missing).
+# Failures are collected in ACCT_FAIL (one `marketplace <project> failed <msg>` line each) and printed after the project lines.
+register_marketplace() { # dir
+  local d=$1 p out msg rc
+  ACCT_FAIL=
+  while IFS= read -r p; do
+    rc=0
+    out=$( (project_env "$p" && timeout -k 5 60 claude plugin marketplace add "$d") 2>&1 < /dev/null) || rc=$?
+    if [ "$rc" != 0 ]; then
+      msg=$(printf '%s\n' "$out" | grep -m1 . || true)
+      msg=$(printf '%s' "$msg" | clean_line)
+      ACCT_FAIL+="marketplace $p failed ${msg:-exit $rc}"$'\n'
+    fi
+  done < <(project_list)
+}
+
 report() { # old new oldver
   local d; d=$(active_dir)
   local ver; ver=$(ver_of "$d")
+  register_marketplace "$d"
   recheck_projects
+  [ -z "$ACCT_FAIL" ] || printf '%s' "$ACCT_FAIL"
   echo "updated $1 $2"
   echo "version $3 $ver"
 }
@@ -108,7 +131,7 @@ cmd_update() {
   mkdir -p "$KIT_HOME"
   # sweep stale temp checkouts left by an interrupted run (read-only git objects need u+w to delete)
   for d in "$KIT_HOME"/.tmp-*; do
-    [ -d "$d" ] && [ ! -L "$d" ] || continue # a stale .tmp-link-* symlink is not a checkout: never follow it
+    if [ ! -d "$d" ] || [ -L "$d" ]; then continue; fi # a stale .tmp-link-* symlink is not a checkout: never follow it
     chmod -R u+w "$d" 2> /dev/null || true; rm -rf "$d"
   done
   if [ "$reset" = 1 ]; then
@@ -144,7 +167,7 @@ cmd_update() {
   for d in "$KIT_HOME"/*/; do
     b=$(basename "$d")
     [[ $b =~ ^[0-9a-f]{40}$ ]] || continue
-    [ "$b" != "$new" ] && [ "$b" != "$old" ] || continue
+    if [ "$b" = "$new" ] || [ "$b" = "$old" ]; then continue; fi
     chmod -R u+w "$d" 2> /dev/null || true; rm -rf "$d"
   done
   report "$old" "$new" "$oldver"

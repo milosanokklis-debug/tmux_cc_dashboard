@@ -11,4 +11,4 @@ services:
         BASIC_MEMORY_VERSION: ${BASIC_MEMORY_VERSION:?set BASIC_MEMORY_VERSION in .env}
         SEMGREP_VERSION: ${SEMGREP_VERSION:-1.183.0}
         KIT_REPO: ${KIT_REPO:-milosanokklis-debug/new_ai_setup}
-        KIT_REF: ${KIT_REF:-1099829fff8a692293f311751584983fc6821c15}
+        KIT_REF: ${KIT_REF:-18ad921ec9d8b74e295350f876bf5cf1e7f15636}

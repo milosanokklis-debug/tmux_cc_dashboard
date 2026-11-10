@@ -8,9 +8,10 @@ PROJECTS=${CCDASH_PROJECTS:-$HOME/.ccdash/projects}
 # unless --trust-hooks is given or an earlier onboarding was trusted (trustHooks in the record).
 # Agent kit is opt-in per project (default off): --kit turns it on (all packs: kit-core, kit-design, kit-code),
 # --no-kit turns it off; without a flag the record decides (kitEnabled; a record with a `kit` entry and no
-# kitEnabled counts as on). Off runs nothing and writes nothing. agent-kit.sh 0.9.2 has no remove command (`ensure`
-# with no packs only drops kit-design/kit-code and the web-design-guidelines skill), so turning it off leaves the
-# files in place and keeps the record's kit/packs keys, which describe what is left on disk. Kit failure: exit 8.
+# kitEnabled counts as on). On runs `agent-kit.sh attach <dir>` (kit 0.14.0 no-trace mode: private files only, a
+# `# agent-kit:private` block in .git/info/exclude, nothing committed or tracked). Turned off on an attached project
+# runs `detach <dir>`; off otherwise runs nothing and writes nothing. Kit failure: exit 8, checkout, exclude and
+# core.hooksPath restored from a backup.
 trust=0 kitflag='' kitonly=0
 while [ $# -gt 0 ]; do
   case $1 in
@@ -30,6 +31,11 @@ fi
 proj=${repo#*/}
 dir=$WS/$proj
 cp=$(dirname "$0")/ccd-project
+# one Claude config dir per project (0700): the kit and Basic Memory setup below run under it
+# shellcheck source=/dev/null
+. "${CCDASH_PROJECT_LIB:-${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}}/project-config.sh"
+project_config_create "$proj" || { echo "cannot create the config dir for $proj" >&2; exit 1; }
+project_env "$proj"
 # shellcheck source=/dev/null
 . "${CCDASH_KIT_LIB:-$(dirname "$0")/../lib/ccdash}/kit.sh"
 # The kit's GitHub repo (owner/repo): $KIT_REPO, else the origin of the kit checkout. ccd-project reads it from the
@@ -62,14 +68,20 @@ fi
 # gets {kitError}. Stdout then has `kit-error <code> <message>` followed by the tail of the kit log.
 kit=${CCDASH_KIT-$(kit_script)}
 if [ -n "$kit" ] && [ -e "$kit" ]; then kit=$(readlink -f "$kit"); fi
-kitjson=null kitenabled=null want=0 # null: kit step skipped (CCDASH_KIT empty), kitEnabled untouched
+kitjson=null kitenabled=null want=0 detach=0 # null: kit step skipped (CCDASH_KIT empty), kitEnabled untouched
+exblock='# agent-kit:private start'
 if [ -n "$kit" ]; then
   kitenabled=false
-  if [ -n "$kitflag" ]; then want=$kitflag
-  else want=$(jq -r 'if .kitEnabled == true then 1 elif .kitEnabled == false then 0 elif .kit then 1 else 0 end' "$rec" 2> /dev/null || echo 0); fi
+  prev_on=$(jq -r 'if .kitEnabled == true then 1 elif .kitEnabled == false then 0 elif .kit then 1 else 0 end' "$rec" 2> /dev/null || echo 0)
+  if [ -n "$kitflag" ]; then want=$kitflag; else want=$prev_on; fi
+  if [ "$want" = 0 ]; then
+    gd=$(git -C "$dir" rev-parse --git-path info/exclude 2> /dev/null || true); case $gd in /*) ;; *) gd=$dir/$gd ;; esac
+    if [ -f "$gd" ] && grep -qxF "$exblock" "$gd" && { [ "$kitflag" = 0 ] || [ "$prev_on" = 1 ]; }; then detach=1; fi
+  fi
 fi
-if [ -n "$kit" ] && [ "$want" = 1 ]; then
-  kitenabled=true
+if [ -n "$kit" ] && { [ "$want" = 1 ] || [ "$detach" = 1 ]; }; then
+  [ "$want" != 1 ] || kitenabled=true
+  verb=attach; [ "$detach" = 0 ] || verb=detach
   packs_csv='kit-core,kit-design,kit-code'
   if [ -z "${CCDASH_KIT_LOCKED:-}" ]; then # ccd-kit update already holds this lock when it calls us
     exec 9> "$(kit_lock_dir)/kit-$proj.lock"; flock -w "${CCDASH_KIT_LOCK_WAIT:-600}" 9 || { echo "kit-error 5 Kit busy (another kit run holds the project lock)"; exit 8; }
@@ -79,66 +91,84 @@ if [ -n "$kit" ] && [ "$want" = 1 ]; then
   # backup of every path the kit may write, to restore on failure (the tree was clean, ignored files included)
   bak=$(mktemp -d "${TMPDIR:-/tmp}/ccd-kit.XXXXXX")
   trap 'rm -rf "$bak"' EXIT
-  kitpaths=(.claude/CLAUDE.md .claude/settings.json .claude/agent-kit.json CLAUDE.md .claude/skills/web-design-guidelines)
-  had_claude=0; had_skills=0
+  gitdir=$(git -C "$dir" rev-parse --absolute-git-dir 2> /dev/null || echo "$dir/.git")
+  kitpaths=(.claude/settings.local.json .claude/agent-kit.json .claude/agents CLAUDE.local.md .claude/skills/web-design-guidelines .claude/skills/writing-guidelines)
+  gitpaths=(info/exclude agent-kit) # relative to the git dir
+  had_claude=0; had_skills=0; had_hp=0
   [ ! -e "$dir/.claude" ] || had_claude=1
   [ ! -e "$dir/.claude/skills" ] || had_skills=1
+  if hp=$(git -C "$dir" config --local --get core.hooksPath 2> /dev/null); then had_hp=1; fi
   for f in "${kitpaths[@]}"; do
-    if [ -e "$dir/$f" ] || [ -L "$dir/$f" ]; then mkdir -p "$bak/$(dirname "$f")"; cp -a "$dir/$f" "$bak/$f"; fi
+    if [ -e "$dir/$f" ] || [ -L "$dir/$f" ]; then mkdir -p "$bak/w/$(dirname "$f")"; cp -a "$dir/$f" "$bak/w/$f"; fi
   done
+  for f in "${gitpaths[@]}"; do
+    if [ -e "$gitdir/$f" ] || [ -L "$gitdir/$f" ]; then mkdir -p "$bak/g/$(dirname "$f")"; cp -a "$gitdir/$f" "$bak/g/$f"; fi
+  done
+  # state_sum: what "changed" means: the exclude block, settings.local.json and agent-kit.json
+  state_sum() {
+    { awk '/^# agent-kit:private start$/{p=1} p{print} /^# agent-kit:private end$/{p=0}' "$gitdir/info/exclude" 2> /dev/null || true
+      cat "$dir/.claude/settings.local.json" "$dir/.claude/agent-kit.json" "$dir/CLAUDE.local.md" 2> /dev/null
+      find "$dir/.claude/agents" "$gitdir/agent-kit" -type f -exec sha256sum {} + 2> /dev/null | LC_ALL=C sort -k2; true; } | sha256sum
+  }
   restore() {
     local f
     [ ! -L "$dir/.claude" ] || return 0 # never write or delete through a symlinked .claude
     for f in "${kitpaths[@]}"; do
+      # skip paths below a symlinked .claude/skills or .claude/agents: rm -rf would reach outside the checkout
+      case $f in .claude/skills/*) [ ! -L "$dir/.claude/skills" ] || continue ;; .claude/agents*) [ ! -L "$dir/.claude/agents" ] || continue ;; esac
       rm -rf "${dir:?}/$f"
-      if [ -e "$bak/$f" ] || [ -L "$bak/$f" ]; then mkdir -p "$dir/$(dirname "$f")"; cp -a "$bak/$f" "$dir/$f"; fi
+      if [ -e "$bak/w/$f" ] || [ -L "$bak/w/$f" ]; then mkdir -p "$dir/$(dirname "$f")"; cp -a "$bak/w/$f" "$dir/$f"; fi
     done
+    for f in "${gitpaths[@]}"; do
+      rm -rf "${gitdir:?}/$f"
+      if [ -e "$bak/g/$f" ] || [ -L "$bak/g/$f" ]; then mkdir -p "$gitdir/$(dirname "$f")"; cp -a "$bak/g/$f" "$gitdir/$f"; fi
+    done
+    if [ "$had_hp" = 1 ]; then git -C "$dir" config --local core.hooksPath "$hp" || true
+    else git -C "$dir" config --local --unset core.hooksPath 2> /dev/null || true; fi
     [ "$had_skills" = 1 ] || rmdir "$dir/.claude/skills" 2> /dev/null || true
     [ "$had_claude" = 1 ] || rmdir "$dir/.claude" 2> /dev/null || true
   }
+  redact() { sed -E '/(token|secret|password|key=|bearer)/I s/((token|secret|password|key=|bearer)[[:space:]:="]*)[^[:space:]"]*/\1***/Ig'; }
   kit_fail() { # kit_fail <code> <message>: undo the kit step, record kitError, exit 8
-    local kerr=$1 kmsg=$2
+    local kerr=$1 kmsg=$2 ken=$kitenabled
+    [ "$detach" = 0 ] || ken=$([ "$prev_on" = 1 ] && echo true || echo false) # a failed detach leaves the kit on
     restore
     umask 027
     mkdir -p "$PROJECTS"
     cur=$(jq -c 'if type == "object" then . else {} end' "$rec" 2> /dev/null) || cur='{}'
     [ -n "$cur" ] || cur='{}'
     head=$(git -C "$dir" rev-parse --verify -q HEAD || true)
-    jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" --argjson code "$kerr" --arg msg "$kmsg" \
-      '$cur + {repo: $repo, ts: $ts, kitEnabled: true, kitError: {code: $code, message: $msg}} | if $head == "" then del(.head) else .head = $head end' > "$rec.tmp.$$"
+    jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" --argjson code "$kerr" --arg msg "$kmsg" --argjson ken "$ken" \
+      '$cur + {repo: $repo, ts: $ts, kitEnabled: $ken, kitError: {code: $code, message: $msg}} | if $head == "" then del(.head) else .head = $head end' > "$rec.tmp.$$"
     mv "$rec.tmp.$$" "$rec"
     echo "kit-error $kerr $kmsg"
     # only the tail goes to the API, with obvious secrets blanked (the full log stays on disk, owner-only)
     tail -n 20 "$log" | tr -d '\000' \
-      | sed -E '/(token|secret|password|key=|bearer)/I s/((token|secret|password|key=|bearer)[[:space:]:="]*)[^[:space:]"]*/\1***/Ig'
+      | redact
     exit 8
   }
-  kpid='' committed=0
-  pre_dirty=$(git -C "$dir" status --porcelain -- .claude CLAUDE.md 2> /dev/null || true) # user changes there: never commit over them
+  kpid=''
   # Bash defers traps while a foreground command runs, so the kit runs in the background (own session, so the whole
   # process group can be killed) and TERM/INT (e.g. from `timeout`) leaves the checkout as it was before the kit step.
   on_term() {
     trap '' TERM INT
-    [ "$committed" = 0 ] || return 0 # the kit commit already landed: nothing to undo
     if [ -n "$kpid" ]; then kill -TERM -- "-$kpid" "$kpid" 2> /dev/null || true; sleep 0.2; kill -KILL -- "-$kpid" "$kpid" 2> /dev/null || true; wait "$kpid" 2> /dev/null || true; fi
     kit_fail 5 "Kit timed out or was interrupted"
   }
   trap on_term TERM INT
+  before=$(state_sum)
   if [ -L "$dir/.claude" ]; then # a symlinked .claude would make the kit write outside the checkout: do not run it
     echo ".claude is a symlink; the kit was not run" > "$log"; out=''; rc=6
   else
-    NO_COLOR=1 KIT_REPO="$kit_repo" TMPDIR=/tmp setsid "$kit" ensure "$dir" design code --json > "$bak/.kit-out" 2>> "$log" < /dev/null 9>&- &
+    NO_COLOR=1 KIT_REPO="$kit_repo" TMPDIR=/tmp setsid "$kit" "$verb" "$dir" > "$bak/.kit-out" 2>> "$log" < /dev/null 9>&- &
     kpid=$!
     wait "$kpid" && rc=0 || rc=$?
     kpid=''
     out=$(cat "$bak/.kit-out" 2> /dev/null || true)
   fi
-  res=$(printf '%s\n' "$out" | tail -n 1)
-  ok=$(jq -r 'if type == "object" and .ok == true then "yes" else "no" end' <<< "$res" 2> /dev/null || echo no)
-  kerr=0 kmsg=''
-  if [ "$rc" != 0 ] || [ "$ok" != yes ]; then
-    kerr=$rc
-    [ "$rc" != 0 ] || kerr=$(jq -r '.code // 5' <<< "$res" 2> /dev/null || echo 5)
+  kerr=0 kmsg='' kchanged=false kmem=unknown kver='' kwarn=''
+  if [ "$rc" != 0 ]; then
+    if [ "$rc" = 6 ] || ! grep -qiE "missing '" <<< "$out$(cat "$log")"; then kerr=$rc; else kerr=3; fi
     case $kerr in 2 | 3 | 4 | 5 | 6) ;; *) kerr=5 ;; esac
     case $kerr in
       2) kmsg="Kit usage error" ;;
@@ -147,38 +177,24 @@ if [ -n "$kit" ] && [ "$want" = 1 ]; then
       5) kmsg="Plugin install or update failed; retry" ;;
       6) kmsg="Could not write project files" ;;
     esac
-  else
-    kver=$(jq -r '.kit_version // ""' <<< "$res")
-    kchanged=$(jq -r '.changed == true' <<< "$res")
-    kmem=$(jq -r '.memory // ""' <<< "$res")
+  elif [ "$verb" = attach ]; then
+    kver=$(jq -r '.kit_version // ""' "$dir/.claude/agent-kit.json" 2> /dev/null || true)
+    [ -n "$kver" ] || kver=$(kit_version "$kit" || true)
+    [ "$(state_sum)" = "$before" ] || kchanged=true
+    if [[ $out =~ memory[[:space:]]+(connected|missing) ]]; then kmem=${BASH_REMATCH[1]}; fi
     [[ $kver =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,40}$ ]] || { kerr=5; kmsg="Plugin install or update failed; retry"; }
-    case $kmem in connected | missing) ;; *) kmem=unknown ;; esac
-  fi
-  if [ "$kerr" = 0 ] && [ "$kchanged" = true ] && [ -z "$pre_dirty" ]; then
-    # pathspecs that match nothing (no CLAUDE.md) make git add and git commit fail: use only paths that exist
-    # or have staged changes
-    for f in .claude CLAUDE.md; do
-      if [ -e "$dir/$f" ] || [ -L "$dir/$f" ]; then git -C "$dir" add -A -- "$f" > /dev/null 2>&1 || true; fi
-    done
-    mapfile -t staged < <(git -C "$dir" diff --cached --name-only -- .claude CLAUDE.md 2> /dev/null)
-    if [ "${#staged[@]}" -gt 0 ]; then
-      # pathspec commit (--only): the user's own staged files are never included
-      if GIT_AUTHOR_NAME=ccdash GIT_AUTHOR_EMAIL=ccdash@localhost GIT_COMMITTER_NAME=ccdash GIT_COMMITTER_EMAIL=ccdash@localhost \
-        git -C "$dir" -c user.name=ccdash -c user.email=ccdash@localhost -c core.hooksPath=/dev/null -c commit.gpgsign=false \
-        commit -q --no-verify -m "chore: agent-kit $kver" -- "${staged[@]}" >> "$log" 2>&1 < /dev/null; then
-        committed=1
-      else
-        git -C "$dir" reset -q -- .claude CLAUDE.md >> "$log" 2>&1 || true
-        kerr=6 kmsg="Could not write project files"
-      fi
-    fi
+    kwarn=$( { cat "$log"; printf '%s\n' "$out"; } | grep -E '^(!! |warning:)' | tr -d '[:cntrl:]' | cut -c1-200 | head -n 5 | paste -sd'|' | redact || true)
   fi
   if [ "$kerr" != 0 ]; then kit_fail "$kerr" "$kmsg"; fi
   trap - TERM INT
-  kitjson=$(jq -cn --arg v "$kver" --arg m "$kmem" --arg p "$packs_csv" '{version: $v, packs: ($p | split(",")), memory: $m}')
-  echo "kit $kver $([ "$kchanged" = true ] && echo changed || echo unchanged)"
-  echo "packs $packs_csv"
-  echo "memory $kmem"
+  if [ "$verb" = attach ]; then
+    kitjson=$(jq -cn --arg v "$kver" --arg m "$kmem" --arg p "$packs_csv" '{version: $v, packs: ($p | split(",")), memory: $m}')
+    echo "kit $kver $([ "$kchanged" = true ] && echo changed || echo unchanged)"
+    echo "packs $packs_csv"
+    echo "memory $kmem"
+  else
+    echo "kit off"
+  fi
 elif [ -n "$kit" ]; then
   echo "kit off"
 fi
@@ -188,9 +204,11 @@ mkdir -p "$PROJECTS" # umask 027 makes new directories 750
 cur=$(jq -c 'if type == "object" then . else {} end' "$rec" 2>/dev/null) || cur='{}'
 [ -n "$cur" ] || cur='{}'
 tmp=$rec.tmp.$$
-jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" --argjson trust "$trust" --argjson kit "$kitjson" --argjson ken "$kitenabled" \
+jq -cn --argjson cur "$cur" --arg repo "$repo" --arg head "$head" --argjson ts "$(date +%s)" --argjson trust "$trust" --argjson kit "$kitjson" --argjson ken "$kitenabled" --arg kwarn "${kwarn:-}" --argjson det "$detach" \
   '$cur + {repo: $repo, ts: $ts} | if $head == "" then del(.head) else .head = $head end
    | if $trust == 1 then .trustHooks = true else . end
-   | del(.kitError) | (if $ken == null then . else .kitEnabled = $ken end) | if $kit != null then .kit = $kit | .packs = (["kit-core"] + ($kit.packs - ["kit-core"])) else . end' > "$tmp"
+   | del(.kitError) | (if $kwarn == "" then del(.kitWarning) else .kitWarning = $kwarn end) | (if $det == 1 then del(.kit, .packs) else . end) | (if $ken == null then . else .kitEnabled = $ken end) | if $kit != null then .kit = $kit | .packs = (["kit-core"] + ($kit.packs - ["kit-core"])) else . end' > "$tmp"
 mv "$tmp" "$rec"
 [ -z "$head" ] || echo "head $head"
+# Basic Memory in the project's config dir (best effort; ccd-session start refuses a project without it)
+[ "$kitonly" = 1 ] || "${CCDASH_MEMORY_INIT:-$(dirname "$0")/ccd-memory-init}" "$proj" > /dev/null 2>&1 < /dev/null || true

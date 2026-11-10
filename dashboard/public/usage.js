@@ -4,7 +4,7 @@
 // payload on open. Every server string goes through textContent. Dollar figures are always shown with
 // the "API-price estimate, not billing" label.
 (function () {
-  const { api, h, fmtNum, fmtUsd, fmtDuration, accounts } = window.ccdash;
+  const { api, h, fmtNum, fmtUsd, fmtDuration } = window.ccdash;
   const events = window.ccdash.events;
   const $ = (id) => document.getElementById(id);
   const SOURCE = { statusline: 'Claude Code statusline', 'usage-command': '/usage command (fallback)' };
@@ -58,14 +58,13 @@
     }
   }
 
-  // The readings for the account in view: the terminal's account when there are several, else the default
-  // (top-level fields). An account with no reading yet gives {}: every gauge then shows "unknown".
-  function viewAccount() { return accounts.multi() && accounts.view() ? accounts.view() : 'default'; }
+  // The readings of the project in view (usage.projects[name]); on the project list, the overall gauges.
+  // A project with no reading yet gives {}: every gauge then shows "unknown".
   function readings() {
     if (!usage) return usage;
-    const a = viewAccount();
-    if (a === 'default') return usage;
-    return (usage.accounts && Object.hasOwn(usage.accounts, a) && usage.accounts[a]) || {};
+    const p = window.ccdash.view.project;
+    if (p == null) return usage;
+    return (usage.projects && Object.hasOwn(usage.projects, p) && usage.projects[p]) || {};
   }
 
   function levelOf(p) { return p >= 90 ? 'high' : p >= 70 ? 'mid' : 'low'; }
@@ -140,10 +139,7 @@
   // ---------------------------------------------------------------- tokens
 
   const convNames = () => {
-    const m = new Map();
-    const last = events.last('tree');
-    for (const p of (last && last.tree && last.tree.projects) || []) for (const c of p.conversations || []) if (c.win) m.set(c.sid, c.win);
-    return m;
+    return new Map(); // conversations have no window names any more; rows show the short id
   };
   const short = (id) => String(id == null ? '' : id).slice(0, 8);
   const pad = (n) => String(n).padStart(2, '0');
@@ -272,9 +268,6 @@
   // ---------------------------------------------------------------- data + open/close
 
   function paintUsage() {
-    const who = $('usage-account');
-    who.hidden = !accounts.multi();
-    who.textContent = 'Account: ' + viewAccount();
     paintLoadError('usage');
     for (const [name] of WINDOWS) paintGauge(name);
     paintSource();

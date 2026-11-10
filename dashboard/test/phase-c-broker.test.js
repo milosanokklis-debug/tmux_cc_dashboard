@@ -25,7 +25,7 @@ const sockPath = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-sock
 async function appOn(s, sock, waitSec) {
   const server = await start({
     services: {
-      workspace: s.ws, agentsDir: path.join(s.env.HOME, '.ccdash/agents'), transcriptRoot: path.join(s.tmp, 'tr'), tmux: s.tmux,
+      workspace: s.ws, eventsDir: path.join(s.env.HOME, '.ccdash'), tmux: s.tmux,
       reconciler: s.rec, procTable: () => new Map(), runFile: async () => ({ stdout: '', stderr: '' }),
       runOp: async () => ({ rc: 0, log: '' }), now: () => Date.now(),
     },
@@ -39,8 +39,11 @@ async function appOn(s, sock, waitSec) {
     return { status: res.status, raw, body: raw ? JSON.parse(raw) : null };
   };
   const conv = async (sid) => {
-    const { body } = await api('/api/tree');
-    return body.projects.flatMap((p) => p.conversations).find((c) => c.sid === sid);
+    // what the /events state message carries for the conversation: status, plus the approval card while it waits
+    const r = s.rec.get(sid);
+    if (!r) return undefined;
+    const a = r.status === 'needs_approval' ? server.app.broker.forSid(sid) : null;
+    return { sid, status: r.status, ...(a ? { approval: { id: a.id, tool: a.tool_name, input: a.tool_input, truncated: a.truncated, since: a.since } } : {}) };
   };
   return { server, api, conv, broker: server.app.broker };
 }
@@ -65,7 +68,7 @@ test('Phase C broker: two conversations, approve and deny reach only their own',
   s.send('a2', '/perm');
   const pend = await s.until(() => (a.broker.pending().length === 2 ? a.broker.pending() : null), 'two pending requests');
   let t1; let t2;
-  await s.until(() => { a.conv(sid1).then((c) => { t1 = c; }); a.conv(sid2).then((c) => { t2 = c; }); return t1?.approval && t2?.approval; }, 'approvals in the tree');
+  await s.until(() => { a.conv(sid1).then((c) => { t1 = c; }); a.conv(sid2).then((c) => { t2 = c; }); return t1?.approval && t2?.approval; }, 'approvals pending');
   assert.strictEqual(t1.status, 'needs_approval');
   assert.strictEqual(t1.approval.id, pend.find((p) => p.sid === sid1).id);
   assert.strictEqual(t2.approval.id, pend.find((p) => p.sid === sid2).id);

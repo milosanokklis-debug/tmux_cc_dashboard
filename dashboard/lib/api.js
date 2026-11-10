@@ -5,9 +5,7 @@ const { HttpError, send, readJson } = require('./http');
 const { createTmux, readProcTable, runFile, runOp } = require('./tmux');
 const projects = require('./projects');
 const kit = require('./kit');
-const accounts = require('./accounts');
 const identity = require('./identity');
-const { buildTree, listConversations } = require('./tree');
 const { createReader, ReaderError } = require('./reader');
 const { createTokens, readTranscript, transcriptFiles } = require('./tokens');
 const usage = require('./usage');
@@ -28,12 +26,14 @@ function defaultServices() {
     reader,
     tokens: createTokens({ reader }),
     usageDir: usage.DEFAULT_DIR,
-    usageFallback: createUsageFallback({ tmux }),
+    usageFallback: createUsageFallback({
+      tmux,
+      projects: () => projects.projectDirs('/workspace'),
+      signedIn: async (name) => (await runFile('ccd-session', ['auth', name])).stdout.trim() === 'logged-in',
+    }),
     selftestFile: '/home/ccd/.ccdash/selftest.json',
     workspace: '/workspace',
-    agentsDir: '/home/ccd/.ccdash/agents',
     projectsDir: projects.DEFAULT_PROJECTS_DIR,
-    transcriptRoot: accounts.transcriptRoots,
     tmux,
     procTable: readProcTable,
     runFile,
@@ -51,9 +51,8 @@ function createApi(svc) {
   const controls = createControls(svc, { closeWaitSec: svc.closeWaitSec });
   const waking = new Set(); // sids with a wake running
 
-  // Transcripts to read: each conversation's own and its subagents', from the agent events
-  // (subagents) and the state snapshot (the conversation's transcript path).
-  const trackedFiles = () => transcriptFiles(listConversations(svc.agentsDir), svc.reconciler.snapshot());
+  // Transcripts to read: each conversation's main transcript, from the state snapshot.
+  const trackedFiles = () => transcriptFiles(svc.reconciler.snapshot());
   // Reader failures become plain HTTP errors; the reader's own messages never carry a path.
   const readerError = (e) => {
     if (!(e instanceof ReaderError)) throw e;
@@ -75,22 +74,7 @@ function createApi(svc) {
   }
   const methodNotAllowed = () => { throw new HttpError(405, 'method not allowed'); };
 
-  // The same payloads /api/tree and /api/usage answer with; the /events hub reuses them.
-  async function treePayload(all = false) {
-    const now = svc.now();
-    const projectsTree = buildTree({
-      agentsDir: svc.agentsDir, transcriptRoot: svc.transcriptRoot, panes: await panes(), table: svc.procTable(),
-      now, all, states: svc.reconciler.snapshot(), tokens: svc.tokens ?? null,
-    });
-    svc.tokens?.refresh(trackedFiles()).catch(() => {}); // totals in the next tree; never delays this answer
-    for (const p of projectsTree) { // an approval card only while the conversation really is in needs_approval
-      for (const c of p.conversations) {
-        const a = c.status === 'needs_approval' ? svc.broker?.forSid(c.sid) : null;
-        if (a) c.approval = { id: a.id, tool: a.tool_name, input: a.tool_input, truncated: a.truncated, since: a.since };
-      }
-    }
-    return { now: Math.floor(now / 1000), projects: projectsTree }; // unix seconds
-  }
+  // The same payloads /api/usage and /api/tokens answer with; the /events hub reuses them.
   function usagePayload() {
     const fb = svc.usageFallback;
     const g = usage.gauges({ dir: svc.usageDir, now: Math.floor(svc.now() / 1000), fallback: fb ? fb.latest : null });
@@ -148,10 +132,11 @@ function createApi(svc) {
       if (req.method !== 'POST') return methodNotAllowed();
       let name;
       try { name = decodeURIComponent(open[1]); } catch { throw new HttpError(400, 'invalid project name'); }
-      const body = /json/i.test(req.headers['content-type'] || '') ? (await readJson(req, 1024, true)) : {}; // optional { account }
-      const session = await audited('open', ctx, { project: name }, () => projects.openProject({ workspace: svc.workspace, runFile: svc.runFile, name, account: body?.account }));
+      const session = await audited('open', ctx, { project: name }, () => projects.openProject({ workspace: svc.workspace, runFile: svc.runFile, name }));
       return send(res, 200, { session });
     }
+    const proj = /^\/api\/projects\/([^/]+)\/(login|windows|close|select)(?:\/([^/]+)\/(close|select))?$/.exec(pathname);
+    if (proj) return projectRoute(req, res, proj, ctx);
     const pull = /^\/api\/projects\/([^/]+)\/pull$/.exec(pathname);
     if (pull) {
       if (req.method !== 'POST') return methodNotAllowed();
@@ -182,21 +167,10 @@ function createApi(svc) {
       });
       return send(res, 200, r);
     }
-    if (pathname === '/api/accounts') {
-      if (get) return send(res, 200, { accounts: await accounts.listAccounts(svc.runFile) }); // names and logged-in flags only
-      if (req.method !== 'POST') return methodNotAllowed();
-      const body = await readJson(req, 1024);
-      const name = typeof body?.name === 'string' && accounts.validAccount(body.name) ? body.name : undefined; // only a valid name is logged
-      return send(res, 200, await audited('account.create', ctx, { account: name }, () => accounts.createAccount(svc.runFile, body)));
-    }
     if (pathname === '/api/git-identity') {
       if (get) return send(res, 200, await identity.getIdentity(svc));
       if (req.method !== 'POST') return methodNotAllowed();
       return send(res, 200, await audited('identity.change', ctx, {}, async () => identity.setIdentity(await readJson(req, 4 * 1024), svc)));
-    }
-    if (pathname === '/api/tree') {
-      if (!get) return methodNotAllowed();
-      return send(res, 200, await treePayload(searchParams.get('all') === '1'));
     }
     if (pathname === '/api/usage') {
       if (!get) return methodNotAllowed();
@@ -260,11 +234,35 @@ function createApi(svc) {
     }
     throw new HttpError(404, 'not found');
   }
-  handleApi.treePayload = treePayload;
   handleApi.usagePayload = usagePayload;
   handleApi.tokensPayload = tokensPayload;
   handleApi.preview = (sid) => controls.preview(sid, { fresh: false });
   return handleApi;
+
+  // /api/projects/:p/login (GET state, POST open the login window) and /windows (GET list, POST new,
+  // POST :id/close, POST :id/select). Audited by project name (and window id) only, never the sign-in URL.
+  async function projectRoute(req, res, m, ctx) {
+    const dec = (v) => { try { return decodeURIComponent(v); } catch { throw new HttpError(400, 'invalid request'); } };
+    const name = dec(m[1]);
+    const base = { workspace: svc.workspace, runFile: svc.runFile, tmux: svc.tmux, name };
+    const get = req.method === 'GET';
+    if (m[2] === 'login') {
+      if (get) return send(res, 200, await projects.loginState(base));
+      if (req.method !== 'POST') return methodNotAllowed();
+      return send(res, 200, await audited('login.open', ctx, { project: name }, () => projects.startLogin(base)));
+    }
+    if (m[3] === undefined) {
+      if (get) return send(res, 200, { windows: await projects.listWindows(base) });
+      if (req.method !== 'POST') return methodNotAllowed();
+      const body = await readJson(req, 1024, true);
+      const kind = body?.kind;
+      return send(res, 200, await audited('window.new', ctx, { project: name }, () => projects.newWindow({ ...base, kind })));
+    }
+    if (req.method !== 'POST') return methodNotAllowed();
+    const id = dec(m[3]);
+    const fn = m[4] === 'close' ? projects.closeWindow : projects.selectWindow;
+    return send(res, 200, await audited(`window.${m[4]}`, ctx, { project: name, window: projects.validWindowId(id) ? id : undefined }, () => fn({ ...base, id })));
+  }
 
   // Push routes: a subscription belongs to the session (cookie) that created it.
   async function pushRoute(req, res, pathname, sk) {

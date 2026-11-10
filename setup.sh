@@ -4,7 +4,7 @@
 #   --hostname <name>   public hostname (a full name with a dot, or a label under your first Cloudflare domain)
 #   --no-selftest       skip `ccd doctor --live`
 #   --uninstall         remove the stack, keep the volumes;  --uninstall --purge also deletes volumes and secrets
-# Asks no questions except the two sign-in waits (Claude, Cloudflare). Every step is idempotent.
+# Asks no questions except the Cloudflare sign-in wait. Every step is idempotent.
 # Log: /var/log/ccdash-setup.log. A failed step prints what failed and the exact command to run again.
 #
 # Test and automation hooks (every external action goes through one of these, so bats can swap in fakes):
@@ -12,8 +12,6 @@
 #   CCDASH_SETUP_BIN               directory put first in PATH (fake apt-get, curl, cloudflared, sudo, ...)
 #   CCDASH_SETUP_LOG               log file (default $ROOT/var/log/ccdash-setup.log)
 #   CCDASH_SETUP_DOCKER            docker command as the ccdash user (default: sudo -n -u ccdash /usr/local/bin/ccdash-docker)
-#   CCDASH_SETUP_CLAUDE_LOGIN      command that signs Claude in (default: docker exec -it -u ccd ccdash claude auth login)
-#   CCDASH_SETUP_SKIP_CLAUDE_LOGIN=1   skip the Claude sign-in
 #   CCDASH_SETUP_CLOUDFLARED       cloudflared binary (default cloudflared)
 #   CCDASH_SETUP_CCD               the ccd command used for identity and doctor (default $ROOT/usr/local/bin/ccd)
 #   CCDASH_SETUP_USER              invoking account (default $SUDO_USER)
@@ -39,7 +37,7 @@ PORT=7690
 NO_CLOUDFLARE=0 HOSTNAME_ARG="" NO_SELFTEST=0 UNINSTALL=0 PURGE=0
 
 # ---- output -------------------------------------------------------------------------------------------------
-exec 3<&0 4>&1 0</dev/null # fd 4 is the terminal output, so a pasted sign-in code never reaches the log. # fd 3 is the terminal; only the Claude sign-in reads it, so nothing else can block on input
+exec 0</dev/null # nothing reads stdin, so nothing can block on input
 if ! { mkdir -p "$(dirname "$LOG")" && : >>"$LOG"; }; then echo "setup: cannot write $LOG" >&2; exit 1; fi
 chmod 600 "$LOG" 2>/dev/null || true
 exec > >(tee -a "$LOG") 2>&1
@@ -221,7 +219,7 @@ uninstall() {
 preflight() {
   step "1/12 Preflight"
   if ! is_root && [ "${CCDASH_SETUP_ALLOW_NONROOT:-0}" != 1 ]; then die "run with sudo: sudo ./setup.sh"; fi
-  [ -n "$INVOKER" ] && [ "$INVOKER" != root ] || die "run it with sudo from your normal account (SUDO_USER is empty or root)"
+  if [ -z "$INVOKER" ] || [ "$INVOKER" = root ]; then die "run it with sudo from your normal account (SUDO_USER is empty or root)"; fi
   [[ $INVOKER =~ ^[a-z_][a-z0-9_-]*$ ]] || die "unsupported user name: $INVOKER"
   have_user "$INVOKER" || die "user $INVOKER does not exist"
   local id="" ver=""
@@ -233,7 +231,7 @@ preflight() {
   local free min=${CCDASH_SETUP_MIN_DISK_MB:-5120}
   mkdir -p "$R/var/lib" 2>/dev/null || true
   free=$(df -Pm "$R/var/lib" | awk 'NR==2 {print $4}')
-  [[ ${free:-0} =~ ^[0-9]+$ ]] && [ "$free" -ge "$min" ] || die "needs ${min} MB free under /var/lib (found ${free:-?})"
+  if ! [[ ${free:-0} =~ ^[0-9]+$ ]] || [ "$free" -lt "$min" ]; then die "needs ${min} MB free under /var/lib (found ${free:-?})"; fi
   if [ -n "$(ss -ltnH "sport = :$PORT" 2>/dev/null)" ]; then
     ccdash_paths
     if [ -n "$INSTALL_DIR" ] && [ -n "$("${DOCKER[@]}" ps -q --filter name=^ccdash\$ 2>/dev/null)" ]; then
@@ -286,7 +284,7 @@ ccdash_user() {
   fi
   ccdash_paths
   uid=$(pw_field ccdash 3)
-  [ -n "$uid" ] && [ -n "$CCDASH_HOME" ] || die "cannot read the ccdash account"
+  if [ -z "$uid" ] || [ -z "$CCDASH_HOME" ]; then die "cannot read the ccdash account"; fi
   if ! grep -q '^ccdash:' "$R/etc/subuid" 2>/dev/null || ! grep -q '^ccdash:' "$R/etc/subgid" 2>/dev/null; then
     usermod --add-subuids 200000-265535 --add-subgids 200000-265535 ccdash || die "cannot add subordinate ids for ccdash"
   fi
@@ -416,28 +414,6 @@ identity() {
   CCDASH_DOCKER="$DOCKER_STR" "$CCD" identity "$INVOKER" "$INVOKER@localhost" || warn "could not set the git identity (ccd identity <name> <email>)"
 }
 
-claude_login() {
-  step "7/12 Claude sign-in"
-  if [ "${CCDASH_SETUP_SKIP_CLAUDE_LOGIN:-0}" = 1 ]; then
-    say "skipped (CCDASH_SETUP_SKIP_CLAUDE_LOGIN=1)"
-    return 0
-  fi
-  if dexec -u ccd ccdash claude auth status >/dev/null 2>&1; then
-    say "Claude is already signed in"
-    return 0
-  fi
-  say "Open the URL that Claude prints in a browser, approve, then paste the code here."
-  if [ -n "${CCDASH_SETUP_CLAUDE_LOGIN:-}" ]; then
-    # shellcheck disable=SC2086 # a hook command line, split on purpose
-    $CCDASH_SETUP_CLAUDE_LOGIN <&3 >&4 2>&4
-  elif [ -t 3 ]; then
-    dexec -it -u ccd ccdash claude auth login <&3 >&4 2>&4
-  else
-    warn "Claude sign-in needs a terminal. Run: ccd login (then /login)"
-    return 0
-  fi || warn "Claude sign-in did not finish. Run it later with: ccd login"
-}
-
 # --- Cloudflare ---
 cf_as() { sudo -n -u cloudflared env "HOME=$CF_HOME" "$CLOUDFLARED" "$@"; }
 cf_api() { # cf_api METHOD PATH [body-file]
@@ -460,7 +436,7 @@ cf_login() {
   [ ! -s "$cert" ] || { say "cloudflared is already logged in"; return 0; }
   say "Open the URL below in a browser and pick the domain for ccdash."
   : >"$out"
-  cf_as tunnel login >"$out" 2>&1 </dev/null 4>&- & # prints a URL and never exits by itself
+  cf_as tunnel login >"$out" 2>&1 </dev/null & # prints a URL and never exits by itself
   pid=$!
   while [ ! -s "$cert" ]; do
     if [ "$shown" -eq 0 ] && url=$(grep -m1 -o 'https://[^ ]*' "$out") && [ -n "$url" ]; then
@@ -636,9 +612,8 @@ summary() {
   say "Dashboard:   $url$([ -n "$ORIGIN" ] || printf '  (SSH: ssh -L %s:127.0.0.1:%s you@this-host)' "$PORT" "$PORT")"
   say "Login file:  $LOGIN_FILE"
   if [ "$TOTP_REQUIRED" -eq 1 ]; then factor='TOTP enrolment at the first login'; else factor='Cloudflare Access email one-time code'; fi
-  if [ "${CCDASH_SETUP_SKIP_CLAUDE_LOGIN:-0}" = 1 ]; then signin=skipped; else signin='see above'; fi
   say "Second factor: $factor"
-  say "Checks:      stack up = pass; login = pass; Claude sign-in = $signin; self-test = $SELFTEST"
+  say "Checks:      stack up = pass; login = pass; self-test = $SELFTEST"
   [ "${#WARNINGS[@]}" -eq 0 ] || { say "Warnings:"; printf '  - %s\n' "${WARNINGS[@]}"; }
   say "Next: open the dashboard on your phone and press \"Enable notifications\"."
   say "Log: $LOG"
@@ -658,7 +633,6 @@ main() {
   write_env_and_start
   login
   identity
-  claude_login
   if [ "$NO_CLOUDFLARE" -eq 0 ]; then
     cloudflare_tunnel
     access_app

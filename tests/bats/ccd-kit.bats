@@ -3,6 +3,8 @@
 # tests/fixtures/agent-kit-stub.sh plus a KIT_VERSION line, so `ensure` works through ccd-onboard.
 
 setup() {
+  export CCDASH_CONFIG_ROOT=$BATS_TEST_TMPDIR/projects
+  export CCDASH_MEMORY_INIT=/bin/true
   ROOT=$(cd "$BATS_TEST_DIRNAME/../.." && pwd)
   BIN=$ROOT/rootfs/usr/local/bin
   export HOME=$BATS_TEST_TMPDIR/home
@@ -11,6 +13,7 @@ setup() {
   export CCDASH_KIT_IMAGE=$BATS_TEST_TMPDIR/image KIT_REPO=octo/kit
   export STUB_LOG=$BATS_TEST_TMPDIR/stub.log CCDASH_KIT_LOCK_WAIT=20
   unset STUB_EXIT STUB_VERSION STUB_MEMORY STUB_SECRET CCDASH_KIT
+  mkdir -p "$HOME/bin"; printf '#!/bin/bash\nexit 0\n' > "$HOME/bin/claude"; chmod +x "$HOME/bin/claude"; export PATH=$HOME/bin:$PATH # never run the real claude
   export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
   mkdir -p "$HOME" "$CCDASH_WS"
   git config --global init.defaultBranch main
@@ -160,7 +163,7 @@ notemp() { [ -z "$(ls -A "$CCDASH_KIT_HOME" | grep '^\.tmp' || true)" ]; }
   printf '%s\n' "${lines[@]}" | grep -q '^project on '
   printf '%s\n' "${lines[@]}" | grep -q '^project legacy '
   ! printf '%s\n' "${lines[@]}" | grep -q '^project off '
-  [ "$(grep -c 'args=ensure' "$STUB_LOG")" -eq 2 ]
+  [ "$(grep -c 'args=attach' "$STUB_LOG")" -eq 2 ]
   run "$BIN/ccd-kit" update --reset
   [[ ${lines[0]} == "project "* ]]
   [[ ${lines[-2]} == "updated "* && ${lines[-1]} == "version "* ]]
@@ -206,4 +209,16 @@ notemp() { [ -z "$(ls -A "$CCDASH_KIT_HOME" | grep '^\.tmp' || true)" ]; }
   printf 'KIT_VERSION="1.2 3"\n' > "$BATS_TEST_TMPDIR/b"; ! kit_version "$BATS_TEST_TMPDIR/b"
   printf ' KIT_VERSION="1.2.3"\n' > "$BATS_TEST_TMPDIR/c"; ! kit_version "$BATS_TEST_TMPDIR/c"
   ! kit_version "$BATS_TEST_TMPDIR/none"
+}
+
+@test "a missing claude fails each project config dir in stdout; updated and version stay last" {
+  [ -z "$(env PATH=/usr/bin:/bin sh -c 'command -v claude')" ] || skip "claude is on /usr/bin:/bin"
+  export CCDASH_CONFIG_ROOT=$BATS_TEST_TMPDIR/projects
+  mkdir -p "$CCDASH_CONFIG_ROOT/work" "$CCDASH_CONFIG_ROOT/alt"
+  run env PATH=/usr/bin:/bin "$BIN/ccd-kit" update
+  [ "$status" -eq 0 ]
+  printf '%s\n' "${lines[@]}" | grep -q '^marketplace work failed '
+  printf '%s\n' "${lines[@]}" | grep -q '^marketplace alt failed '
+  [ "${lines[-2]}" = "updated $IMG $TIP" ]
+  [ "${lines[-1]}" = "version 0.0.1 1.2.3" ]
 }

@@ -70,8 +70,8 @@ function createApp({
     pingMs: svc.pingMs, cleanupMs: svc.cleanupMs,
   });
   const events = createEvents({
-    wss, registry, api: handleApi, reconciler: rec, log,
-    watchDir: svc.eventsDir || path.dirname(svc.agentsDir),
+    wss, registry, api: handleApi, reconciler: rec, broker: svc.broker, log,
+    watchDir: svc.eventsDir || '/home/ccd/.ccdash',
     ...svc.eventsOpts,
   });
   const limiter = new LoginLimiter({ clock });

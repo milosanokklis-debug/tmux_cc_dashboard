@@ -46,6 +46,7 @@ const mk = (over = {}) => {
   const fb = createUsageFallback({
     tmux, now: () => t, wait: async () => {}, env: over.env || {}, flagFile: over.flagFile || '/nonexistent/flag',
     log: () => {}, intervalMs: 600_000,
+    projects: () => ['x'],
   });
   return { fb, tmux, advance: (ms) => { t += ms; } };
 };

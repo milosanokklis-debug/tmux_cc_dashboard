@@ -1,5 +1,5 @@
 'use strict';
-// The single /events WebSocket: the hub pushes tree, state, usage and token payloads when they
+// The single /events WebSocket: the hub pushes state, usage and token payloads when they
 // change, and terminal previews for the cards a client says it is looking at. See NOTES.md
 // "/events protocol". Authentication is the caller's (guardUpgrade) and happens before the handshake.
 const fs = require('node:fs');
@@ -17,7 +17,7 @@ const fingerprint = (v) => JSON.stringify(v, (k, x) => (VOLATILE.has(k) ? undefi
 // deps: { wss, registry, api (handleApi with the payload helpers), reconciler, watchDir,
 //         debounceMs?, previewMs?, pingMs?, rewatchMs?, log? }
 function createEvents(deps) {
-  const { wss, registry, api, reconciler, watchDir, log = console.error } = deps;
+  const { wss, registry, api, reconciler, broker, watchDir, log = console.error } = deps;
   const debounceMs = deps.debounceMs ?? 100;
   const previewMs = deps.previewMs ?? 1000;
   const pingMs = deps.pingMs ?? 30000;
@@ -42,7 +42,10 @@ function createEvents(deps) {
     if (!snap) return null;
     const states = {};
     for (const r of snap.values()) {
-      if (!r.hidden) states[r.sid] = { status: r.status, idle: r.idle, quiet: r.quiet };
+      if (r.hidden) continue;
+      states[r.sid] = { status: r.status, idle: r.idle, quiet: r.quiet, project: r.project };
+      const a = r.status === 'needs_approval' ? broker?.forSid(r.sid) : null; // the card shows only while the conversation really waits
+      if (a) states[r.sid].approval = { id: a.id, tool: a.tool_name, input: a.tool_input, truncated: a.truncated, since: a.since };
     }
     return { type: 'state', states };
   }
@@ -55,7 +58,6 @@ function createEvents(deps) {
       do {
         again = false;
         const parts = [
-          ['tree', async () => ({ type: 'tree', tree: await api.treePayload(false) })],
           ['state', async () => stateMessage()],
           ['usage', async () => ({ type: 'usage', usage: api.usagePayload() })],
           ['tokens', async () => ({ type: 'tokens', tokens: await api.tokensPayload() })],

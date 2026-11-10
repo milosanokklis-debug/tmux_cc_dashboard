@@ -104,8 +104,6 @@ const ROUTES = [
   ['GET', '/api/git-identity'],
   ['POST', '/api/git-identity', { name: 'A', email: 'a@b.co' }],
   ['POST', '/api/conversations/00000000-0000-4000-8000-000000000001/wake'],
-  ['GET', '/api/tree'],
-  ['GET', '/api/tree?all=1'],
   ['GET', '/api/usage'],
   ['GET', '/api/tokens'],
   ['GET', '/api/transcript?conv=S1'],
@@ -166,7 +164,7 @@ test('vendor assets need a session, are served with the same CSP and no-store; s
 test('wrong methods give 405 and unknown API paths 404 (with a session)', async (t) => {
   const s = await h.authed(h.fakeServices());
   t.after(s.stop);
-  assert.strictEqual((await post(s, '/api/tree', {})).status, 405);
+  assert.strictEqual((await post(s, '/api/usage', {})).status, 405);
   assert.strictEqual((await get(s, '/api/projects/demo/open')).status, 405);
   assert.strictEqual((await req(s.base, '/api/projects', { method: 'DELETE', headers: JSON_POST, cookie: s.cookie })).status, 405);
   assert.strictEqual((await get(s, '/api/nothing')).status, 404);
@@ -242,7 +240,7 @@ test('POST /api/projects/:proj/open validates the name and folder, runs ccd-sess
   const ok = await post(s, '/api/projects/demo/open');
   assert.strictEqual(ok.status, 200);
   assert.deepStrictEqual(await ok.json(), { session: 'claude-demo' });
-  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'demo', '--account', 'default']]);
+  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'demo']]);
   for (const [p, status] of [['/api/projects/missing/open', 404], ['/api/projects/bad%3Bname/open', 400],
     ['/api/projects/..%2Fx/open', 400], ['/api/projects/.hidden/open', 400],
     ['/api/projects/%E0%A4%A/open', 400]]) {
@@ -305,7 +303,7 @@ test('POST /api/projects: a 4000 char prompt is accepted and passed as ONE argv 
   assert.strictEqual(r.status, 200);
   assert.deepStrictEqual(await r.json(), { project: 'hello', session: 'claude-hello' });
   assert.deepStrictEqual(svc.calls.runOp, [['ccd-onboard', 'octo/hello']]);
-  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'hello', '--account', 'default', prompt]]);
+  assert.deepStrictEqual(svc.calls.runFile, [['ccd-session', 'start', 'hello', prompt]]);
 });
 
 test('POST /api/projects: without token no GitHub call and no token file', async (t) => {
@@ -438,7 +436,7 @@ test('POST /api/projects: no prompt, null and empty prompt count as the same set
   assert.strictEqual(ops.length, 1);
 });
 
-test('a denied or unreachable tmux gives 503 on /api/tree and /api/projects (logged once), not an empty tree', async (t) => {
+test('a denied or unreachable tmux gives 503 on /api/projects (logged once), not an empty list', async (t) => {
   let up = false;
   const svc = h.fakeServices();
   svc.tmux.listPanes = async () => { if (!up) throw new Error('tmux: access not allowed'); return []; };
@@ -448,34 +446,15 @@ test('a denied or unreachable tmux gives 503 on /api/tree and /api/projects (log
   const orig = console.error;
   console.error = (...a) => logged.push(a.join(' '));
   try {
-    for (const p of ['/api/tree', '/api/projects', '/api/tree', '/api/projects']) {
+    for (const p of ['/api/projects', '/api/projects']) {
       const r = await get(s, p);
       assert.strictEqual(r.status, 503, p);
       assert.deepStrictEqual(await r.json(), { error: 'tmux unavailable' });
     }
     assert.strictEqual(logged.filter((l) => l.includes('tmux unavailable')).length, 1);
     up = true;
-    assert.strictEqual((await get(s, '/api/tree')).status, 200);
     assert.strictEqual((await get(s, '/api/projects')).status, 200);
   } finally { console.error = orig; }
-});
-
-test('GET /api/tree through the API: needs ?all=1 for old conversations; sanitized JSON', async (t) => {
-  const svc = h.fakeServices();
-  fs.writeFileSync(path.join(svc.agentsDir, 'x.jsonl'), [
-    { ev: 'session', ts: '2026-01-01T00:00:00Z', sid: 'old', pane: '%1', win: 'claude-p:0', project: '/workspace/p' },
-    { ev: 'end', ts: '2026-01-01T01:00:00Z', sid: 'old', pane: '%1', win: 'claude-p:0', project: '/workspace/p' },
-  ].map((e) => JSON.stringify(e)).join('\n'));
-  const s = await h.authed(svc);
-  t.after(s.stop);
-  const def = await (await get(s, '/api/tree')).json();
-  assert.deepStrictEqual(def.projects, []);
-  assert.strictEqual(def.now, Date.parse('2026-01-10T12:00:00Z') / 1000); // server time, unix seconds
-  const all = await (await get(s, '/api/tree?all=1')).json();
-  assert.strictEqual(all.projects[0].conversations[0].startedTs, Date.parse('2026-01-01T00:00:00Z') / 1000);
-  assert.strictEqual(all.projects[0].conversations[0].endedTs, Date.parse('2026-01-01T01:00:00Z') / 1000);
-  assert.strictEqual(all.projects[0].project, 'p');
-  assert.strictEqual(all.projects[0].conversations[0].status, 'ended');
 });
 
 test('git identity refuses a name or email starting with a dash', () => {

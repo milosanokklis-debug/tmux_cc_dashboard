@@ -88,12 +88,10 @@ case $name in
           *ccdash-passwd.js*) [ -z "${FAKE_PASSWD_FAIL:-}" ] || exit 1; cat >"$S/passwd-stdin"; echo "$*" >"$S/passwd-args" ;;
           *"git config --global user.email") cat "$S/git-email" 2>/dev/null ;;
           *"git config --global user.email "*) echo "${*##* }" >"$S/git-email" ;;
-          *"claude auth status") [ -e "$S/claude-login" ] ;;
           *"claude mcp list") echo 'basic-memory: connected' ;;
           *) ;;
         esac ;;
     esac ;;
-  claude-login) : >"$S/claude-login"; echo claude-login-output ;;
   cloudflared)
     case "$1 $2" in
       "tunnel login")

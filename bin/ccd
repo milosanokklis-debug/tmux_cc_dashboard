@@ -81,7 +81,7 @@ doctor_live() {
   jq -r 'if .ok then "selftest: all checks passed or skipped" else "selftest: \(.mismatches | length) warning(s), see '"$out"' (the install is not affected)" end' <<<"$json"
 }
 
-usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] [--kit|--no-kit] <owner/repo> | kit on|off <project> | kit status | kit check | kit update [<ref>|--reset] | pull <project> | identity <name> <email> | identity --from-host | login [--account <name>] | accounts | passwd [--totp|--no-totp] | doctor --live" >&2; exit 2; }
+usage() { echo "usage: ccd ls | attach <project> | wake <session-id> | clone [--trust-hooks] [--kit|--no-kit] <owner/repo> | kit on|off <project> | kit status | kit check | kit update [<ref>|--reset] | pull <project> | identity <name> <email> | identity --from-host | passwd [--totp|--no-totp] | doctor --live" >&2; exit 2; }
 case "${1:-}" in
   ls) run ccd-session ls ;;
   attach) [ $# -eq 2 ] || usage; run ccd-session attach "$2" ;;
@@ -98,7 +98,7 @@ case "${1:-}" in
     case "${2:-}" in
       on | off)
         [ $# -eq 3 ] || usage
-        [[ $3 =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] && [[ $3 != *..* ]] || { echo "ccd: invalid project name" >&2; exit 2; }
+        if ! [[ $3 =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || [[ $3 == *..* ]]; then { echo "ccd: invalid project name" >&2; exit 2; }; fi
         # shellcheck disable=SC2016 # expands in the container
         repo=$(run sh -c 'jq -r ".repo // empty" "$HOME/.ccdash/projects/$1.json" 2> /dev/null' sh "$3" || true)
         [ -n "$repo" ] || { echo "ccd: no record for project $3" >&2; exit 1; }
@@ -117,17 +117,15 @@ case "${1:-}" in
   identity)
     if [ $# -eq 2 ] && [ "$2" = --from-host ]; then
       name=$(git config --global user.name || true); email=$(git config --global user.email || true)
-      [ -n "$name" ] && [ -n "$email" ] || { echo "ccd: the host's git config --global needs user.name and user.email" >&2; exit 1; }
+      if [ -z "$name" ] || [ -z "$email" ]; then echo "ccd: the host's git config --global needs user.name and user.email" >&2; exit 1; fi
     else
-      [ $# -eq 3 ] && [ "$2" != --from-host ] || usage
+      if [ $# -ne 3 ] || [ "$2" = --from-host ]; then usage; fi
       name=$2; email=$3
     fi
     run git config --global user.name "$name"
     run git config --global user.email "$email"
     echo "git identity set to $name $email"
     ;;
-  login) run ccd-account login "${@:2}" ;; # ccd-account parses [--account NAME]
-  accounts) [ $# -eq 1 ] || usage; run ccd-account list ;;
   passwd)
     if [ "$#" -le 2 ] && { [ "$#" -lt 2 ] || [ "$2" = --totp ] || [ "$2" = --no-totp ]; }; then
       $D exec -it -u web ccdash node /opt/ccdash/dashboard/ccdash-passwd.js "${@:2}"

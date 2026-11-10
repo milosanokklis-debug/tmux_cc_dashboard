@@ -4,6 +4,6 @@ foreground { install -d -o ccd -g ccd -m 0770 /run/ccdash/ops }
 foreground { install -d -o web -g ccd -m 0750 /run/ccdash-web }
 # Basic Memory registration as ccd; foreground ignores its exit status and the script always exits 0.
 foreground { s6-setuidgid ccd timeout 120 /usr/local/bin/ccd-memory-init }
-# Kit re-check of opted-in projects, every account, in the background so start is never held up.
+# Kit re-check of opted-in projects, every project, in the background so start is never held up.
 background { s6-setuidgid ccd s6-env HOME=/home/ccd /usr/local/bin/ccd-session kit-recheck }
 exit 0

@@ -9,7 +9,26 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const https = require('node:https');
 const ece = require('http_ece');
-const { BASE, OUT, sleep, eventually, launch, phoneContext, login, card, apiGet, sendPrompt } = require('./lib');
+const { BASE, OUT, USER, PASS, sleep, eventually, launch, phoneContext, apiGet, login } = require('./lib');
+
+// ---- local helpers (lib.js is locked and still waits for the removed agent tree) ----
+const conv = (project) => `[data-testid="conversation"]:is([data-project="${project}"], :not([data-project]))`;
+
+// Opens the terminal view of a project and expands the Windows panel (collapsed behind its toggle on a phone).
+async function openProject(page, project) {
+  if (await page.evaluate(() => location.hash) !== `#/term/${project}`) await page.evaluate((p) => { location.hash = `#/term/${p}`; }, project);
+  await page.locator('#view-terminal').waitFor({ state: 'visible' });
+  const toggle = page.locator('#tree-toggle');
+  if (await toggle.isVisible() && (await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await page.locator('#windows').waitFor({ state: 'visible' });
+}
+
+// The live conversation item of a project in the Windows panel. Test ids repeat per item, so scope by it.
+// States from /events carry no project yet; until they do every conversation is listed and the first is used.
+async function card(page, project) {
+  await openProject(page, project);
+  return page.locator(`${conv(project)}:not([data-status="ended"]):not([data-status="sleeping"])`).first();
+}
 
 const PORT = Number(process.env.PUSH_PORT || 8443);
 const SECRET = 'secret-word-zq81'; // appears in prompts only; must never show up in a push
@@ -27,6 +46,15 @@ const sub = {
 const received = []; // { headers, url, payload (decrypted text) }
 let server, browser, context, page, cdp;
 const registrations = new Map();
+
+// Types a prompt in the item's prompt box and presses Send.
+async function sendPrompt(page, project, text) {
+  const c = await card(page, project);
+  const box = c.getByTestId('prompt');
+  await eventually(async () => { if (await box.isDisabled()) throw new Error('prompt box disabled'); }, `prompt box of ${project} enabled`);
+  await box.fill(text);
+  await c.getByTestId('send').click();
+}
 
 test.before(async () => {
   server = https.createServer({ key: process.env.PUSH_KEY, cert: process.env.PUSH_CERT }, (rq, rs) => {
@@ -94,9 +122,8 @@ const openSettings = async () => { await page.getByTestId('notifications').click
 
 async function untilStatus(project, status) {
   await eventually(async () => {
-    const t = await apiGet(page, '/api/tree?all=1');
-    const c = t.projects.find((p) => p.project === project).conversations.find((x) => x.status !== 'ended' && x.status !== 'sleeping');
-    assert.equal(c.status, status);
+    const c = await card(page, project);
+    assert.equal(await c.getAttribute('data-status', { timeout: 1000 }), status);
   }, `${project} is ${status}`);
 }
 
@@ -104,13 +131,13 @@ async function untilStatus(project, status) {
 async function interrupt(project) {
   const [res] = await Promise.all([
     page.waitForResponse((r) => /\/interrupt$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST', { timeout: 15000 }),
-    card(page, project).getByTestId('interrupt').click(),
+    (await card(page, project)).getByTestId('interrupt').click(),
   ]);
   assert.ok(res.ok(), `interrupt POST returned ${res.status()} ${await res.text().catch(() => '')}`);
 }
 
 test('enabling notifications in the settings dialog subscribes this browser', async () => {
-  await eventually(async () => assert.equal(await card(page, 'pc').getByTestId('prompt').isDisabled(), false), 'pc waiting');
+  await eventually(async () => assert.equal(await (await card(page, 'pc')).getByTestId('prompt').isDisabled(), false), 'pc waiting');
   await openSettings();
   await page.getByTestId('enable-notifications').waitFor({ state: 'visible' });
   assert.match(await page.getByTestId('notif-state').innerText(), /off/);
@@ -143,7 +170,7 @@ test('an approval request produces exactly one push, and one notification, with 
     assert.equal(n[0].body, 'Needs your approval');
   }, 'one approval notification');
   assert.equal((await notifications()).length, 1, 'exactly one notification so far');
-  await card(page, 'pc').getByTestId('approve').click();
+  await (await card(page, 'pc')).getByTestId('approve').click();
   await untilStatus('pc', 'waiting');
 });
 
@@ -177,7 +204,7 @@ test('a pref switched off in the UI stops that push', async () => {
   await page.locator('#notif-close').click();
   const before = received.length;
   await untilStatus('pc', 'waiting'); // the server's view, not just the UI, before sending
-  await eventually(async () => assert.equal(await card(page, 'pc').getByTestId('prompt').isDisabled(), false), 'pc waiting');
+  await eventually(async () => assert.equal(await (await card(page, 'pc')).getByTestId('prompt').isDisabled(), false), 'pc waiting');
   await sendPrompt(page, 'pc', `/long ${SECRET}`);
   await untilStatus('pc', 'working');
   await sleep(1500); // let the reconciler see "working" before the turn ends (as in the test above)

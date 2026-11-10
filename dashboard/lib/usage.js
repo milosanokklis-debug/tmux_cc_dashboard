@@ -5,7 +5,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { readRegular } = require('./safefile');
-const { NAME_RE, DEFAULT_ACCOUNT } = require('./accounts');
+
+const PROJECT_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}$/;
 
 const DEFAULT_DIR = '/home/ccd/.ccdash/usage';
 const MAX_FILES = 1000;
@@ -27,9 +28,8 @@ function parseReading(text) {
       limits[name] = { used_percentage: w.used_percentage, resets_at: w.resets_at };
     }
   }
-  // readings from before accounts existed have no account: they are the default account's
-  const account = typeof o.account === 'string' && NAME_RE.test(o.account) ? o.account : DEFAULT_ACCOUNT;
-  return { ts: o.ts, limits, account };
+  const project = typeof o.project === 'string' && PROJECT_RE.test(o.project) ? o.project : null;
+  return { ts: o.ts, limits, project };
 }
 
 function readings(dir = DEFAULT_DIR) {
@@ -53,7 +53,7 @@ function readings(dir = DEFAULT_DIR) {
   return out;
 }
 
-// The gauge object for one account from its readings. fallback: optional () => { ts, limits }.
+// The gauge object for one project from its readings. fallback: optional () => { ts, limits }.
 function gaugesOf(all, now, fallback) {
   let best = null;
   for (const r of all) {
@@ -80,18 +80,20 @@ function gaugesOf(all, now, fallback) {
 }
 
 // now: unix seconds. fallback: optional () => { ts, five_hour, seven_day } from usage-fallback.js.
-// Readings are never mixed between accounts. The result is the default account's gauges (the shape
-// callers had before accounts, usage-command fallback included) plus `accounts: { name: gauges }` for
-// `default` and every other account that has a reading. The fallback only ever describes `default`.
+// The result is the freshest gauges overall (usage-command fallback included, as before) plus
+// `projects: { name: gauges }` for every project that has a reading. Readings are never mixed
+// between projects; readings without a project only count toward the overall gauges.
 function gauges({ dir = DEFAULT_DIR, now = Math.floor(Date.now() / 1000), fallback = null } = {}) {
-  const by = new Map([[DEFAULT_ACCOUNT, []]]);
-  for (const r of readings(dir)) {
-    if (!by.has(r.account)) by.set(r.account, []);
-    by.get(r.account).push(r);
+  const all = readings(dir);
+  const by = new Map();
+  for (const r of all) {
+    if (!r.project) continue;
+    if (!by.has(r.project)) by.set(r.project, []);
+    by.get(r.project).push(r);
   }
-  const accounts = {};
-  for (const [name, list] of by) accounts[name] = gaugesOf(list, now, name === DEFAULT_ACCOUNT ? fallback : null);
-  return { ...accounts[DEFAULT_ACCOUNT], accounts };
+  const projects = {};
+  for (const [name, list] of by) projects[name] = gaugesOf(list, now, null);
+  return { ...gaugesOf(all, now, fallback), projects };
 }
 
 module.exports = { gauges, readings, DEFAULT_DIR };

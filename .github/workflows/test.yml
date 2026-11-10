@@ -63,8 +63,10 @@ jobs:
           - { name: stack (phase-e core), script: phase-e, part: core }
           - { name: stack (phase-e cpu), script: phase-e, part: cpu }
           - { name: stack (phase-e ui), script: phase-e, part: ui }
+          - { name: stack (project-isolation), script: project-isolation }
           - { name: stack (phase-g), script: phase-g }
           - { name: stack (egress), script: egress }
+          - { name: stack (kit-attach), script: kit-attach }
     steps:
       - uses: actions/checkout@v4
       - name: Read pinned versions

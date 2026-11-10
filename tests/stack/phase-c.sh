@@ -20,8 +20,10 @@
 # - The browser container joins the dashboard container's network namespace (--network container:ID), so
 #   http://localhost:7690 is the dashboard (the default allowed Origin) and the fake push service the test
 #   starts is reachable from the dashboard at https://localhost:8443.
-# shellcheck disable=SC2329,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
+# shellcheck disable=SC2329,SC2317,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
 set -euo pipefail
+# shellcheck source=tests/stack/lib-login.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-login.sh"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
 export CCDASH_TEST_PORT=${CCDASH_TEST_PORT:-7692}
@@ -58,7 +60,7 @@ until_ok() { # until_ok SECONDS DESCRIPTION CMD...
   local n=$1 what=$2; shift 2
   for _ in $(seq $((n * 5))); do if "$@" >/dev/null 2>&1; then ok "$what"; return 0; fi; sleep 0.2; done
   bad "$what (timed out after ${n}s)"
-  if [ -n "${DEBUG:-}" ]; then api "$url/api/tree?all=1" | jq -c . || true; tm list-panes -a -F '#{session_name} #{pane_id} #{pane_pid}' || true; compose logs --tail 20 || true; fi
+  if [ -n "${DEBUG:-}" ]; then stack_states | jq -c . || true; tm list-panes -a -F '#{session_name} #{pane_id} #{pane_pid}' || true; compose logs --tail 20 || true; fi
   return 1
 }
 eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; fi; }
@@ -89,8 +91,6 @@ req() {
   out=$(curl -s -b "$jar" -X "$1" -H "Origin: $origin" -H 'X-CCDash: 1' -H 'content-type: application/json' -d "${3:-{\}}" -w '\n%{http_code}' "$url$2")
   status=${out##*$'\n'}; body=${out%$'\n'*}
 }
-tree() { api "$url/api/tree?all=1"; }
-live() { tree | jq -r --arg p "$1" '[.projects[] | select(.project == $p) | .conversations[] | select(.status != "ended" and .status != "sleeping")][0] | '"$2"; }
 sid_of() { live "$1" '.sid // empty'; }
 status_of() { live "$1" '.status // empty'; }
 is_status() { [ "$(status_of "$1")" = "$2" ]; }
@@ -109,6 +109,7 @@ fresh_stack() { # fresh_stack WAIT_SECONDS: a new stack with empty volumes
 }
 start_conv() { # start_conv PROJECT
   ccd mkdir -p "/workspace/$1"
+  stack_login "$1"
   ccd ccd-session start "$1" >/dev/null
   until_ok 30 "$1 is waiting" is_status "$1" waiting
 }
@@ -169,7 +170,8 @@ until_ok 15 "Interrupt stopped the turn (waiting)" is_status api1 waiting
 req POST "/api/conversations/$a1/close"
 eq "Close of a waiting conversation" "$status" 200
 eq "Close -> ended" "$(jq -r .result <<<"$body")" ended
-until_ok 15 "api1 is ended in the tree" bash -c "[ \"\$(curl -s -b '$jar' -H 'Origin: $origin' -H 'X-CCDash: 1' '$url/api/tree?all=1' | jq -r '[.projects[] | select(.project == \"api1\") | .conversations[].status] | first')\" = ended ]"
+api1_ended() { [ "$(stack_states | jq -r '[.[] | select(.project == "api1") | .status] | first')" = ended ]; }
+until_ok 15 "api1 is ended in the tree" api1_ended
 
 # The largest allowed prompt, on a conversation of its own (the fake claude's tty handling of a huge paste
 # can leave a stray escape behind that would end a later /long).
@@ -202,7 +204,9 @@ mkdir -p "$shots"
 $D cp "$PW_NAME:/out/." - 2>/dev/null | tar -x -C "$shots" 2>/dev/null || true # as a tar stream: the Docker user may not own $shots
 $D rm -f "$PW_NAME" >/dev/null 2>&1 || true
 if [ "$PW_RC" = 0 ]; then ok "Playwright specs passed"; else bad "Playwright specs failed (exit $PW_RC)"; fi
-if [ -n "${CCDASH_SHOTS:-}" ]; then mkdir -p "$CCDASH_SHOTS" && cp "$shots"/*.png "$CCDASH_SHOTS"/ 2>/dev/null && echo "screenshots in $CCDASH_SHOTS" || true; fi
+if [ -n "${CCDASH_SHOTS:-}" ]; then
+  if mkdir -p "$CCDASH_SHOTS" && cp "$shots"/*.png "$CCDASH_SHOTS"/ 2>/dev/null; then echo "screenshots in $CCDASH_SHOTS" || true; fi
+fi
 events=$(ccd cat /home/ccd/.fake-claude/events.log || true)
 eq "events.log: two allows (pa, and pc in the push spec)" "$(grep -c '^permission allow$' <<<"$events")" 2
 eq "events.log: the deny message arrived" "$(grep -c '^permission-message: nope-xyz$' <<<"$events")" 1
@@ -213,7 +217,7 @@ start_conv k1
 send k1 "/perm"
 until_ok 15 "k1 waits for a decision (needs_approval)" is_status k1 needs_approval
 k1=$(sid_of k1)
-pend() { tree | jq -e --arg s "$k1" '[.projects[].conversations[] | select(.sid == $s) | .approval.tool] | first == "Bash"'; }
+pend() { stack_states | jq -e --arg s "$k1" '[.[] | select(.sid == $s) | .approval.tool] | first == "Bash"'; }
 until_ok 10 "the approval is pending in the tree" pend
 pane=$(pane_of "$k1")
 r=$(forge POST /permission "$(jq -nc --arg s "$k1" --arg p "$pane" '{session_id: $s, tool_name: "Bash", tool_input: {command: "forged"}, pane: $p}')")

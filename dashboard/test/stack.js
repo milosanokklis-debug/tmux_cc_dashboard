@@ -32,7 +32,7 @@ function stack(extraEnv = {}) {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_CLAUDE_MCP: 'connected', HOME: home, CCDASH_WS: ws, CCDASH_TMUX: sock, CCDASH_STATE: stateDir,
     FAKE_CLAUDE_SETTINGS: settings, FAKE_CLAUDE_FIXTURES: path.join(ROOT, 'tests/fixtures/2.1.317'),
     FAKE_CLAUDE_HOME: path.join(tmp, 'fake'), FAKE_CLAUDE_TIMEOUT: '5',
-    CCDASH_ACCOUNTS_LIB: path.join(ROOT, 'rootfs/usr/local/lib/ccdash'), CCDASH_ACCOUNTS_DIR: path.join(tmp, 'accounts'), ...extraEnv,
+    CCDASH_PROJECT_LIB: path.join(ROOT, 'rootfs/usr/local/lib/ccdash'), CCDASH_CONFIG_ROOT: path.join(tmp, 'projects'), ...extraEnv,
   };
   delete env.TMUX; delete env.TMUX_PANE;
   const tmux = createTmux({ sock });
@@ -41,7 +41,12 @@ function stack(extraEnv = {}) {
   const s = {
     tmp, ws, env, stateDir, tmux, rec, t,
     ccd: (...a) => execFileSync(SESSION, a, { env, encoding: 'utf8' }).trim(),
-    project(name) { fs.mkdirSync(path.join(ws, name)); return name; },
+    project(name) { // the project's fake login: ccd-session start refuses a logged-out project
+      fs.mkdirSync(path.join(ws, name));
+      fs.mkdirSync(path.join(tmp, 'fake', 'accounts', name), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'fake', 'accounts', name, 'logged-in'), '');
+      return name;
+    },
     records() {
       if (!fs.existsSync(stateDir)) return [];
       return fs.readdirSync(stateDir).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(path.join(stateDir, f), 'utf8')));
@@ -49,7 +54,7 @@ function stack(extraEnv = {}) {
     // newest conversation of a project that has not been replaced by a wake
     cur(name) {
       const d = rec.snapshot() ?? new Map();
-      const mine = s.records().filter((r) => r.project === path.join(ws, name)).sort((a, b) => b.ts - a.ts);
+      const mine = s.records().filter((r) => r.project === name).sort((a, b) => b.ts - a.ts);
       return mine.map((r) => d.get(r.sid)).filter((c) => c && !c.hidden)[0] ?? null;
     },
     async until(fn, what, ms = 10000) {
@@ -61,12 +66,12 @@ function stack(extraEnv = {}) {
     },
     async status(name, want, ms) { return s.until(() => { const c = s.cur(name); return c && c.status === want ? c : null; }, `${name} to be ${want} (now ${s.cur(name)?.status})`, ms); },
     send(name, text) {
-      const pane = s.cur(name).pane ?? s.records().find((r) => r.project === path.join(ws, name)).pane;
+      const pane = s.cur(name).pane ?? s.records().find((r) => r.project === name).pane;
       t('send-keys', '-t', pane, '-l', text);
       t('send-keys', '-t', pane, 'Enter');
     },
     claudePid(name) {
-      const pane = s.records().filter((r) => r.project === path.join(ws, name)).sort((a, b) => b.ts - a.ts)[0].pane;
+      const pane = s.records().filter((r) => r.project === name).sort((a, b) => b.ts - a.ts)[0].pane;
       const panePid = Number(t('display', '-p', '-t', pane, '#{pane_pid}'));
       const table = readProcTable();
       for (const [pid, p] of table) if (p.comm === 'claude' && hasClaude(table, panePid) && isDescendant(table, pid, panePid)) return pid;

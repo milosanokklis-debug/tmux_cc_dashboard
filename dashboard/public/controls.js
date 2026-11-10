@@ -1,5 +1,5 @@
 'use strict';
-// Per-conversation controls: prompt box, interrupt, close (two-step), approval card, live pane preview.
+// Per-conversation controls of the Windows panel: prompt box, interrupt, close (two-step), approval card, live pane preview.
 // Everything from the server is rendered with textContent / createTextNode, never innerHTML.
 (function () {
   const { api, h, notice } = window.ccdash;
@@ -20,9 +20,9 @@
   };
   const errText = (r) => (r.data && r.data.error) || 'HTTP ' + r.status;
 
-  // State that must survive a tree re-render (the tree rebuilds its DOM when the data changes).
+  // State that must survive a re-render (the Windows panel rebuilds its DOM when the data changes).
   const drafts = new Map(); // sid -> prompt text being typed
-  const closing = new Map(); // sid -> 'confirm' | 'busy'
+  const closing = new Map(); // sid -> 'busy'
   const busyAction = new Set(); // 'sid:interrupt' | 'sid:send' | approval id
   const previewCache = new Map(); // sid -> raw text
   let onChange = () => {};
@@ -134,7 +134,7 @@
     if (!document.hidden) for (const [el, sid] of visible) if (el.isConnected) ids.add(sid);
     events.setWatched(ids);
   }
-  // Debounced: a tree re-render releases and re-observes every box; the unchanged set then sends nothing.
+  // Debounced: a panel re-render releases and re-observes every box; the unchanged set then sends nothing.
   function scheduleSync(now) {
     clearTimeout(syncTimer);
     if (now) syncWatch(); else syncTimer = setTimeout(syncWatch, 250);
@@ -172,7 +172,7 @@
     return pre;
   }
 
-  // Called by the tree before it replaces its DOM.
+  // Called by the panel before it replaces its DOM.
   function releasePreviews() {
     for (const el of visible.keys()) io && io.unobserve(el);
     visible.clear();
@@ -184,7 +184,7 @@
   function promptBox(c) {
     const sid = c.sid;
     const id = 'prompt-' + domId(sid);
-    const can = !!c.canPrompt;
+    const can = c.canPrompt != null ? !!c.canPrompt : c.status === 'waiting';
     const label = h('label', { for: id, class: 'ctl-label', text: 'Prompt' });
     const reason = h('p', { class: 'ctl-reason', id: id + '-reason', text: WHY_NO_PROMPT[c.status] || 'Available when the conversation is waiting' });
     const ta = h('textarea', {
@@ -305,49 +305,34 @@
   function closeControl(c) {
     const sid = c.sid;
     const live = LIVE.has(c.status);
-    const state = closing.get(sid) || null;
+    const busy = closing.get(sid) === 'busy';
     const panelId = 'close-' + domId(sid);
+    const label = c.win || sid;
     const btn = h('button', {
-      type: 'button', class: 'btn', 'data-testid': 'close', 'data-fk': sid + ':close', text: 'Close',
-      'aria-expanded': state ? 'true' : null, 'aria-controls': state ? panelId : null,
-      'aria-describedby': live ? null : panelId + '-why',
+      type: 'button', class: 'btn', 'data-testid': 'close', 'data-fk': sid + ':close', text: busy ? 'Closing…' : 'Close',
+      'aria-label': 'Close ' + label, 'aria-describedby': live ? null : panelId + '-why',
+      'aria-busy': busy ? 'true' : null,
     });
-    btn.disabled = !live || state === 'busy';
+    btn.disabled = !live || busy;
     const out = { btn, why: live ? null : h('span', { class: 'sr-only', id: panelId + '-why', text: 'Only a running conversation can be closed' }), panel: null };
-    if (!state) {
-      btn.addEventListener('click', () => { closing.set(sid, 'confirm'); onChange({ focus: sid + ':close-cancel' }); });
-      return out;
+    if (busy) {
+      out.panel = h('p', { class: 'ctl-progress', role: 'status' }, [h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('span', { text: 'Closing… this can take up to 10 seconds.' })]);
     }
-    const confirm = h('button', { type: 'button', class: 'btn btn-danger', 'data-testid': 'close-confirm', 'data-fk': sid + ':close-confirm', text: state === 'busy' ? 'Closing…' : 'Close conversation' });
-    const cancel = h('button', { type: 'button', class: 'btn', 'data-fk': sid + ':close-cancel', text: 'Cancel' });
-    confirm.disabled = state === 'busy';
-    cancel.disabled = state === 'busy';
-    const panel = h('div', { class: 'confirm', id: panelId, role: 'group', 'aria-labelledby': panelId + '-t', 'aria-describedby': panelId + '-d' }, [
-      h('p', { class: 'confirm-title', id: panelId + '-t', text: 'Close ' + (c.win || sid) + '?' }),
-      h('p', { class: 'confirm-desc', id: panelId + '-d', text: 'Asks Claude to exit. The pane closes after 10 s if it does not. A pending approval is dropped.' }),
-      state === 'busy' ? h('p', { class: 'ctl-progress', role: 'status' }, [h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('span', { text: 'Closing… this can take up to 10 seconds.' })]) : null,
-      h('div', { class: 'ctl-actions' }, [confirm, cancel]),
-    ].filter(Boolean));
-    panel.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && closing.get(sid) === 'confirm') {
-        e.preventDefault(); e.stopPropagation();
-        closing.delete(sid);
-        onChange({ focus: sid + ':close' });
-      }
-    });
-    cancel.addEventListener('click', () => { closing.delete(sid); onChange({ focus: sid + ':close' }); });
-    confirm.addEventListener('click', async () => {
+    btn.addEventListener('click', async () => {
+      // Same native confirm as closing a window (windows.js): modal, keyboard and screen reader friendly.
+      if (!window.confirm('Close ' + label + '? Asks Claude to exit; the pane closes after 10 s if it does not. A pending approval is dropped.')) return;
+      const li = btn.closest('li');
+      const idx = li && li.parentNode ? [...li.parentNode.children].indexOf(li) : -1;
       closing.set(sid, 'busy');
-      onChange({ focus: sid + ':close-confirm' });
+      onChange({ focus: sid + ':close' });
       try {
         const r = await api('/api/conversations/' + encodeURIComponent(sid) + '/close', { method: 'POST', body: {} });
         if (r.ok) notice(CLOSE_RESULT[r.data && r.data.result] || 'Closed.', 'info');
         else notice('Could not close: ' + errText(r), 'error');
       } catch (e) { if (e.message !== 'unauthorized') notice('Could not close: network error.', 'error'); }
       closing.delete(sid);
-      onChange();
+      onChange({ focusIdx: idx });
     });
-    out.panel = panel;
     return out;
   }
 
@@ -367,8 +352,8 @@
     const a = c.approval;
     const id = 'appr-' + domId(a.id);
     const done = busyAction.has(a.id);
-    const approve = h('button', { type: 'button', class: 'btn btn-primary', 'data-testid': 'approve', 'data-fk': a.id + ':approve', text: 'Approve' });
-    const deny = h('button', { type: 'button', class: 'btn btn-danger', 'data-testid': 'deny', 'data-fk': a.id + ':deny', text: 'Deny' });
+    const approve = h('button', { type: 'button', class: 'btn btn-primary', 'data-testid': 'approve', 'data-fk': a.id + ':approve', text: 'Approve', 'aria-describedby': id + '-tool' });
+    const deny = h('button', { type: 'button', class: 'btn btn-danger', 'data-testid': 'deny', 'data-fk': a.id + ':deny', text: 'Deny', 'aria-describedby': id + '-tool' });
     const msgCount = h('span', { class: 'ctl-count', id: id + '-msg-count' });
     const msg = h('input', {
       'aria-describedby': id + '-msg-count',
@@ -382,7 +367,7 @@
     const cut = !!a.truncated;
     approve.disabled = done || cut;
     deny.disabled = msg.disabled = done;
-    if (cut) approve.setAttribute('aria-describedby', id + '-why');
+    if (cut) approve.setAttribute('aria-describedby', id + '-tool ' + id + '-why');
     const bashCommand = a.tool === 'Bash' && a.input && typeof a.input === 'object' && typeof a.input.command === 'string' ? a.input.command : null;
     const cmdPre = bashCommand === null ? null : h('pre', { class: 'appr-input appr-command', tabindex: '0', role: 'region', 'aria-label': 'Command', 'data-testid': 'approval-command', text: showInvisible(bashCommand) });
     const inputPre = h('pre', { class: 'appr-input', tabindex: '0', role: 'region', 'aria-label': 'Input for ' + showInvisible(a.tool), text: fmtInput(a.input) });
@@ -392,6 +377,9 @@
     });
 
     async function decide(behavior) {
+      let ok = false;
+      const li = card.closest('li');
+      const idx = li && li.parentNode ? [...li.parentNode.children].indexOf(li) : -1;
       busyAction.add(a.id);
       approve.disabled = deny.disabled = msg.disabled = true;
       const body = { behavior };
@@ -399,6 +387,7 @@
       try {
         const r = await api('/api/approvals/' + encodeURIComponent(a.id) + '/decision', { method: 'POST', body });
         if (r.ok) {
+          ok = true;
           card.remove();
           document.querySelectorAll('[data-approval-id="' + CSS.escape(a.id) + '"]').forEach((n) => n.remove());
           denyDrafts.delete(a.id);
@@ -411,7 +400,7 @@
         if (e.message !== 'unauthorized') notice('Could not record the decision: network error.', 'error');
         busyAction.delete(a.id);
       }
-      onChange();
+      onChange(ok ? { decided: a.id, focusIdx: idx } : { decided: null });
     }
     approve.addEventListener('click', () => decide('allow'));
     deny.addEventListener('click', () => decide('deny'));
@@ -421,7 +410,7 @@
       h('dl', { class: 'appr-meta' }, [
         h('dt', { text: 'Project' }), h('dd', { text: project }),
         h('dt', { text: 'Conversation' }), h('dd', { text: c.win || c.sid }),
-        h('dt', { text: 'Tool' }), h('dd', { class: 'appr-tool', 'data-testid': 'approval-tool', text: showInvisible(a.tool) }),
+        h('dt', { text: 'Tool' }), h('dd', { class: 'appr-tool', id: id + '-tool', 'data-testid': 'approval-tool', text: showInvisible(a.tool) }),
       ]),
       cmdPre,
       // A Bash command is fully shown above; the raw JSON is one tap away. Other tools show their input directly.
@@ -440,25 +429,6 @@
   }
   const denyDrafts = new Map();
 
-  // "Needs approval" strip at the top of the tree panel: summaries only; the actions live on the cards.
-  function approvalStrip(items, jump) {
-    if (!items.length) return null;
-    return h('section', { class: 'appr-strip', 'data-testid': 'approval-strip', 'aria-labelledby': 'appr-strip-t' }, [
-      h('h3', { class: 'appr-strip-title', id: 'appr-strip-t' }, [
-        h('span', { class: 'chip-icon', 'aria-hidden': 'true', text: '!' }),
-        h('span', { text: 'Needs approval (' + items.length + ')' }),
-      ]),
-      h('ul', { class: 'appr-strip-list' }, items.map((it) => {
-        const go = h('button', { type: 'button', class: 'btn', 'data-testid': 'approval-jump', 'data-fk': it.c.approval.id + ':jump', text: 'Review' });
-        go.addEventListener('click', () => jump(it.c.approval.id));
-        return h('li', { class: 'appr-strip-item', 'data-approval-id': it.c.approval.id }, [
-          h('span', { class: 'appr-strip-text', text: it.project + ' / ' + (it.c.win || it.c.sid) + ': ' + it.c.approval.tool }),
-          go,
-        ]);
-      })),
-    ]);
-  }
-
   // ---------------------------------------------------------------- assembly
 
   // Controls block for a conversation card (everything below the header row).
@@ -469,7 +439,7 @@
     const showPreview = c.status !== 'sleeping' && c.status !== 'ended' && c.status !== 'gone';
     const live = LIVE.has(c.status);
     if (showPreview) els.push(previewBlock(c));
-    if (live || c.canPrompt) {
+    if (live || c.status === 'waiting') {
       els.push(promptBox(c));
       els.push(h('div', { class: 'ctl-actions ctl-row' }, [interrupt.btn, close.btn, interrupt.reason, close.why].filter(Boolean)));
       if (close.panel) els.push(close.panel);
@@ -482,7 +452,6 @@
   window.ccdash.controls = {
     convControls,
     approvalCard,
-    approvalStrip,
     releasePreviews,
     reset,
     ansiToNodes, // exposed for tests

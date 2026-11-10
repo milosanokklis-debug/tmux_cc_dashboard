@@ -6,7 +6,6 @@ const os = require('node:os');
 const path = require('node:path');
 const h = require('./helpers');
 const { derive, parseRecord, readRecords, createReconciler } = require('../lib/state');
-const { buildTree } = require('../lib/tree');
 
 const NOW = 1_800_000_000_000;
 const rec = (sid, over = {}) => ({
@@ -111,19 +110,6 @@ test('reconciler: reads the files, never writes them, keeps the last answer when
   fail = false;
   assert.deepStrictEqual(fs.readdirSync(dir), ['a.json']);
   assert.strictEqual(fs.statSync(path.join(dir, 'a.json')).mtimeMs, before);
-  fs.rmSync(dir, { recursive: true });
-});
-
-test('tree takes the status from the reconciler, hides resumed conversations, flags wakeable ones', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccdash-tr-'));
-  const agents = path.join(dir, 'agents');
-  fs.mkdirSync(agents);
-  const ev = (sid, ev, extra = {}) => JSON.stringify({ ev, ts: '2026-01-10T11:00:00Z', sid, pane: '%3', win: 'claude-demo:0', project: '/workspace/demo', ...extra });
-  for (const sid of ['old', 'new', 'live']) fs.writeFileSync(path.join(agents, `${sid}.jsonl`), ev(sid, 'session') + '\n');
-  const states = derive(recs(rec('old', { state: 'working' }), rec('new', { resumedFrom: 'old' }), rec('live', { pane: '%9' })), ENV);
-  const tr = buildTree({ agentsDir: agents, transcriptRoot: dir, panes: PANES, table: TABLE, now: Date.parse('2026-01-10T12:00:00Z'), states });
-  const cs = tr.find((p) => p.project === 'demo').conversations;
-  assert.deepStrictEqual(cs.map((c) => [c.sid, c.status, c.wakeable]).sort(), [['live', 'sleeping', true], ['new', 'waiting', false]]);
   fs.rmSync(dir, { recursive: true });
 });
 
