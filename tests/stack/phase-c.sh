@@ -22,6 +22,8 @@
 #   starts is reachable from the dashboard at https://localhost:8443.
 # shellcheck disable=SC2329,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
 set -euo pipefail
+# shellcheck source=tests/stack/lib-login.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-login.sh"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
 export CCDASH_TEST_PORT=${CCDASH_TEST_PORT:-7692}
@@ -129,6 +131,7 @@ fresh_stack() { # fresh_stack WAIT_SECONDS: a new stack with empty volumes
 }
 start_conv() { # start_conv PROJECT
   ccd mkdir -p "/workspace/$1"
+  stack_login "$1"
   ccd ccd-session start "$1" >/dev/null
   until_ok 30 "$1 is waiting" is_status "$1" waiting
 }

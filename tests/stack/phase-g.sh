@@ -13,6 +13,8 @@
 # (ccdash:ci, built from the checkout if missing), KEEP=1 (leave the stack up), DEBUG=1.
 # shellcheck disable=SC2329,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
 set -euo pipefail
+# shellcheck source=tests/stack/lib-login.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-login.sh"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
 export CCDASH_TEST_PORT=${CCDASH_TEST_PORT:-7697}
@@ -89,7 +91,9 @@ ccd bash -ec "
   echo one > f && git add f && git -c user.name=seed -c user.email=s@example.com commit -qm one && git push -q origin main
   git config --global url.$BARE.insteadOf https://github.com/octo/demo.git"
 r=$(body POST /api/projects '{"repo":"octo/demo"}')
-eq "project demo added through the API" "$(jq -r .session <<<"$r")" claude-demo
+eq "a new project is added signed out, so no session starts" "$(jq -r .session <<<"$r")" null
+stack_login demo
+eq "project demo opened through the API after sign-in" "$(body POST /api/projects/demo/open | jq -r .session)" claude-demo
 ccd sh -c 'mkdir -p /home/ccd/.claude && echo "{\"display\":\"backup marker\"}" > /home/ccd/.claude/history.jsonl && echo marker-$$ > /workspace/demo/MARKER'
 marker=$(ccd cat /workspace/demo/MARKER)
 # The git volume is otherwise empty here, so its tar.gz is ~100 bytes and sits on the ">100" size check below.
@@ -98,7 +102,7 @@ compose exec -T -u root ccdash sh -c 'head -c 300 /dev/urandom | base64 > /var/l
 secret=$(compose exec -T -u web ccdash node -e "const t=require('/opt/ccdash/dashboard/lib/totp'),s=t.generateSecret();require('/opt/ccdash/dashboard/lib/authstore').enableTotp({dir:'/var/lib/ccdash-web',secret:s}).then(()=>process.stdout.write(s))")
 eq "TOTP enabled (password alone is no longer enough)" "$(pw_status)" 401
 before=$(owners); indent '     before: ' <<<"$before"
-eq "markers are owned by ccd, not root" "$(echo "$before" | grep -c '^0:0 .*MARKER')" 0
+eq "markers are owned by ccd, not root" "$(echo "$before" | grep -c '^0:0 .*MARKER' || true)" 0
 
 echo "== backup: stop, tar each volume into $BK"
 compose stop >/dev/null 2>&1
@@ -142,9 +146,9 @@ if [ -n "${SCREENSHOT:-}" ]; then
   until_ok 20 "login (TOTP switched off for the screenshot)" login
   cid=$(compose ps -q ccdash)
   tar -C "$root/tests/playwright" -c --exclude=node_modules . | $D build -q -t "$PW_IMAGE" - >/dev/null
-  for n in alpha beta gamma; do ccd mkdir -p "/workspace/$n"; ccd ccd-session start "$n" >/dev/null; done
-  waiting() { body GET "/api/tree?all=1" | jq -e --arg p "$1" '[.projects[] | select(.project == $p) | .conversations[] | select(.status == "waiting")] | length >= 1'; }
-  sid() { body GET "/api/tree?all=1" | jq -r --arg p "$1" '[.projects[] | select(.project == $p) | .conversations[] | select(.status != "ended")][0].sid'; }
+  for n in alpha beta gamma; do ccd mkdir -p "/workspace/$n"; stack_login "$n"; ccd ccd-session start "$n" >/dev/null; done
+  waiting() { stack_states | jq -e --arg p "$1" '[.[] | select(.project == $p and .status == "waiting")] | length >= 1'; }
+  sid() { stack_states | jq -r --arg p "$1" '[.[] | select(.project == $p and .status != "ended")][0].sid'; }
   for n in alpha beta gamma; do until_ok 30 "$n is waiting" waiting "$n"; done
   api POST "/api/conversations/$(sid alpha)/prompt" '{"text":"Summarize the repo layout"}' >/dev/null
   api POST "/api/conversations/$(sid beta)/prompt" '{"text":"Add a backup section to the README"}' >/dev/null

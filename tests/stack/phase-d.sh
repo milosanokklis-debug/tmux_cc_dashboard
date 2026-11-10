@@ -9,6 +9,8 @@
 # from the checkout if missing; remove it to pick up changes), KEEP=1 (leave the stack up), DEBUG=1.
 # shellcheck disable=SC2329,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
 set -euo pipefail
+# shellcheck source=tests/stack/lib-login.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-login.sh"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
 export CCDASH_TEST_PORT=${CCDASH_TEST_PORT:-7693}
@@ -73,8 +75,10 @@ workhead() { ccd git -C /workspace/demo rev-parse HEAD; }
 bare_head() { ccd git -C $BARE rev-parse main; }
 
 # ---- add: clone + record + fake Claude starts -------------------------------------------------------
-r=$(body POST /api/projects '{"repo":"octo/demo"}')
-if [ "$(jq -r .session <<<"$r")" = claude-demo ]; then ok "add clones the project and starts a session"; else bad "add: $r"; fi
+r=$(body POST /api/projects '{"repo":"octo/demo"}') # the clone is done, the start answers 409 login-required
+stack_login demo
+ccd ccd-session start demo >/dev/null
+if ccd tmux -S /run/ccdash/tmux.sock has-session -t =claude-demo; then ok "add clones the project and starts a session"; else bad "add: $r"; fi
 rec() { ccd jq -c . /home/ccd/.ccdash/projects/demo.json; }
 if [ "$(rec | jq -r .repo)" = octo/demo ] && [ "$(rec | jq -r .head)" = "$(workhead)" ]; then ok "onboarding record written"; else bad "record: $(rec)"; fi
 claude_up() { ccd pgrep -x -u ccd claude; }

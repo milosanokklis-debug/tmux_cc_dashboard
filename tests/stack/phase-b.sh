@@ -6,6 +6,8 @@
 # built from the checkout if missing; remove it to pick up changes), KEEP=1 (leave the stack up), DEBUG=1.
 # shellcheck disable=SC2329,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
 set -euo pipefail
+# shellcheck source=tests/stack/lib-login.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-login.sh"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
 export CCDASH_TEST_PORT=${CCDASH_TEST_PORT:-7691}
@@ -47,10 +49,11 @@ login() { curl -sf -c "$jar" -H "Origin: http://localhost:7690" -H 'X-CCDash: 1'
   -d '{"username":"t","password":"test-password-123"}' "$url/login"; }
 until_ok 20 "login" login
 api() { curl -sf -b "$jar" -H "Origin: http://localhost:7690" -H 'X-CCDash: 1' "$@"; }
-tree() { api "$url/api/tree?all=1" | jq -c '[.projects[].conversations[] | {sid, status}]'; }
+tree() { stack_states | jq -c '[.[] | {sid, status}]'; }
 
 for p in demo1 demo2; do
   compose exec -T -u ccd ccdash mkdir -p /workspace/$p
+  stack_login "$p"
   ccd ccd-session start $p >/dev/null
 done
 two_waiting() { [ "$(tree | jq '[.[] | select(.status == "waiting")] | length')" = 2 ]; }
