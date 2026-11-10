@@ -21,7 +21,6 @@ async function setup(opts = {}, viewport = { width: 1280, height: 800 }) {
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) seen.errors.push(m.text()); });
   page.on('pageerror', (e) => seen.errors.push(String(e)));
   const proj = { name: 'ph', state: 'claude', kitEnabled: false, kit: null, kitError: null, ...(opts.project || {}) };
-  await page.route('**/api/accounts', (r) => json(r, 200, { accounts: [{ name: 'default', loggedIn: true }] }));
   await page.route(/\/api\/projects$/, (r) => (r.request().method() === 'GET' ? json(r, 200, { projects: [proj] }) : r.continue()));
   await page.route(/\/api\/projects\/[^/]+\/kit$/, (r) => {
     const body = r.request().postDataJSON();

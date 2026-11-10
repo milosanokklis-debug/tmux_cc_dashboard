@@ -1,11 +1,8 @@
 'use strict';
-// The one live connection: a WebSocket to /events. The server pushes tree, state, usage, tokens and
-// pane previews; nothing else in the page polls. While the socket is down, one GET /api/tree is made per
-// attempt window (at most every 15 s) so the agent tree does not freeze, and the socket reconnects with backoff.
+// The one live connection: a WebSocket to /events. The server pushes state, usage, tokens and
+// pane previews; it reconnects with backoff while down. (The Windows panel polls its own list.)
 (function () {
-  const { api } = window.ccdash;
   const MAX_WATCH = 50; // the server's per-connection limit
-  const FALLBACK_MIN_MS = 15000;
   const handlers = new Map(); // type -> Set<fn>
   const lastMsg = new Map(); // type -> last payload message (not for previews)
   const watched = new Set(); // ids this page wants previews for
@@ -13,7 +10,6 @@
   let running = false;
   let delay = 1000;
   let retry = null;
-  let fallbackAt = 0;
 
   const connected = () => !!sock && sock.readyState === 1;
 
@@ -27,16 +23,6 @@
 
   function send(obj) {
     if (connected()) sock.send(JSON.stringify(obj));
-  }
-
-  async function fallback() {
-    const now = Date.now();
-    if (now - fallbackAt < FALLBACK_MIN_MS || document.hidden) return;
-    fallbackAt = now;
-    try {
-      const r = await api('/api/tree');
-      if (r.ok && r.data && !connected()) emit({ type: 'tree', tree: r.data });
-    } catch { /* offline or signed out (api redirects on 401) */ }
   }
 
   function scheduleRetry() {
@@ -68,18 +54,15 @@
       if (sock !== ws) return;
       sock = null;
       emit({ type: 'connection', connected: false });
-      fallback();
       scheduleRetry();
     };
     ws.addEventListener('close', gone);
     ws.addEventListener('error', () => { /* close follows */ });
   }
 
-  document.addEventListener('visibilitychange', () => { if (running && !document.hidden && !connected()) fallback(); });
-
   window.ccdash.events = {
     start() { if (running) return; running = true; delay = 1000; connect(); },
-    // on('tree', fn) -> off(). Also 'connection' with {connected}.
+    // on('state', fn) -> off(). Also 'connection' with {connected}.
     on(type, fn) {
       if (!handlers.has(type)) handlers.set(type, new Set());
       handlers.get(type).add(fn);

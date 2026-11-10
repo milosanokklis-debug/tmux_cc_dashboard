@@ -1,7 +1,7 @@
 'use strict';
 // Project list screen and the "Add project" dialog.
 (function () {
-  const { api, h, notice, chip, accounts } = window.ccdash;
+  const { api, h, notice, chip } = window.ccdash;
   const $ = (id) => document.getElementById(id);
 
   const STATES = {
@@ -32,32 +32,15 @@
     const kitInfo = h('span', { class: 'card-kit-info' });
     const warning = h('span', { class: 'chip chip-kit-warn', 'data-testid': 'kit-warning', hidden: true });
     const kit = h('div', { class: 'card-kit' }, [toggle, kitInfo, warning]);
-    // Account choice for Open: shown only when more than one account exists.
-    const acctSelect = h('select', { id: id + '-account', 'data-testid': 'account-select-open' });
-    const acct = h('label', { class: 'card-account', hidden: true }, [document.createTextNode('Account'), acctSelect]);
-    acctSelect.addEventListener('change', () => accounts.setLast(p.name, acctSelect.value));
-    const li = h('li', { class: 'card' }, [h('h3', { class: 'card-name', text: p.name }), meta, kit, results, acct, button]);
-    const c = { li, acct, acctSelect, name: p.name, chip: null, state: null, button, meta, head, pull, status, alert: failure, repo: null, kit, toggle, toggleText, kitInfo, warning, memOffline: false, lastKit: undefined, kitBusy: false };
+    const li = h('li', { class: 'card' }, [h('h3', { class: 'card-name', text: p.name }), meta, kit, results, button]);
+    const c = { li, name: p.name, chip: null, state: null, button, meta, head, pull, status, alert: failure, repo: null, kit, toggle, toggleText, kitInfo, warning, memOffline: false, lastKit: undefined, kitBusy: false };
     button.addEventListener('click', () => openProject(p.name, button));
-    syncAccount(c);
     pull.addEventListener('click', () => pullProject(p.name, c));
     toggle.addEventListener('click', () => toggleKit(p.name, c));
     return c;
   }
 
-  function syncAccount(c) {
-    c.acct.hidden = !accounts.multi();
-    if (!accounts.multi()) return;
-    const sel = c.acctSelect;
-    // refill only when the list changed, and never under a select the user has open
-    const same = sel.options.length === accounts.names().length && accounts.names().every((n, i) => sel.options[i].value === n);
-    if (same || document.activeElement === sel) return;
-    accounts.fill(sel, sel.options.length ? sel.value : accounts.last(c.name));
-  }
-  accounts.onChange(() => { for (const c of cards.values()) syncAccount(c); syncAddAccount(); });
-
   function updateCard(c, p) {
-    syncAccount(c);
     if (c.state !== p.state) {
       const next = chip(STATES, p.state);
       if (c.chip) c.chip.replaceWith(next); else c.meta.before(next);
@@ -259,7 +242,6 @@
     if (pending) return;
     pending = setTimeout(() => { pending = null; load(); }, Math.max(300, 2000 - (Date.now() - lastLoad)));
   }
-  const treeSig = (msg) => JSON.stringify(((msg.tree && msg.tree.projects) || []).map((p) => [p.project, (p.conversations || []).map((c) => [c.sid, c.status])]));
   document.addEventListener('visibilitychange', () => { if (active && !document.hidden && stale) load(); });
 
   async function openProject(name, button) {
@@ -272,10 +254,10 @@
     const own = cards.get(name);
     if (own) clearResults(own, null);
     try {
-      const sel = own && !own.acct.hidden ? own.acctSelect.value : null;
-      const r = await api('/api/projects/' + encodeURIComponent(name) + '/open', { method: 'POST', body: sel ? { account: sel } : undefined });
-      if (sel && r.ok) accounts.setLast(name, sel);
+      const r = await api('/api/projects/' + encodeURIComponent(name) + '/open', { method: 'POST', body: {} });
       const d = r.data || {};
+      // Not signed in: the terminal view shows the sign-in link for this project.
+      if (r.status === 409 && d.error === 'login-required') { window.ccdash.go(name); return; }
       if (!r.ok && cards.has(name) && (d.error === 'memory-offline' || d.error === 'kit-failed')) {
         const c = cards.get(name);
         if (d.error === 'memory-offline') showMemoryOffline(c, d);
@@ -406,15 +388,8 @@
     if (!on && progressHadFocus) $('add-repo').focus();
   }
 
-  function syncAddAccount() {
-    $('add-account-field').hidden = !accounts.multi();
-    if (accounts.multi()) accounts.fill($('add-account'), $('add-account').value);
-  }
-
   function openDialog() {
     lastOpener = document.activeElement;
-    syncAddAccount();
-    accounts.load();
     resetFeedback();
     loadDraft();
     updateCounter();
@@ -453,8 +428,6 @@
     if (prompt.trim()) body.prompt = prompt;
     if (!$('add-trust-field').hidden && $('add-trust').checked) body.trustHooks = true;
     body.kit = $('add-kit').checked;
-    const acct = !$('add-account-field').hidden ? $('add-account').value : null;
-    if (acct) body.account = acct;
     setBusy(true);
     try {
       const r = await api('/api/projects', { method: 'POST', body });
@@ -470,7 +443,6 @@
         return;
       }
       const { project, warning } = r.data;
-      if (acct) accounts.setLast(project, acct);
       setBusy(false);
       form.reset(); // success: nothing to keep, and never keep the token around
       clearDraft();
@@ -501,12 +473,9 @@
     start() {
       if (!loaded) $('projects-loading').hidden = false; // shown only when scripts run (see <noscript> in index.html)
       active = true;
-      sigs.tree = sigs.state = undefined;
+      sigs.state = undefined;
       load();
-      for (const c of cards.values()) syncAccount(c);
-      accounts.load();
       offs = [
-        events.on('tree', (m) => onPush('tree', treeSig(m))),
         events.on('state', (m) => onPush('state', JSON.stringify(m.states || {}))),
       ];
     },

@@ -1,7 +1,7 @@
 'use strict';
 // Notifications settings: Web Push subscribe / unsubscribe and which events to notify about.
 (function () {
-  const { api, h, notice, accounts } = window.ccdash;
+  const { api, h, notice } = window.ccdash;
   const $ = (id) => document.getElementById(id);
   const KEYS = ['approval', 'error', 'finished'];
   const STATE_TEXT = {
@@ -141,10 +141,8 @@
     gidField(gidEmail, $('gid-email-err'), '');
     gidLoad();
     sessLoad();
-    acctReset();
     $('kit-confirm').hidden = true;
     if (kitSec.open) kitLoad();
-    accounts.load();
     load().then(focusFirst);
     $('notif-close').focus(); // until the state is known
   });
@@ -243,76 +241,6 @@
       }
     });
   }
-
-  // ---- Claude accounts ----
-  const acctName = $('acct-name');
-  const acctAdd = $('acct-add');
-  let acctBusy = false;
-
-  function acctPaint() {
-    $('acct-list').replaceChildren(...accounts.list().map((a) => h('li', { 'data-testid': 'account-row', 'data-account': a.name }, [
-      h('span', { class: 'acct-name', text: a.name }),
-      // Icon plus words, never colour alone.
-      h('span', { class: 'chip ' + (a.loggedIn ? 'chip-done' : 'chip-shell') }, [
-        h('span', { class: 'chip-icon', 'aria-hidden': 'true', text: a.loggedIn ? '✓' : '!' }),
-        h('span', { text: a.loggedIn ? 'logged in' : 'Not logged in. Use Add account to sign in.' }),
-      ]),
-    ])));
-  }
-  accounts.onChange(acctPaint);
-  acctPaint();
-
-  function acctProblem(name) {
-    if (!name) return '';
-    if (name === 'default') return '“default” is reserved. Choose another name.';
-    if (!accounts.RULE.test(name)) return 'Use lowercase letters, digits, - and _ (up to 32), starting with a letter or digit.';
-    if (accounts.names().includes(name)) return 'That account already exists.';
-    return '';
-  }
-  function acctSync() { acctAdd.disabled = acctBusy; }
-  // Show (or clear) the name problem; typing only clears it, blur and submit show it.
-  function acctCheck(show) {
-    const msg = acctProblem(acctName.value.trim());
-    if (show || !msg) { $('acct-name-err').textContent = msg; if (msg) acctName.setAttribute('aria-invalid', 'true'); else acctName.removeAttribute('aria-invalid'); }
-    return msg;
-  }
-  function acctError(msg) { $('acct-error').textContent = msg || ''; }
-  function acctReset() { acctName.value = ''; acctError(''); acctCheck(false); acctBusy = false; acctSync(); }
-  acctName.addEventListener('input', () => { acctError(''); acctCheck(false); });
-  acctName.addEventListener('blur', () => { if (acctName.value.trim()) acctCheck(true); });
-
-  $('acct-form').addEventListener('submit', async (ev) => {
-    ev.preventDefault();
-    const name = acctName.value.trim();
-    if (acctBusy) return;
-    if (!name || acctCheck(true)) {
-      if (!name) { $('acct-name-err').textContent = 'Enter a name for the account.'; acctName.setAttribute('aria-invalid', 'true'); }
-      acctName.focus();
-      return;
-    }
-    acctBusy = true;
-    acctError('');
-    acctSync();
-    try {
-      const r = await api('/api/accounts', { method: 'POST', body: { name } });
-      const d = r.data || {};
-      if (!r.ok) {
-        const msg = d.error || 'Could not add the account (HTTP ' + r.status + ').';
-        if (r.status === 400) { $('acct-name-err').textContent = msg; acctName.setAttribute('aria-invalid', 'true'); acctName.focus(); }
-        else acctError(msg);
-        return;
-      }
-      acctReset();
-      opener = null; // the terminal takes over; do not hand focus back to the Settings button
-      dlg.close();
-      window.ccdash.go(d.project || '_login', d.account || name);
-      accounts.load().catch(() => {}); // in the background: the new account shows up in the pickers when it arrives
-    } catch (e) {
-      if (e.message !== 'unauthorized') acctError('Network error: ' + e.message);
-    } finally {
-      acctBusy = false; acctSync();
-    }
-  });
 
   // ---- Signed-in devices ----
   const sessList = $('sess-list');

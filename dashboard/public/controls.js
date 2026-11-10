@@ -1,5 +1,5 @@
 'use strict';
-// Per-conversation controls: prompt box, interrupt, close (two-step), approval card, live pane preview.
+// Per-conversation controls of the Windows panel: prompt box, interrupt, close (two-step), approval card, live pane preview.
 // Everything from the server is rendered with textContent / createTextNode, never innerHTML.
 (function () {
   const { api, h, notice } = window.ccdash;
@@ -20,7 +20,7 @@
   };
   const errText = (r) => (r.data && r.data.error) || 'HTTP ' + r.status;
 
-  // State that must survive a tree re-render (the tree rebuilds its DOM when the data changes).
+  // State that must survive a re-render (the Windows panel rebuilds its DOM when the data changes).
   const drafts = new Map(); // sid -> prompt text being typed
   const closing = new Map(); // sid -> 'confirm' | 'busy'
   const busyAction = new Set(); // 'sid:interrupt' | 'sid:send' | approval id
@@ -134,7 +134,7 @@
     if (!document.hidden) for (const [el, sid] of visible) if (el.isConnected) ids.add(sid);
     events.setWatched(ids);
   }
-  // Debounced: a tree re-render releases and re-observes every box; the unchanged set then sends nothing.
+  // Debounced: a panel re-render releases and re-observes every box; the unchanged set then sends nothing.
   function scheduleSync(now) {
     clearTimeout(syncTimer);
     if (now) syncWatch(); else syncTimer = setTimeout(syncWatch, 250);
@@ -172,7 +172,7 @@
     return pre;
   }
 
-  // Called by the tree before it replaces its DOM.
+  // Called by the panel before it replaces its DOM.
   function releasePreviews() {
     for (const el of visible.keys()) io && io.unobserve(el);
     visible.clear();
@@ -184,7 +184,7 @@
   function promptBox(c) {
     const sid = c.sid;
     const id = 'prompt-' + domId(sid);
-    const can = !!c.canPrompt;
+    const can = c.canPrompt != null ? !!c.canPrompt : c.status === 'waiting';
     const label = h('label', { for: id, class: 'ctl-label', text: 'Prompt' });
     const reason = h('p', { class: 'ctl-reason', id: id + '-reason', text: WHY_NO_PROMPT[c.status] || 'Available when the conversation is waiting' });
     const ta = h('textarea', {
@@ -392,6 +392,7 @@
     });
 
     async function decide(behavior) {
+      let ok = false;
       busyAction.add(a.id);
       approve.disabled = deny.disabled = msg.disabled = true;
       const body = { behavior };
@@ -399,6 +400,7 @@
       try {
         const r = await api('/api/approvals/' + encodeURIComponent(a.id) + '/decision', { method: 'POST', body });
         if (r.ok) {
+          ok = true;
           card.remove();
           document.querySelectorAll('[data-approval-id="' + CSS.escape(a.id) + '"]').forEach((n) => n.remove());
           denyDrafts.delete(a.id);
@@ -411,7 +413,7 @@
         if (e.message !== 'unauthorized') notice('Could not record the decision: network error.', 'error');
         busyAction.delete(a.id);
       }
-      onChange();
+      onChange({ decided: ok ? a.id : null });
     }
     approve.addEventListener('click', () => decide('allow'));
     deny.addEventListener('click', () => decide('deny'));
@@ -440,25 +442,6 @@
   }
   const denyDrafts = new Map();
 
-  // "Needs approval" strip at the top of the tree panel: summaries only; the actions live on the cards.
-  function approvalStrip(items, jump) {
-    if (!items.length) return null;
-    return h('section', { class: 'appr-strip', 'data-testid': 'approval-strip', 'aria-labelledby': 'appr-strip-t' }, [
-      h('h3', { class: 'appr-strip-title', id: 'appr-strip-t' }, [
-        h('span', { class: 'chip-icon', 'aria-hidden': 'true', text: '!' }),
-        h('span', { text: 'Needs approval (' + items.length + ')' }),
-      ]),
-      h('ul', { class: 'appr-strip-list' }, items.map((it) => {
-        const go = h('button', { type: 'button', class: 'btn', 'data-testid': 'approval-jump', 'data-fk': it.c.approval.id + ':jump', text: 'Review' });
-        go.addEventListener('click', () => jump(it.c.approval.id));
-        return h('li', { class: 'appr-strip-item', 'data-approval-id': it.c.approval.id }, [
-          h('span', { class: 'appr-strip-text', text: it.project + ' / ' + (it.c.win || it.c.sid) + ': ' + it.c.approval.tool }),
-          go,
-        ]);
-      })),
-    ]);
-  }
-
   // ---------------------------------------------------------------- assembly
 
   // Controls block for a conversation card (everything below the header row).
@@ -469,7 +452,7 @@
     const showPreview = c.status !== 'sleeping' && c.status !== 'ended' && c.status !== 'gone';
     const live = LIVE.has(c.status);
     if (showPreview) els.push(previewBlock(c));
-    if (live || c.canPrompt) {
+    if (live || c.status === 'waiting') {
       els.push(promptBox(c));
       els.push(h('div', { class: 'ctl-actions ctl-row' }, [interrupt.btn, close.btn, interrupt.reason, close.why].filter(Boolean)));
       if (close.panel) els.push(close.panel);
@@ -482,7 +465,6 @@
   window.ccdash.controls = {
     convControls,
     approvalCard,
-    approvalStrip,
     releasePreviews,
     reset,
     ansiToNodes, // exposed for tests

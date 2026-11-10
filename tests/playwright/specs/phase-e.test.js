@@ -1,7 +1,7 @@
 'use strict';
 // Phase E in a browser, against the stack of tests/stack/phase-e.sh (10 live conversations, SUB_PROJECT has a
-// subagent): at 390x844 and 1280x800 the cards view, the Usage panel, the agent tree and a subagent transcript
-// sheet, with screenshots in OUT_DIR; and an idle cards view that makes no HTTP requests, only the /events socket.
+// subagent): at 390x844 and 1280x800 the cards view, the Usage panel, the Windows panel
+// of a project's terminal view, with screenshots in OUT_DIR; and an idle cards view that makes no HTTP requests, only the /events socket.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { OUT, BASE, USER, PASS, sleep, eventually, launch } = require('./lib');
@@ -26,7 +26,7 @@ async function signedIn(viewport) {
 }
 
 for (const [w, h] of [[390, 844], [1280, 800]]) {
-  test(`${w}x${h}: cards, Usage panel, tree, subagent transcript`, async () => {
+  test(`${w}x${h}: cards, Usage panel, Windows panel`, async () => {
     const { context, page } = await signedIn({ width: w, height: h });
     try {
       await eventually(async () => assert.ok((await page.locator('#project-list li.card').count()) >= MIN_CARDS), `at least ${MIN_CARDS} conversation cards`);
@@ -48,22 +48,11 @@ for (const [w, h] of [[390, 844], [1280, 800]]) {
 
       await page.evaluate((p) => { location.hash = `#/term/${p}`; }, SUB);
       await page.locator('#view-terminal').waitFor({ state: 'visible' });
+      const region = page.getByRole('region', { name: 'Windows' });
       if ((await page.locator('#tree-toggle').getAttribute('aria-expanded')) !== 'true') await page.click('#tree-toggle');
-      const all = page.locator('#tree-all-projects');
-      await all.waitFor({ state: 'visible' });
-      if (!(await all.isChecked())) await all.check();
-      await eventually(async () => assert.ok((await page.getByTestId('tree-node').count()) >= MIN_CARDS), 'tree has the conversations');
-      await page.screenshot({ path: `${OUT}/tree-${w}.png` });
-
-      const open = page.getByTestId('agent-open').first();
-      await open.waitFor({ state: 'visible', timeout: 20000 });
-      await open.click();
-      await page.getByTestId('transcript-panel').waitFor({ state: 'visible' });
-      await eventually(async () => assert.ok((await page.getByTestId('transcript-entry').count()) >= 2), 'transcript entries');
-      assert.match(await page.getByTestId('transcript-log').innerText(), /subagent reply/);
-      await page.screenshot({ path: `${OUT}/transcript-${w}.png` });
-      await page.getByTestId('transcript-close').click();
-      await page.getByTestId('transcript-panel').waitFor({ state: 'hidden' });
+      await region.waitFor({ state: 'visible' });
+      await region.getByRole('button', { name: 'New Claude window' }).waitFor({ state: 'visible' });
+      await page.screenshot({ path: `${OUT}/windows-${w}.png` });
     } finally { await context.close(); }
   });
 }

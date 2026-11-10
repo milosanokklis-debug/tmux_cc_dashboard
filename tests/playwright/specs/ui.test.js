@@ -61,9 +61,9 @@ test('approval cards appear on the right conversations; Approve one and Deny the
   await sendPrompt(page, 'pa', '/perm');
   await sendPrompt(page, 'pb', '/perm');
   for (const p of ['pa', 'pb']) {
-    await card(page, p).getByTestId('approval-card').waitFor({ state: 'visible', timeout: 20000 });
-    assert.equal(await card(page, p).getByTestId('approval-card').count(), 1);
-    assert.equal(await card(page, p).getByTestId('approval-tool').innerText(), 'Bash');
+    await (await card(page, p)).getByTestId('approval-card').waitFor({ state: 'visible', timeout: 20000 });
+    assert.equal(await (await card(page, p)).getByTestId('approval-card').count(), 1);
+    assert.equal(await (await card(page, p)).getByTestId('approval-tool').innerText(), 'Bash');
   }
   // The status of each conversation, as the server sees it: both wait on a decision.
   assert.equal((await previewText(page, 'pa')).status, 'needs_approval');
@@ -77,7 +77,7 @@ test('approval cards appear on the right conversations; Approve one and Deny the
   await (await card(page, 'pb')).getByTestId('deny').click();
 
   for (const p of ['pa', 'pb']) {
-    await eventually(async () => assert.equal(await card(page, p).getByTestId('approval-card').count(), 0), `${p}: approval card gone`);
+    await eventually(async () => assert.equal(await (await card(page, p)).getByTestId('approval-card').count(), 0), `${p}: approval card gone`);
   }
   await eventually(async () => {
     const a = await previewText(page, 'pa');
