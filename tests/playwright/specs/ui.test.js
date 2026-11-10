@@ -69,8 +69,8 @@ test('approval cards appear on the right conversations; Approve one and Deny the
   assert.equal((await previewText(page, 'pa')).status, 'needs_approval');
   assert.equal((await previewText(page, 'pb')).status, 'needs_approval');
   await page.screenshot({ path: `${OUT}/approval-card.png`, fullPage: false });
-  await (await card(page, 'pa')).getByTestId('approval-card').scrollIntoViewIfNeeded();
-  await (await card(page, 'pa')).getByTestId('approval-card').screenshot({ path: `${OUT}/approval-card-element.png` });
+  // Locator.screenshot scrolls the card itself, so no scrollIntoViewIfNeeded() is needed before it.
+  await eventually(async () => (await card(page, 'pa')).getByTestId('approval-card').screenshot({ path: `${OUT}/approval-card-element.png` }), 'approval card element screenshot');
 
   await (await card(page, 'pa')).getByTestId('approve').click();
   await (await card(page, 'pb')).getByTestId('deny-message').fill('nope-xyz');

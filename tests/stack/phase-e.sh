@@ -8,8 +8,12 @@
 # Chromium (tests/playwright/specs/phase-e.test.js) at 390x844 and 1280x800 that opens the Usage panel,
 # the Windows panel, takes screenshots and checks that an idle cards view makes no HTTP
 # requests. Needs docker (or CCDASH_DOCKER, e.g. "sudo -n -u ccdash /usr/local/bin/ccdash-docker"), curl,
-# jq and tar. Own project and volumes (ccdashtest-e), removed at the end.
-# Env: CCDASH_TEST_PORT (7694), CCDASH_IMAGE (ccdash:ci, built from the checkout if missing or older than the newest
+# jq and tar. Own project and volumes (ccdashtest-e, or per part below), removed at the end.
+# PHASE_E_PART=core|cpu|ui runs one third (CI runs them as three legs, "stack (phase-e core)", "(phase-e cpu)" and "(phase-e ui)"); unset or empty
+# runs all. core: reader socket, usage gauges, subagent, refusals, token totals (project ccdashtest-e-core, port 7694); cpu: 10 conversations,
+# one /events client, idle and active CPU/memory samples (project ccdashtest-e-cpu, port 7695); ui: 10 conversations,
+# quiet-down, browser (project ccdashtest-e-ui, port 7696); unset: project ccdashtest-e, port 7694.
+# Env: CCDASH_TEST_PORT (7694, 7695 for cpu, 7696 for ui), CCDASH_IMAGE (ccdash:ci, built from the checkout if missing or older than the newest
 # file in the tree; the staleness check is skipped when CI is set, the workflow builds the image just before), CCDASH_SHOTS (directory for the screenshots, default tests/stack/out, gitignored),
 # SAMPLE_SEC (CPU sampling window, default 35, at least 30 to count), ACTIVE_MAX_CPU (limit while the fake claudes are active, default 3), KEEP=1 (leave the stack up), DEBUG=1.
 # shellcheck disable=SC2329,SC1091 # functions run through until_ok / trap; .env.example is a plain env file
@@ -18,9 +22,18 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib-login.sh"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 D=${CCDASH_DOCKER:-docker} # may contain spaces; left unquoted on purpose
-export CCDASH_TEST_PORT=${CCDASH_TEST_PORT:-7694}
+part=${PHASE_E_PART:-}
+case $part in
+  core) P=ccdashtest-e-core; defport=7694 ;;
+  cpu) P=ccdashtest-e-cpu; defport=7695 ;;
+  ui) P=ccdashtest-e-ui; defport=7696 ;;
+  "") P=ccdashtest-e; defport=7694 ;;
+  *) echo "PHASE_E_PART must be core, cpu or ui (or unset for all), got '$part'" >&2; exit 2 ;;
+esac
+run_core=0; run_cpu=0; run_ui=0
+case $part in core) run_core=1 ;; cpu) run_cpu=1 ;; ui) run_ui=1 ;; *) run_core=1; run_cpu=1; run_ui=1 ;; esac
+export CCDASH_TEST_PORT=${CCDASH_TEST_PORT:-$defport}
 base=${CCDASH_IMAGE:-ccdash:ci}
-P=ccdashtest-e
 export CCDASH_TEST_IMAGE=ccdash-stack:$P
 PW_IMAGE=ccdash-playwright:$P
 PW_NAME=$P-playwright
@@ -70,7 +83,9 @@ if [ -n "$stale" ] || ! $D image inspect "$base" >/dev/null 2>&1; then
   tar_ctx | $D build -q -t "$base" --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION" --build-arg "S6_OVERLAY_VERSION=$S6_OVERLAY_VERSION" --build-arg "BASIC_MEMORY_VERSION=$BASIC_MEMORY_VERSION" --build-arg "KIT_REPO=$KIT_REPO" --build-arg "KIT_REF=$KIT_REF" - >/dev/null
 fi
 tar_ctx | $D build -q -f tests/Dockerfile.stack --build-arg "BASE=$base" -t "$CCDASH_TEST_IMAGE" - >/dev/null
-tar -C "$root/tests/playwright" -c --exclude=node_modules . | $D build -q -t "$PW_IMAGE" - >/dev/null
+if [ "$run_ui" = 1 ]; then
+  tar -C "$root/tests/playwright" -c --exclude=node_modules . | $D build -q -t "$PW_IMAGE" - >/dev/null
+fi
 
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 compose up -d >/dev/null
@@ -100,13 +115,15 @@ fake_unset() { tm set-environment -gu "$1" || true; }
 lock_transcripts() { ccd sh -c 'find /home/ccd/.claude/projects -type d -exec chmod 700 {} + ; find /home/ccd/.claude/projects -type f -exec chmod 600 {} +'; }
 tfile() { ccd find /home/ccd/.claude/projects -name "$1.jsonl" -not -path '*/subagents/*'; }
 
-echo "== ccd-reader service in the image"
 ccd mkdir -p /home/ccd/.claude/projects
 ccd chmod 700 /home/ccd/.claude /home/ccd/.claude/projects
+fake_env FAKE_CLAUDE_TRANSCRIPTS /home/ccd/.claude/projects
+
+if [ "$run_core" = 1 ]; then
+echo "== ccd-reader service in the image"
 eq "reader.sock is ccd:ccd 660" "$(compose exec -T ccdash stat -c '%U:%G %a' /run/ccdash/reader.sock)" "ccd:ccd 660"
 eq "reader.sock is a socket" "$(compose exec -T ccdash stat -c %F /run/ccdash/reader.sock)" "socket"
 eq "the reader process runs as ccd" "$(compose exec -T ccdash ps -o user= -C node -o args= | grep -c '^ccd .*reader.js')" 1
-fake_env FAKE_CLAUDE_TRANSCRIPTS /home/ccd/.claude/projects
 
 echo "== usage gauges"
 fake_env FAKE_CLAUDE_RATE_LIMITS "62 17"
@@ -188,12 +205,14 @@ tok_match() { api "$url/api/tokens?conversation=$tok" | jq -e --argjson w "$want
 until_ok 20 "/api/tokens?conversation= equals the manual sum $(jq -c . <<<"$want")" tok_match
 if api "$url/api/tokens?conversation=$tok" | jq -e '.unpriced_models | index("mystery-model")' >/dev/null; then ok "the model with no price is listed as unpriced"; else bad "unpriced_models"; fi
 lock_transcripts
+fi # core
 
+if [ "$run_cpu" = 1 ] || [ "$run_ui" = 1 ]; then
 echo "== load: 10 conversations"
 fake_unset FAKE_CLAUDE_USAGE
 fake_env FAKE_CLAUDE_RATE_LIMITS none # the gauges stay "unknown" for the browser
 for i in 3 4 5 6 7 8; do start_conv "l$i"; done
-req POST "/api/conversations/$tok/close"; req POST "/api/conversations/$subp/close" # replaced below by fresh ones so ten are live
+if [ "$run_core" = 1 ]; then req POST "/api/conversations/$tok/close"; req POST "/api/conversations/$subp/close"; fi # both mode: close core's conversations so ten are live
 start_conv l1; start_conv l2; start_conv l9; start_conv l10
 for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 20 "l$i is waiting" is_status "l$i" waiting; send "l$i" "hello $i"; done
 for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 20 "l$i is waiting again" is_status "l$i" waiting; done
@@ -201,6 +220,7 @@ lock_transcripts
 live_n=$(stack_states | jq '[.[] | select(.status != "ended" and .status != "sleeping")] | length')
 eq "ten live conversations" "$live_n" 10
 
+if [ "$run_cpu" = 1 ]; then
 # One /events client for the whole measurement (a node script in the container with the session cookie).
 cookie=$(awk -F'\t' 'NF >= 7 { printf "%s=%s", $6, $7 }' "$jar")
 evjs='const WebSocket=require("/opt/ccdash/dashboard/node_modules/ws");const fs=require("fs");
@@ -250,6 +270,9 @@ echo "     the fake claudes took $((p1 - p0)) prompts during the active sample"
 if [ $((p1 - p0)) -ge 40 ]; then ok "the active sample really was active"; else bad "only $((p1 - p0)) prompts reached the fake claudes"; fi
 ev_n=$(ccd cat /tmp/evcount || echo 0)
 echo "     the /events client received $ev_n messages in all"
+fi # cpu
+
+if [ "$run_ui" = 1 ]; then
 
 echo "== browser (Playwright, headless Chromium at 390x844 and 1280x800)"
 for i in 1 2 3 4 5 6 7 8 9 10; do until_ok 30 "l$i is waiting (quiet before the browser)" is_status "l$i" waiting; done
@@ -266,4 +289,6 @@ $D cp "$PW_NAME:/out/." - 2>/dev/null | tar -x -C "$tmp/shots" 2>/dev/null || tr
 $D rm -f "$PW_NAME" >/dev/null 2>&1 || true
 if [ "$PW_RC" = 0 ]; then ok "Playwright specs passed"; else bad "Playwright specs failed (exit $PW_RC)"; fi
 if mkdir -p "$SHOTS" && cp "$tmp"/shots/*.png "$SHOTS"/ 2>/dev/null; then echo "screenshots in $SHOTS: $(find "$SHOTS" -maxdepth 1 -name '*.png' -printf '%f ' | head -c 600)" || true; fi
+fi # ui
+fi # cpu/ui
 exit $fail
