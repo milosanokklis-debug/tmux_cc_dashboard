@@ -32,7 +32,6 @@ It does these steps:
 - Pulls the image and starts the stack.
 - Creates your dashboard login. The login is your user name and a random 24-character password. The password goes to `~/ccdash-login.txt` (mode 0600).
 - Sets the git identity.
-- Runs Claude `/login`. This needs a browser approval: open the printed URL and paste the code.
 - Sets up the Cloudflare tunnel. This needs a second browser approval (`cloudflared tunnel login`).
 - Requires TOTP at the first login. If `CLOUDFLARE_API_TOKEN` is set, setup creates a Cloudflare Access app with email one-time codes instead.
 - Runs a live self-test.
@@ -91,7 +90,7 @@ ccd kit update --reset
 
 `on` and `off` take the project name. `status` shows the active kit version, `check` compares it with the newest upstream, `update` switches to a newer one, and `update --reset` goes back to the version in the image.
 
-The image ships kit 0.14.0. With the kit on, the project is attached to the kit, and no kit files are committed or pushed. The kit's files stay out of git through `.git/info/exclude`. Files the repo already tracks stay tracked. A push needs a logged-in account, because the kit's pre-push hook runs a Claude review. With the kit off, nothing is filtered, and agent files go through git like any other file. Turning the kit off on a project that is attached detaches it. The image includes gitleaks and uv, which attach needs.
+The image ships kit 0.14.0. With the kit on, the project is attached to the kit, and no kit files are committed or pushed. The kit's files stay out of git through `.git/info/exclude`. Files the repo already tracks stay tracked. A push needs a signed-in project, because the kit's pre-push hook runs a Claude review. With the kit off, nothing is filtered, and agent files go through git like any other file. Turning the kit off on a project that is attached detaches it. The image includes gitleaks and uv, which attach needs.
 
 For a private repo, or to push, add a fine-grained token in the dashboard first. The shell commands have no token option. Make the token fine-grained and limit it to that one repository. Give it Contents read/write and Metadata read. Never use a classic token. A classic token can reach every repo you can access.
 
@@ -111,25 +110,36 @@ ccd identity --from-host
 ccd ls
 ccd attach repo
 ccd wake <session-id>
-ccd login
 ccd passwd
 ccd passwd --totp
 ccd passwd --no-totp
-ccd login --account NAME
-ccd accounts
 ```
 
 - `ccd identity` sets the git name and email. `--from-host` copies the host's global git name and email.
 - `ccd ls` lists the conversations.
 - `ccd attach` opens the tmux session of a project.
 - `ccd wake` resumes a stopped conversation.
-- `ccd login` runs Claude so you can log in.
 - `ccd passwd` sets a new dashboard password. All sessions end.
 - `ccd passwd --totp` turns TOTP on. It shows recovery codes once. `--no-totp` turns TOTP off.
 
-Claude accounts let one dashboard use more than one Claude login. `default` is the login from `ccd login`. `ccd login --account NAME` creates NAME if it is missing and runs Claude for it. `ccd accounts` lists each account and whether it is logged in. A name is up to 32 characters: lowercase letters, digits, `_` and `-`, starting with a letter or digit (regex `^[a-z0-9][a-z0-9_-]{0,31}$`). `default` is reserved.
+### Sign in a project
 
-In the dashboard, the account selects appear only when you have more than one account. Settings has a "Claude accounts" section. "Add account" opens a login window where you run /login; Claude's trust prompt appears there once. Usage gauges follow the account of the terminal in view. Only the default account has a reading until another account's statusline reports; the others show unknown.
+Each project has its own Claude login. It lives in `/home/ccd/.claude-projects/<project>` (mode 0700, user `ccd`). Projects do not share a login.
+
+1. Add the project. Its login window opens, and the dashboard shows an "Open sign-in link" button.
+2. Click the button and approve in your browser.
+3. Paste the code in the terminal.
+4. Click "Start Claude".
+
+The dashboard never stores or reads Claude credentials. It reads the sign-in link live from the login window. From a shell, `ccd-session login <project>` opens the login window and `ccd-session auth <project>` shows whether the project is signed in.
+
+### Windows panel
+
+Each project view has a Windows panel. It lists all tmux windows of the project. Click a window to switch to it. "New Claude window" and "New shell" add windows. "Close" ends a window; it asks for confirmation on a Claude window. Permission requests (Allow, Deny) and Wake are in this panel too. From a shell: `ccd-session windows`, `ccd-session new` and `ccd-session close`.
+
+### Upgrading from the shared login
+
+After the upgrade every project is signed out. Sign each one in once. Conversations started under the old shared login may not resume, because Claude stores them per login folder. The old login files stay in the `ccdash-home` volume and are not deleted.
 
 ## 5. What survives what
 
@@ -145,7 +155,9 @@ Idle conversations are flagged, never killed.
 
 ## 6. Security model
 
-Claude and tmux run as the user `ccd`. The dashboard runs as the user `web`. The two users are separate, so `ccd` cannot read the dashboard's files.
+Claude and tmux run as the user `ccd`. The dashboard runs as the user `web`. The two users are separate, so `ccd` cannot read the dashboard's files. The dashboard stores no Claude credentials.
+
+All projects run as the same user `ccd`. Each project has its own Claude config folder, but that is not an OS boundary: a process in one project could still read another project's folder.
 
 The container:
 
@@ -240,7 +252,7 @@ For a released image, set `CCDASH_VERSION` in `.env` to the new version, then ru
 
 ## 9. Backup and restore
 
-The data lives in four volumes: `ccdash-home` (Claude login and conversations), `ccdash-workspace` (repos), `ccdash-web` (dashboard login and TOTP secret) and `ccdash-git` (git tokens). Archives hold secrets, so store them safely.
+The data lives in four volumes: `ccdash-home` (per-project Claude logins and conversations), `ccdash-workspace` (repos), `ccdash-web` (dashboard login and TOTP secret) and `ccdash-git` (git tokens). Archives hold secrets, so store them safely.
 
 First find the real volume names. Compose prefixes them with the project name, which is the checkout folder name by default, so the volume may be `tmux_cc_dashboard_ccdash-home`:
 
